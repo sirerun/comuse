@@ -17,3 +17,5 @@ All implementation tasks remain pending. This run authored planning artifacts on
 
 - The operator authorized controlled fixture checks and offered to grant Accessibility to the exact Comuse test host. This provides GUI scope; actual permission and deny/revoke evidence are still pending.
 - Independent native review found separate event-posting permission must be checked in addition to AX trust, and clarified approval state binding during expected composite input transitions. Both findings are accepted into the fixture safety contract.
+
+- Accepted COMUSE-DOC-001 by aligning T1.13 with the SwiftUI shell and deterministic AppKit-backed AX controls; the coordinator recorded the fixture clarification in ADR 0001. Accepted COMUSE-DOC-002 by dating the stale planning handoff as historical context.
