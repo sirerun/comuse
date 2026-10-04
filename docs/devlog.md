@@ -21,3 +21,9 @@ All implementation tasks remain pending. This run authored planning artifacts on
 - Accepted COMUSE-DOC-001 by aligning T1.13 with the SwiftUI shell and deterministic AppKit-backed AX controls; the coordinator recorded the fixture clarification in ADR 0001. Accepted COMUSE-DOC-002 by dating the stale planning handoff as historical context.
 
 - Accepted residual review findings by aligning the safety fixture wording and making separate posting owner/status evidence explicit in T1.6/T1.31. False or unknown posting permission blocks affected native event scenarios; preflight never requests permission.
+
+## 2026-10-04 — Greeter dependency discussion concluded
+
+The Comuse and Greeter owners agreed at design level on the independently versioned Go library consumed by a trusted Greeter host, read-only adoption before qualified mutations, and the native/product ownership split. ADR 0002 records the contract and E1/E2/E6/live-platform gates. The discussion did not authorize Greeter implementation, deployment or public output. Comuse ship continues independently.
+
+CI attempted PR #6 but the runner did not start: GitHub reported an account billing lock. No CI compile/test result exists. A local safe-load window permitted Swift compilation; a test source type-inference failure is being fixed before revalidation.
