@@ -21,3 +21,7 @@ Later phase outlines retain exactly one dependency-triggered planning task each.
 More independent source work can proceed with fewer shared-file conflicts. Contract freeze and integration gates deliberately serialize the critical path. This harness cannot provide ten workers concurrently; transparent batching is the qualified fallback, and the executor records any capacity override. Native/signing/minimum-OS evidence may block acceptance while safe independent contract work continues. The plan must never promote mock/probe success into product readiness.
 
 References: [plan](../plan.md), [RFC](../rfc/0001-compuse-macos.md), [vision](../vision.md).
+
+## 2026-10-04 fixture clarification
+
+The fixture uses a SwiftUI app shell and AppKit-backed controlled elements where deterministic AX attributes, actions, and postconditions require them. This preserves the native control-family experiment while following the Apple UI guidance. T1.13 and the native matrix name the same implementation contract; this does not qualify any native behavior before the operator and runtime checks.

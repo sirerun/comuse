@@ -154,7 +154,7 @@ Acceptance evidence records task/use-case IDs, candidate/landed revision, fixtur
 
 ## 11. Handoff
 
-Use this plan and the E1 epic as the entry point for `/ship`; do not treat plan creation as permission to skip preflight or platform qualification. First runnable agent task is T1.0. T1.1 owns bootstrap contracts; no worker source starts before T1.5. Preserve existing task IDs and completed evidence on later replans. The current uncommitted planning artifacts are in a dedicated planning worktree; no main/remote changes were made by `/plan`.
+Use this plan and the E1 epic as the entry point for `/ship`; do not treat plan creation as permission to skip preflight or platform qualification. First runnable agent task is T1.0. T1.1 owns bootstrap contracts; no worker source starts before T1.5. Preserve existing task IDs and completed evidence on later replans. Historical planning-run context: the initial artifact was authored in a dedicated planning worktree, then reviewed and landed. The execution binding below records the current implementation state.
 
 A new executor needs the RFC, vision, use cases, ADR, local execution bindings, actual current runtime capacity and source revision. It must reconstruct ownership/claims rather than assume old worker reports reserve a lane. Operator GUI/TCC/signing/credential tasks need their explicit scope; no secrets are stored in this plan. Deadlines for waiting/blocks and safe next work are recorded in the coordination ledger; do not poll indefinitely or silently replace blocked evidence.
 
