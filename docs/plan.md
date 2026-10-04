@@ -27,7 +27,7 @@ A code graph CLI is installed but graph inspection found zero nodes/files; no ca
 | Go/Swift/macOS tooling | Go 1.27.1, Swift 6.4, Xcode 27.0 on arm64 macOS 26.6.2 observed | Pin chosen build versions at T1.1; minimum macOS 14 runtime, linking/packaging and ABI semantics remain unqualified. |
 | MCP | Official Go SDK candidate v1.8.0 observed in upstream releases | Review compatibility and pin at T1.1/T1.18; RFC protocol baseline is 2025-06-18, not an open-ended compatibility claim. No MCP server is implemented. |
 | GitHub | `gh` CLI, public repository remote | Existing docs landed. New code candidates use explicit PR/check/review/rebase/landed stages. No implementation CI currently exists. |
-| Task predicates | Kazi CLI present; no callable Kazi MCP or enrolled controller binding | `acc:` expresses planning acceptance. All current executable rows use `lane: agent` for requested Luna direct work; stage/control tasks never go through Kazi. No goals/proposals/admission/start occur during planning. |
+| Task predicates | Local acceptance fields; ordinary Git delivery | `acc:` expresses planning acceptance. All current executable rows use `lane: agent` for requested Luna direct work. Planning creates no execution assignments or controller state. |
 | Resource/claim tools | Atomic local resource claims and configured shared build lease | Claim the plan resource for edits; execution rechecks load, lease ownership and volume. Current discovery load exceeded the build ceiling; no heavy builds ran. |
 | Native GUI/TCC/signing | Availability and authority not proven | T1.0 inventories; T1.6 is operator-owned. Simulator, fake backend, compiler and CI cannot substitute for desktop/signing/minimum-OS evidence. |
 | Caches/artifacts | Verified mounted, writable external SSD | Actual local paths live in task-local bindings, not public docs. No silent internal-disk fallback. |
@@ -150,7 +150,7 @@ Acceptance evidence records task/use-case IDs, candidate/landed revision, fixtur
 
 ## 10. Progress log
 
-- 2026-10-04 UTC: new plan drafted from RFC v0.5/vision, tracked-file/tool capability discovery and three parallel GPT-6-Luna planning inputs. All implementation/stage tasks remain unchecked. No native build, desktop input, Kazi admission, independent code review, merge, release or deployment ran in this planning turn. Transient build-load and unverified GUI/signing/minimum-OS prerequisites are explicit.
+- 2026-10-04 UTC: new plan drafted from RFC v0.5/vision, tracked-file/tool capability discovery and three parallel GPT-6-Luna planning inputs. All implementation/stage tasks remain unchecked. No native build, desktop input, execution admission, independent code review, merge, release or deployment ran in this planning turn. Transient build-load and unverified GUI/signing/minimum-OS prerequisites are explicit.
 
 ## 11. Handoff
 
