@@ -1,5 +1,5 @@
 import Foundation
-import XCTest
+import Testing
 @testable import BridgeProbe
 
 private final class Capture: @unchecked Sendable {
@@ -42,52 +42,59 @@ private func seamTestCompletion(_ handle: UInt64, _ bytes: UnsafePointer<UInt8>?
     }
 }
 
-final class SeamTests: XCTestCase {
-    func testVersionedHelloCompletesAndDrains() throws {
-        XCTAssertEqual(comuse_spike_abi_version(), 1)
+@Suite(.serialized)
+struct SeamTests {
+    @Test
+    func versionedHelloCompletesAndDrains() throws {
+        #expect(comuse_spike_abi_version() == 1)
         capture = Capture()
         let request = Data(#"{"schema_version":1,"request_id":"swift-test","op":"hello"}"#.utf8)
         var handle: UInt64 = 0
         let status = request.withUnsafeBytes { raw in
             comuse_spike_request_start(raw.bindMemory(to: UInt8.self).baseAddress, raw.count, 42, seamTestCompletion, &handle)
         }
-        XCTAssertEqual(status, 0)
-        XCTAssertGreaterThan(handle, 0)
-        XCTAssertEqual(capture.done.wait(timeout: .now() + 2), .success)
-        let data = try XCTUnwrap(capture.get())
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(object["schema_version"] as? Int, 1)
-        XCTAssertEqual(object["request_id"] as? String, "swift-test")
-        XCTAssertEqual(object["status"] as? String, "completed")
-        XCTAssertEqual(object["result"] as? String, "hello")
-        XCTAssertEqual(comuse_spike_request_drain(handle), 0)
-        XCTAssertEqual(comuse_spike_request_drain(handle), 5)
+        #expect(status == 0)
+        #expect(handle > 0)
+        #expect(capture.done.wait(timeout: .now() + 2) == .success)
+        let data = try #require(capture.get())
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["schema_version"] as? Int == 1)
+        #expect(object["request_id"] as? String == "swift-test")
+        #expect(object["status"] as? String == "completed")
+        #expect(object["result"] as? String == "hello")
+        #expect(comuse_spike_request_drain(handle) == 0)
+        #expect(comuse_spike_request_drain(handle) == 5)
     }
 
-    func testMalformedRequestFailsBeforeCreatingAHandle() {
+    @Test
+    func malformedRequestFailsBeforeCreatingAHandle() {
         var handle: UInt64 = 0
         let bad = Data("{}".utf8)
-        XCTAssertEqual(bad.withUnsafeBytes { comuse_spike_request_start($0.bindMemory(to: UInt8.self).baseAddress, $0.count, 42, seamTestCompletion, &handle) }, 3)
-        XCTAssertEqual(comuse_spike_request_start(nil, 32 * 1024 + 1, 42, seamTestCompletion, &handle), 2)
+        #expect(bad.withUnsafeBytes { comuse_spike_request_start($0.bindMemory(to: UInt8.self).baseAddress, $0.count, 42, seamTestCompletion, &handle) } == 3)
+        let oversizedRequestLength: Int = 32 * 1024 + 1
+        #expect(comuse_spike_request_start(nil, oversizedRequestLength, 42, seamTestCompletion, &handle) == 2)
     }
 
-    func testDrainWaitsForCallbackReturnAndCancelDoesNotDuplicateCompletion() {
+    @Test
+    func drainWaitsForCallbackReturnAndCancelDoesNotDuplicateCompletion() {
         capture = Capture(blocksCallback: true)
         let request = Data(#"{"schema_version":1,"request_id":"swift-cancel","op":"hello"}"#.utf8)
         var handle: UInt64 = 0
         let status = request.withUnsafeBytes { raw in
             comuse_spike_request_start(raw.bindMemory(to: UInt8.self).baseAddress, raw.count, 42, seamTestCompletion, &handle)
         }
-        XCTAssertEqual(status, 0)
-        XCTAssertEqual(capture.done.wait(timeout: .now() + 2), .success)
-        XCTAssertEqual(comuse_spike_request_drain(handle), 6)
-        XCTAssertEqual(comuse_spike_request_cancel(handle), 0)
+        #expect(status == 0)
+        #expect(capture.done.wait(timeout: .now() + 2) == .success)
+        #expect(comuse_spike_request_drain(handle) == 6)
+        #expect(comuse_spike_request_cancel(handle) == 0)
         capture.releaseCallback.signal()
         let deadline = Date().addingTimeInterval(2)
-        while comuse_spike_request_drain(handle) == 6 && Date() < deadline {
+        var drainStatus = comuse_spike_request_drain(handle)
+        while drainStatus == 6 && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.001)
+            drainStatus = comuse_spike_request_drain(handle)
         }
-        XCTAssertEqual(comuse_spike_request_drain(handle), 0)
-        XCTAssertEqual(capture.count(), 1)
+        #expect(drainStatus == 0)
+        #expect(capture.count() == 1)
     }
 }
