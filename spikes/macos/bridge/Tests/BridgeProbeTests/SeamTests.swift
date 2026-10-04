@@ -76,6 +76,35 @@ struct SeamTests {
     }
 
     @Test
+    func requestByteLimitRejectsAboveCapAndAcceptsExactCap() throws {
+        capture = Capture()
+        let overLimit = Data(repeating: 0x20, count: (32 * 1024) + 1)
+        var rejectedHandle: UInt64 = 0
+        let rejectedStatus = overLimit.withUnsafeBytes { raw in
+            comuse_spike_request_start(raw.bindMemory(to: UInt8.self).baseAddress, raw.count, 42, seamTestCompletion, &rejectedHandle)
+        }
+        #expect(rejectedStatus == 4)
+        #expect(rejectedHandle == 0)
+        #expect(capture.count() == 0)
+
+        var exactLimit = Data(#"{"schema_version":1,"request_id":"swift-boundary","op":"hello"}"#.utf8)
+        exactLimit.append(Data(repeating: 0x20, count: (32 * 1024) - exactLimit.count))
+        #expect(exactLimit.count == 32 * 1024)
+        var handle: UInt64 = 0
+        let acceptedStatus = exactLimit.withUnsafeBytes { raw in
+            comuse_spike_request_start(raw.bindMemory(to: UInt8.self).baseAddress, raw.count, 42, seamTestCompletion, &handle)
+        }
+        #expect(acceptedStatus == 0)
+        #expect(handle > 0)
+        #expect(capture.done.wait(timeout: .now() + 2) == .success)
+        let response = try #require(capture.get())
+        let object = try #require(JSONSerialization.jsonObject(with: response) as? [String: Any])
+        #expect(object["request_id"] as? String == "swift-boundary")
+        #expect(object["status"] as? String == "completed")
+        #expect(comuse_spike_request_drain(handle) == 0)
+    }
+
+    @Test
     func drainWaitsForCallbackReturnAndCancelDoesNotDuplicateCompletion() {
         capture = Capture(blocksCallback: true)
         let request = Data(#"{"schema_version":1,"request_id":"swift-cancel","op":"hello"}"#.utf8)
