@@ -206,3 +206,9 @@ qualify policy, writer/replay/cleanup, and JSON/coverage respectively.
 No code, go.mod pin, native action, provider request, build, or CI run was part
 of preparing this proposal. It must not be cited as runtime, SDK integration,
 host, TCC, or product acceptance evidence.
+
+## Reviewed clarifications
+
+The exact permission-owning executable must separately preflight AX trust and Core Graphics event-posting access. Neither proves the other. Native posting acceptance records grant, deny, and revoke outcomes for that executable before T1.31. This does not authorize a prompt from ordinary read commands.
+
+The approval-bound `state_id` is a pre-dispatch precondition. A composite operation may produce its own expected intermediate state transitions while preserving the bound process, window, element, and focus identities. Those transitions are recorded and checked against the operation sequence; they do not authorize unrelated changes. Unexpected external edits, focus changes, or identity drift stop dispatch and produce a truthful partial or unknown result with cleanup evidence.
