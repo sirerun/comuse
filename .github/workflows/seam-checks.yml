@@ -32,6 +32,6 @@ jobs:
       - name: Go seam tests
         run: go test ./spikes/seamprobe
       - name: Real Go to Swift callback smoke
-        run: go run ./spikes/seamprobe -library "$RUNNER_TEMP/comuse-swift/debug/libBridgeProbe.dylib" -request '{"schema_version":1,"request_id":"ci-hello","op":"hello"}'
+        run: go run ./spikes/seamprobe -library "$RUNNER_TEMP/comuse-swift/debug/libBridgeProbe.dylib"
       - name: Check cgo-disabled unsupported path
         run: CGO_ENABLED=0 go test ./spikes/seamprobe
