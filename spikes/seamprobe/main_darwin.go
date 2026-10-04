@@ -33,12 +33,6 @@ const abiVersion = 1
 
 var runMu sync.Mutex
 
-type completion struct {
-	handle uint64
-	bytes  []byte
-	err    error
-}
-
 func runHello(ctx context.Context, library string) (response, error) {
 	runMu.Lock()
 	defer runMu.Unlock()
