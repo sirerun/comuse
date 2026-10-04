@@ -1,0 +1,6 @@
+
+# Local cross-harness coordination and disposable build output
+ajent.social
+.claude/scratch/
+.build/
+.DS_Store

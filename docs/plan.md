@@ -1,6 +1,6 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** Draft implementation plan; no implementation, code review, merge, release, or deployment started by this planning run.
+**Status:** Implementation started under the 2026-10-04 ship request. E1 seam implementation and parallel contract preparation are active; later native/runtime acceptance gates remain open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
 **Updated:** 2026-10-04 UTC.
@@ -163,3 +163,9 @@ A new executor needs the RFC, vision, use cases, ADR, local execution bindings, 
 - [RFC 0001 v0.5](rfc/0001-compuse-macos.md), [vision](vision.md), [design map](design.md), [use cases](usecases.md), [decision](adr/0001-parallel-implementation.md), [devlog](devlog.md).
 - [Official Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk) and [v1.8.0 release candidate reference](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0); final pin/compatibility is a spike task.
 - [Swift C interoperability](https://www.swift.org/blog/swift-6.3-released/) and [Apple accessibility model](https://developer.apple.com/library/archive/documentation/Accessibility/Conceptual/AccessibilityMacOSX/OSXAXmodel.html); API/toolchain availability does not prove minimum-OS or app coverage.
+
+## 2026-10-04 execution binding
+
+The user authorized ship implementation, independent review, ordinary GitHub merge and landed verification with GPT-6-Luna workers. This four-slot session uses the documented three-worker batching fallback. Coordinator retains seam integration and plan ownership; T1.1 seam source is delegated to Luna, while two Luna lanes prepare native and safety contracts. These preparation lanes do not start T1.10-T1.19 before T1.5. New worktrees and caches use the verified external volume. Existing checkouts remain preserved.
+
+Preflight: clean main at `590fb6e`, public GitHub repository, no open PRs, no active repository claim refs observed before this run. Go 1.27.1 and Swift 6.4 are available; minimum macOS 14 remains unqualified. Shared host load exceeded 10, so heavy local builds are held. Source and read-only work proceed; T1.2 validation and downstream seam landing cannot claim pass until the applicable checks run. Native input and TCC setup remain gated on T1.6. No production deployment or publication is in scope.

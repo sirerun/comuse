@@ -7,3 +7,10 @@ The user requested an implementation plan using many parallel GPT-6-Luna agents.
 The current runtime has four active slots total, so execution has a three-worker fallback despite the target of ten coding workers plus coordinator. Local Go/Swift/Xcode tools and an external SSD were available; current load exceeded the build ceiling. Minimum macOS runtime, controlled GUI/TCC/signing authority and native support were not qualified. The code graph contained no source nodes, so discovery used bounded source-document inspection.
 
 All implementation tasks remain pending. This run authored planning artifacts only, with no native builds, desktop control, execution admission, independent code review, merge, release, provider calls or deployment. Planning structure/dependency checks are recorded in the task-local validation evidence. Stable design stays in the RFC/design map, process proposal in ADR 0001 and assignments in the plan.
+
+## 2026-10-04 — Ship execution begins
+
+- Founder authorized implementation and ordinary review/merge through the ship workflow, using parallel GPT-6-Luna workers.
+- Four runtime slots permit three worker lanes plus coordinator; the plan already specifies the batch schedule. Seam coding and two independent contract preparation lanes start first.
+- External worktree storage was mounted, writable, with sufficient free capacity. The repository was clean and main matched the landed planning baseline.
+- The shared one-minute load was above 10. Heavy build commands are held; source preparation continues. Native fixture operation and permissions remain unqualified until the operator gate.
