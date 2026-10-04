@@ -27,3 +27,5 @@ All implementation tasks remain pending. This run authored planning artifacts on
 The Comuse and Greeter owners agreed at design level on the independently versioned Go library consumed by a trusted Greeter host, read-only adoption before qualified mutations, and the native/product ownership split. ADR 0002 records the contract and E1/E2/E6/live-platform gates. The discussion did not authorize Greeter implementation, deployment or public output. Comuse ship continues independently.
 
 CI attempted PR #6 but the runner did not start: GitHub reported an account billing lock. No CI compile/test result exists. A local safe-load window permitted Swift compilation; a test source type-inference failure is being fixed before revalidation.
+
+- Independent Luna native and contracts reviewers accepted SEAM-001 (terminal completion lost on a cancellation race) and SEAM-002 (assumed Swift dylib product directory). Stable remediation/verification/re-review tasks T1.36–T1.38 track the fixes. The CI path now uses Swift build-system resolution; the cancellation outcome fix is with the original author.
