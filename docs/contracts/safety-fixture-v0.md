@@ -4,7 +4,7 @@
 runtime guarantee. Adopt or amend only after the T1.5 seam is landed and frozen.
 
 This contract is grounded in RFC 0001 v0.5, E1 T1.5–T1.19, and UC-001–UC-016.
-It constrains the synthetic AppKit fixture and its test doubles. It grants no
+It constrains the synthetic SwiftUI fixture with deterministic AppKit-backed AX controls and its test doubles. It grants no
 authority over the user's desktop or real applications. A fixture pass proves
 only the named fixture case.
 
