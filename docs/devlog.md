@@ -14,3 +14,6 @@ All implementation tasks remain pending. This run authored planning artifacts on
 - Four runtime slots permit three worker lanes plus coordinator; the plan already specifies the batch schedule. Seam coding and two independent contract preparation lanes start first.
 - External worktree storage was mounted, writable, with sufficient free capacity. The repository was clean and main matched the landed planning baseline.
 - The shared one-minute load was above 10. Heavy build commands are held; source preparation continues. Native fixture operation and permissions remain unqualified until the operator gate.
+
+- The operator authorized controlled fixture checks and offered to grant Accessibility to the exact Comuse test host. This provides GUI scope; actual permission and deny/revoke evidence are still pending.
+- Independent native review found separate event-posting permission must be checked in addition to AX trust, and clarified approval state binding during expected composite input transitions. Both findings are accepted into the fixture safety contract.
