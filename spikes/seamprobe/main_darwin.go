@@ -3,7 +3,7 @@
 package main
 
 /*
-#cgo CFLAGS: -I../macos/bridge/include
+#cgo CFLAGS: -I${SRCDIR}/../macos/bridge/include
 #include <stdint.h>
 #include <stdlib.h>
 #include "comuse_spike.h"
