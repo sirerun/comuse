@@ -1,0 +1,37 @@
+name: Seam checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: seam-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  bridge:
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Record toolchain
+        run: |
+          uname -m
+          swift --version
+          go version
+      - name: Check source formatting
+        run: test -z "$(gofmt -l spikes/seamprobe)"
+      - name: Swift callback and ownership tests
+        run: swift test --package-path spikes/macos/bridge --scratch-path "$RUNNER_TEMP/comuse-swift" --jobs 2
+      - name: Build bridge
+        run: swift build --package-path spikes/macos/bridge --scratch-path "$RUNNER_TEMP/comuse-swift" --jobs 2
+      - name: Go seam tests
+        run: go test ./spikes/seamprobe
+      - name: Real Go to Swift callback smoke
+        run: go run ./spikes/seamprobe -library "$RUNNER_TEMP/comuse-swift/debug/libBridgeProbe.dylib" -request '{"schema_version":1,"request_id":"ci-hello","op":"hello"}'
+      - name: Check cgo-disabled unsupported path
+        run: CGO_ENABLED=0 go test ./spikes/seamprobe
