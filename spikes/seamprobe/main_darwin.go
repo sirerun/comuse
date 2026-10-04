@@ -34,8 +34,9 @@ const abiVersion = 1
 var runMu sync.Mutex
 
 type completion struct {
-	bytes []byte
-	err   error
+	handle uint64
+	bytes  []byte
+	err    error
 }
 
 func runHello(ctx context.Context, library string) (response, error) {
@@ -100,6 +101,9 @@ func runHello(ctx context.Context, library string) (response, error) {
 		if drainErr != nil {
 			return response{}, drainErr
 		}
+		if err := validateCompletionHandle(delivered, uint64(handle)); err != nil {
+			return response{}, err
+		}
 		if delivered.err != nil {
 			return response{}, delivered.err
 		}
@@ -107,39 +111,39 @@ func runHello(ctx context.Context, library string) (response, error) {
 	case <-ctx.Done():
 		cancelStatus := int32(C.seam_cancel(handle))
 		// The callback token and library remain alive until terminal delivery and drain.
+		var delivered completion
 		select {
-		case <-result:
+		case delivered = <-result:
 		case <-time.After(2 * time.Second):
 			return response{}, errors.New("native terminal callback did not arrive within two seconds; retained its token and library")
 		}
 		drainErr := waitForCallbackAndDrain()
-		if cancelStatus != 0 {
-			cancelErr := fmt.Errorf("cancelling native request (status %d)", cancelStatus)
-			if drainErr != nil {
-				return response{}, errors.Join(cancelErr, drainErr)
-			}
-			return response{}, cancelErr
-		}
 		if drainErr != nil {
 			return response{}, drainErr
 		}
-		return response{}, ctx.Err()
+		if err := validateCompletionHandle(delivered, uint64(handle)); err != nil {
+			return response{}, err
+		}
+		if delivered.err != nil {
+			return response{}, delivered.err
+		}
+		return resolveTerminalAfterCancel(delivered.bytes, ctx.Err(), cancelStatus)
 	}
 }
 
 //export goComuseCompletion
-func goComuseCompletion(_ C.uint64_t, bytes *C.uint8_t, length C.size_t, token C.uint64_t) {
+func goComuseCompletion(handle C.uint64_t, bytes *C.uint8_t, length C.size_t, token C.uint64_t) {
 	channel := cgo.Handle(token).Value().(chan completion)
 	if uint64(length) > 64*1024 || (length > 0 && bytes == nil) {
 		select {
-		case channel <- completion{err: errors.New("native response exceeds 65536 bytes or has a null buffer")}:
+		case channel <- completion{handle: uint64(handle), err: errors.New("native response exceeds 65536 bytes or has a null buffer")}:
 		default:
 		}
 		return
 	}
 	copyOfBytes := C.GoBytes(unsafe.Pointer(bytes), C.int(length))
 	select {
-	case channel <- completion{bytes: copyOfBytes}:
+	case channel <- completion{handle: uint64(handle), bytes: copyOfBytes}:
 	default:
 	}
 }
