@@ -19,6 +19,12 @@ type response struct {
 	Error         *string `json:"error,omitempty"`
 }
 
+type completion struct {
+	handle uint64
+	bytes  []byte
+	err    error
+}
+
 func validateCompletionHandle(delivered completion, expected uint64) error {
 	if delivered.handle != expected {
 		return fmt.Errorf("native callback handle mismatch: want %d, got %d", expected, delivered.handle)
