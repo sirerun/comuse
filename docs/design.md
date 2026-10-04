@@ -13,3 +13,5 @@ The accepted product architecture is [RFC 0001 v0.5](rfc/0001-compuse-macos.md),
 | Distribution, measured resource/task cost and support | RFC §10-14 | E6 evidence; publishing is separate authority |
 
 [ADR 0001](adr/0001-parallel-implementation.md) records the proposed parallel delivery/seam protocol. [Plan](plan.md) and [epics](plans/E1-native-feasibility.md) own assignments; [devlog](devlog.md) owns planning/discovery events. Future ABI/API amendments are versioned coordinator-owned contracts with exact revision evidence, not competing worker definitions.
+
+[ADR 0002](adr/0002-greeter-integration.md) records the concluded Greeter dependency design: independently versioned library, trusted Go host, scoped read-only adoption and independent native enforcement. Greeter product/runtime acceptance is separate from Comuse delivery.
