@@ -32,6 +32,8 @@ jobs:
       - name: Go seam tests
         run: go test ./spikes/seamprobe
       - name: Real Go to Swift callback smoke
-        run: go run ./spikes/seamprobe -library "$RUNNER_TEMP/comuse-swift/debug/libBridgeProbe.dylib"
+        run: |
+          seam_bin_dir=$(swift build --package-path spikes/macos/bridge --scratch-path "$RUNNER_TEMP/comuse-swift" --show-bin-path)
+          go run ./spikes/seamprobe -library "$seam_bin_dir/libBridgeProbe.dylib"
       - name: Check cgo-disabled unsupported path
         run: CGO_ENABLED=0 go test ./spikes/seamprobe
