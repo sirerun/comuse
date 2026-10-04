@@ -1,6 +1,6 @@
 # Comuse vision
 
-**Status:** Agreed product direction; implementation and platform qualification pending.  
+**Status:** Agreed product direction; implementation and platform qualification pending.
 **Updated:** 2026-10-03
 
 Comuse gives agents the text, controls, state, and positions they need to work with desktop applications. It is an open-source computer-use toolkit: begin with a compact JSON description of the interface, act on validated controls, and receive the changes. Request a screenshot explicitly when the application cannot expose enough semantic information.
