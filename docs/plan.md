@@ -1,6 +1,6 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** Implementation started under the 2026-10-04 ship request. E1 seam implementation and parallel contract preparation are active; later native/runtime acceptance gates remain open.
+**Status:** Bounded E1 seam candidate is locally verified in PR #6. Final review is being closed; merge is blocked because GitHub CI cannot start under the account billing lock. Later native/runtime acceptance gates remain open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
 **Updated:** 2026-10-04 UTC.
