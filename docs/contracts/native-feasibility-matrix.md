@@ -112,3 +112,5 @@ T1.6 is a real operator gate before any fixture GUI launch used as evidence, AX 
 - Apple, [CGEvent](https://developer.apple.com/documentation/coregraphics/cgevent)
 - Apple, [CGEventTapLocation](https://developer.apple.com/documentation/coregraphics/cgeventtaplocation)
 - Apple, [Quartz Event Services](https://developer.apple.com/documentation/coregraphics/quartz-event-services)
+
+Event-post preflight returning false or unknown blocks affected event scenarios; no event is posted and no permission request runs during preflight. The operator may grant the exact test executable the needed permission as part of the authorized controlled-fixture setup. Permission grant/deny/revoke remains operator-owned and must be evidenced before native posting acceptance.
