@@ -1,14 +1,14 @@
 # RFC 0001: Comuse — A macOS-First Computer Use Toolkit with Go and Swift
 
 - **Status:** Draft — revised design; implementation and platform qualification pending
-- **Version:** 0.4
+- **Version:** 0.5
 - **Last updated:** 2026-10-03
 
 ---
 
 ## 1. Abstract
 
-Comuse is an open-source Go toolkit for **computer use** through compact semantic observations and validated desktop actions. It exposes accessible text, controls, state, hierarchy, and logical positions as JSON. A session begins with a full snapshot and subsequently returns semantic diffs against a client-supplied baseline. Screenshots are an explicit fallback when accessibility information cannot answer the task. It ships as:
+Comuse is an open-source Go toolkit for **computer use** through compact semantic observations and validated desktop actions. The LLM chooses what to read, write, or activate through named controls and opaque references; Comuse owns coordinates, focus, and native input delivery. It exposes accessible text, controls, state, and hierarchy as JSON, without requiring geometry in model context. A session begins with a full snapshot and subsequently returns semantic diffs against a client-supplied baseline. Screenshots are an explicit fallback when accessibility information cannot answer the task. Phase 2 adds opening authorized installed applications. It ships as:
 
 1. **A core Go library** (`comuse`) — the single source of truth for policy, action scheduling, observations, and accounting.
 2. **A CLI** (`comuse`) — scriptable, pipe-friendly, with JSON results for agents without MCP support.
@@ -42,8 +42,9 @@ Base64 image payloads belong in image content blocks, not ordinary text prompts.
 - G5: MCP stdio using the official Go SDK and an explicitly negotiated protocol version. Qualify the selected version; do not claim open-ended “2025-06-18+” compliance.
 - G6: Library-first: CLI and MCP are thin adapters.
 - G7: Mandatory policy enforcement, trusted approval authority, desktop ownership, cancellation cleanup, and explicit partial-result semantics from v0.1.
-- G8: Qualified element-reference actions as the primary control path, with live target validation and explicit staleness errors.
+- G8: Coordinate-free model tools for reading/writing elements and qualified semantic actions, with live target validation and explicit staleness errors. Geometry and input mechanics belong to Comuse.
 - G9: A host-controlled semantic-only mode that prohibits pixel capture, and a semantic-first mode that permits separately authorized, explicit screenshot requests.
+- G10: Phase 2 application opening through authorized installed-app identities, with bounded launch/readiness handling and no arbitrary command execution.
 
 ### Non-goals for the first stable macOS release
 
@@ -133,6 +134,8 @@ type Backend interface {
     Windows(ctx context.Context) ([]WindowInfo, error)
     A11yTree(ctx context.Context, target WindowRef, budget TextBudget) (*A11ySnapshot, error)
     ResolveElement(ctx context.Context, ref ElementRef) (ResolvedElement, error)
+    ReadElement(ctx context.Context, target ResolvedElement, budget TextBudget) (*ElementContent, error)
+    SetElementValue(ctx context.Context, target ResolvedElement, value string) error
     PerformElementAction(ctx context.Context, target ResolvedElement, action ElementActionKind) error
     ValidateTarget(ctx context.Context, target WindowRef) error
     MouseMove(ctx context.Context, p Point) error
@@ -155,9 +158,9 @@ type Backend interface {
 
 ### 3.3 Coordinates and scale factors
 
-Public action coordinates are **logical points**, top-left origin within the selected primary display. Backend conversions must explicitly account for Apple's coordinate conventions, display origin, and scale. Never clamp invalid input into a different valid target.
+Low-level library/CLI action coordinates are **logical points**, top-left origin within the selected primary display. They are implementation/developer facilities, not the default LLM tool contract. Comuse resolves native target geometry, scrolling/focus, and input coordinates internally; model calls accept element references and semantic intent, never `x,y`, pixel rectangles, or drag endpoints. Default model observations omit cursor positions and bounds. A trusted developer diagnostic projection may include geometry, has its own scope identity, and must not be silently mixed into model state. Backend conversions explicitly account for Apple's coordinate conventions, display origin, and scale. Never clamp invalid input into a different valid target.
 
-Every image result includes `display_id`, `display_generation`, `source_bounds` in logical points, encoded `width`/`height` in pixels, capture timestamp, and output-to-logical transforms. For source bounds `(x,y,w,h)` and encoded dimensions `(W,H)`, an output pixel center `(u+0.5,v+0.5)` maps to `(x+(u+0.5)*w/W, y+(v+0.5)*h/H)`. Input targets use that logical position. Native display scale and post-encoding scale are separate metadata.
+Every core image result includes `display_id`, `display_generation`, `source_bounds` in logical points, encoded `width`/`height` in pixels, capture timestamp, and output-to-logical transforms. Host/backend code owns these transforms; the default model image tool chooses a window or element reference and Comuse computes any crop. For source bounds `(x,y,w,h)` and encoded dimensions `(W,H)`, an output pixel center `(u+0.5,v+0.5)` maps to `(x+(u+0.5)*w/W, y+(v+0.5)*h/H)`. Low-level input targets use that logical position. Native display scale and post-encoding scale are separate metadata.
 
 Display topology, resolution, or scale changes invalidate prior coordinate metadata and element snapshots. Agents must re-observe. Test Retina and non-Retina scaling, crops, downscaling, and display changes; initial support remains primary-display-only even when other displays are connected.
 
@@ -181,8 +184,8 @@ Every observation has bounded work/output and reports usage. The normal agent fl
 
 | Observation | Default output | Bound |
 |---|---|---|
-| `state` | Cursor, selected display, focused window identity, capabilities | bounded JSON; titles truncated |
-| `windows` | Authorized visible windows and logical bounds | maximum entries and text bytes |
+| `state` | Selected display, focused window identity, capabilities; no cursor geometry in model output | bounded JSON; titles truncated |
+| `windows` | Authorized visible window identities; bounds available only in trusted diagnostics | maximum entries and text bytes |
 | `screenshot` | Authorized capture, JPEG/PNG plus transform metadata | pixel, byte, deadline, and memory limits |
 | `region` | Authorized crop | same limits as screenshot |
 | `a11y` | Full semantic JSON snapshot, or baseline-bound delta/unchanged response with `since` | depth, node, text-byte, deadline, and retention limits |
@@ -225,20 +228,22 @@ A future unchanged response may be `{"changed":false}`, but pixel equality does 
 
 ### 4.4 Accessibility observations and element addressing
 
-Bounded macOS AX observations are the primary backend observation path and support safety checks. Normalize them into relevant text and controls with roles, labels, supported actions, state, parent/order relationships, and logical bounds where available. Exclude implementation-only containers when relationships can be preserved unambiguously. Preserve meaningful text and structural context, not just clickable controls. AX information is unavailable or incomplete in some applications; report that explicitly. Do not expose secure-field values, and omit ordinary text-field values unless the observation policy permits them. Missing information is unknown, not a fabricated default such as `enabled: false`.
+Bounded macOS AX observations are the primary backend observation path and support safety checks. Normalize them into relevant text and controls with roles, labels, supported read/write/action capabilities, state, and parent/order relationships. Keep logical geometry inside Comuse for target resolution; include it only in a trusted diagnostic projection. Exclude implementation-only containers when relationships can be preserved unambiguously. Preserve meaningful text and structural context, not just clickable controls. AX information is unavailable or incomplete in some applications; report that explicitly. Do not expose secure-field values, and omit ordinary text-field values unless the observation policy permits them. Missing information is unknown, not a fabricated default such as `enabled: false`.
 
 Example observation:
 
 ```
 window "Inbox — Mail" ref=win_7
   toolbar
-    button "New Message" [12,52 120x28]
-    searchfield "Search" [200,50 300x30] focused
+    e12 button "New Message" actions=[press]
+    e13 searchfield "Search" focused capabilities=[read,write]
 ```
 
 Element-targeted actions are part of the initial semantic foundation, gated on native identity/staleness qualification before exposure. Return opaque `element_ref` values bound to session, window/process identity, and a retained native element. Preserve an ID across observations only while that same native element can be identified confidently; never recycle it for another control within the session. State IDs version observations separately from element identity. Child-index paths such as `0/2/1` may be diagnostic metadata; they are never authoritative action targets.
 
 An element action supplies the window, element reference, and expected `state_id`. Revalidate native identity, role, eligibility, window, expected target semantics, and the requested operation before execution. A newer unrelated observation does not itself invalidate the element, but changed target semantics require re-observation. Prefer a qualified native AX action where advertised. A qualified click may resolve live geometry and use CGEvent when no AX press action is available; apply the same region/occlusion/focus checks, report the execution method, and never retry through another method after uncertain dispatch. Unsupported semantic operations return `unsupported`. If identity is ambiguous, relevant content changed, the reference expired, or the target disappeared, return `element_stale`. Baselines and references are not authorization, and neither replaces live checks.
+
+Reading and writing are element operations too (§5.1). The model requests `read(e13)` or `write(e13, text, mode)` and does not decide where to click, how to focus, or which keyboard shortcut clears a field. Unsupported or ambiguous targets return an explicit limitation rather than asking the model to supply coordinates. Moving a window does not by itself change a control's semantic identity: refresh internal geometry and eligibility before execution. Revalidate the editable context for the selected write mode. User text/selection changes can be compared only where qualified reads and policy permit; unavailable readback must not imply protection against concurrent edits. Concurrent input remains non-atomic (§5.2).
 
 ### 4.5 Full JSON snapshots and semantic diffs
 
@@ -265,7 +270,6 @@ Illustrative initial snapshot:
       "child_refs": [],
       "enabled": true,
       "checked": false,
-      "bounds": [20, 80, 120, 24],
       "actions": ["press"]
     },
     "e15": {
@@ -274,7 +278,6 @@ Illustrative initial snapshot:
       "parent_ref": null,
       "child_refs": [],
       "enabled": true,
-      "bounds": [160, 80, 140, 24],
       "actions": ["press"]
     }
   }
@@ -283,7 +286,7 @@ Illustrative initial snapshot:
 
 `coverage.status` is `complete`, `partial`, or `unavailable`: complete means the selected AX scope was traversed within its limits, not that AX covers every screen pixel. Partial results report the limiting bounds and known unsupported content; unavailable results do not claim an empty application. Native reads are not an atomic application transaction. Report detected concurrent mutation and avoid publishing a coherent-looking delta from an inconsistent traversal. `observed_at` and `action_sequence` bound the observation's context; they do not establish a task postcondition.
 
-`nodes` is a map keyed by stable opaque element references. A record contains all currently permitted, available properties for that element. Omitted properties mean unavailable/not disclosed, not false. `parent_ref`, ordered `child_refs`, and `root_refs` preserve topology/order in the returned projection; excluded containers cannot leave dangling references. Bounds are logical points under §3.3. Accessible labels and text remain untrusted application data.
+`nodes` is a map keyed by stable opaque element references. A record contains all currently permitted, available properties for that element. Omitted properties mean unavailable/not disclosed, not false. `parent_ref`, ordered `child_refs`, and `root_refs` preserve topology/order in the returned projection; excluded containers cannot leave dangling references. Geometry is omitted from the default model projection. A trusted diagnostic projection may carry logical bounds under §3.3, with a distinct scope/baseline. Accessible labels and text remain untrusted application data.
 
 A persistent library/MCP client requests `since: "s42"` against the same window and scope. Compare newly observed canonical state with that exact retained baseline, even if intermediate states were emitted but never received. If eligible and smaller than a snapshot, return:
 
@@ -307,7 +310,6 @@ A persistent library/MCP client requests `since: "s42"` against the same window 
       "child_refs": [],
       "enabled": true,
       "checked": true,
-      "bounds": [20, 80, 120, 24],
       "actions": ["press"]
     }
   },
@@ -317,7 +319,7 @@ A persistent library/MCP client requests `since: "s42"` against the same window 
 
 Application rules are deterministic: validate schema, session/scope, and `base_state_id`; remove listed IDs; replace/add each complete `upsert` record; replace `context` and coverage metadata; validate all relationships; publish the new `state_id` atomically. Reject duplicate/out-of-order application rather than applying it to a different baseline; recover with a full snapshot on a baseline mismatch. No ID may appear in both `upsert` and `removed`. Replacing whole changed records also clears previously present properties that are now omitted. Reparenting/reordering includes every affected record. This small semantic contract is chosen for readable agent output and straightforward reconstruction rather than array-index patches or ambiguous partial-field merges.
 
-If normalized semantic state is unchanged, return `kind: "unchanged"` with `base_state_id` and `state_id` both equal to the baseline, plus fresh observation time, action sequence, scope, window, and coverage metadata. Collection time and action sequence do not themselves count as semantic changes. An unchanged response is not proof of action success. Failed or unavailable reads return an explicit observation status/error, never `unchanged`.
+If normalized semantic state is unchanged, return `kind: "unchanged"` with `base_state_id` and `state_id` both equal to the baseline, plus fresh observation time, action sequence, scope, window, and coverage metadata. Collection time and action sequence do not themselves count as semantic changes. Window movement alone need not produce a model diff when semantics/eligibility are unchanged; internal geometry must still be refreshed before action. An unchanged response is not proof of action success. Failed or unavailable reads return an explicit observation status/error, never `unchanged`.
 
 Recovery and retention rules:
 
@@ -349,6 +351,9 @@ type Click struct {
 }
 type ClickElement struct { Window WindowRef; Element ElementRef; ExpectedState StateID }
 type PerformElementAction struct { Window WindowRef; Element ElementRef; ExpectedState StateID; Kind ElementActionKind }
+type ReadElement struct { Window WindowRef; Element ElementRef; ExpectedState StateID; Budget TextBudget }
+type WriteElement struct { Window WindowRef; Element ElementRef; ExpectedState StateID; Text string; Mode WriteMode }
+type ScrollElement struct { Window WindowRef; Element ElementRef; ExpectedState StateID; Direction string; Amount string }
 type TypeText struct { Window WindowRef; Text string; Delay time.Duration; Clear bool }
 type PressKey struct { Window WindowRef; Keys []Key; Hold time.Duration }
 type Scroll struct { Window WindowRef; Delta ScrollDelta; At Point }
@@ -357,9 +362,13 @@ type Wait struct { Until Condition; Timeout time.Duration }
 type FocusWindow struct { Window WindowRef }
 ```
 
-Every input action specifies an authorized window target. Omitted targets may be resolved to the current focused window only when policy explicitly permits that mode; the result records the resolved identity. Validate mutually exclusive targets, key names, Unicode behavior, limits, durations, and scroll units before posting events. Text length, hold time, drag steps/duration, and waits have hard maximums.
+Every model read/write/input operation specifies an authorized window and, where relevant, element target and expected state. The model never relies on whichever text field happens to be focused. Developer low-level input may resolve an omitted window to the current focused window only when policy explicitly permits that mode; the result records the resolved identity. Validate mutually exclusive targets, key names, Unicode behavior, limits, durations, and scroll units before posting events. Text length, hold time, drag steps/duration, and waits have hard maximums.
 
-Element actions are the primary agent control path when qualified for the target. Initial semantic operations are advertised native `press`, `pick`, and focus operations only where platform behavior is proven; capability absence is explicit. `ClickElement` uses the separately defined AX-press/live-coordinate contract (§4.4). Coordinate click/drag/scroll and window-bound typing remain available within policy for operations not expressible as native AX actions. No operation accepts an element reference as a substitute for current authorization. Text setters, rich-editor operations, and other AX mutation are not implied by generic `PerformElementAction`.
+Element reads/writes and semantic actions are the model control contract. Initial native operations are advertised `press`, `pick`, and focus operations only where platform behavior is proven; capability absence is explicit. `ClickElement` uses the AX-press/live-coordinate contract (§4.4). `ReadElement` retrieves fresh permitted text/value within its budget after validating the target; it is observation, not input, and denied/protected readback is explicit. Default snapshots can omit field values even when a separately authorized explicit read is available.
+
+`WriteElement` initially supports `replace` (replace the entire editable value) and `insert` (insert at a freshly validated current selection/caret), only on qualified writable controls. Use a separately qualified writable AX value operation for replacement where supported, or internally focus and inject input with the same target/focus checks. Insertion requires a reliably resolved selection/caret and returns `unsupported` when it cannot be established. Do not silently change modes, append instead of replace, use the clipboard, or switch execution methods after uncertain dispatch. The model supplies content and mode, never click positions or clear-field shortcuts. Protected writes require explicit host scope and never return secure values. Readback/verification may be unavailable; distinguish dispatch from verified final contents. Advanced editor/range manipulation remains separately qualified.
+
+`ScrollElement` names a scrollable container plus bounded semantic direction/amount (for example `down`, `page`); Comuse owns pointer placement and native scroll units. Coordinate click/drag/scroll and window-bound typing remain developer-only library/CLI operations and are not advertised to the default model MCP client. Semantic drag-by-reference and other operations must have separately qualified contracts before exposure. Visual fallback may help interpret a screen, but it does not bypass this boundary: if a visual target cannot be bound to a validated element, report `unsupported` rather than asking the model for pixel coordinates.
 
 ### 5.2 Session, desktop ownership, and cancellation
 
@@ -387,7 +396,6 @@ The library, CLI JSON mode, and MCP structured results share one envelope:
   "duration_ms": 24,
   "state_status": "available",
   "state": {
-    "cursor": [914, 402],
     "focused_window": {"ref": "win_7", "title": "Inbox — Mail"},
     "display_id": "display_1",
     "display_generation": 3
@@ -402,6 +410,18 @@ The library, CLI JSON mode, and MCP structured results share one envelope:
 Compact state is included when available, subject to observation policy and budget. If state collection fails after input, preserve execution status, return `state_status: unavailable`, and report the observation error. An unavailable state never turns already applied input into a retry-safe failure. Partial results include completed steps, cleanup status, and typed errors without secret input text.
 
 Read tools add an `observation` payload with the §4.5 discriminator (`snapshot`, `delta`, or `unchanged`); image requests use a separate image payload/content block. Execution metadata, verification, and observations remain distinct. Hosts explicitly observe after mutations with their retained `state_id`; an observation failure must not replay already applied input.
+
+### 5.4 Phase 2: Opening applications
+
+Phase 2 (`v0.2`) adds bounded installed-application discovery and opening through native AppKit APIs. `computer_apps` returns a bounded inventory of only host-authorized installed launch candidates, with names and opaque `app_ref` values. The host binds each reference to a resolved installed bundle URL, bundle identifier, and the verified identity requirements of its policy (including publisher/signature where required). Display names and bundle identifiers alone cannot authorize an arbitrary installation. Recheck the installed identity before launch; removed, replaced, or ambiguous candidates require fresh discovery and return `app_stale`/`unsupported`.
+
+`computer_open_app` accepts `action_id`, `app_ref`, an optional `activate` preference, and a bounded readiness timeout. The normalized request binds activation and target identity to host approval. The native backend uses `NSWorkspace.openApplication(at:configuration:completionHandler:)` with explicitly selected activation behavior; it does not invoke a shell command. Opening an already running approved app may activate it when permitted, and reports `already_running` rather than starting an unnecessary duplicate instance. Launch/activation is scheduled under desktop writer ownership, cancellation, quotas, approval, and replay handling; it may change focus or cause the application to perform startup/network work.
+
+No arbitrary executable paths, shell strings, process arguments, URLs, or documents are accepted by this operation. Launch authority does not grant permission to read/control every window of that app: discovered process/window identities must also satisfy the host's observation/input scopes. Once an eligible window is available, return its `window_ref` so the model can request a fresh semantic snapshot. Phase 1 begins with already running authorized applications; it does not advertise app launch capability.
+
+Distinguish native launch outcome (`started`, `already_running`, `failed`, or `unknown`) from readiness (`window_ready`, `no_eligible_window`, or `unavailable`). A returned running application is not proof that a window, document, or AX tree is ready. Bounded readiness observation can time out after a successful launch without making launch retry-safe. Preserve applied/partial/unknown execution, do not automatically relaunch or terminate the app on cancellation, and use the existing `action_id` replay contract. Phase 2 must qualify missing/ambiguous apps, already-running apps, launch failures, focus/activation, delayed or absent windows, permission denial, cancellation after dispatch, and changed installed identities before advertising this capability.
+
+The native bridge gains a separately qualified application inventory/identity/open contract in phase 2; raw bundle paths and OS object lifetimes remain inside the backend. This is application opening, not installation, arbitrary process execution, or a task-completion guarantee.
 
 ---
 
@@ -418,6 +438,8 @@ type Policy struct {
     AllowFieldValues     bool          // false by default; secure values always omitted
     AllowUnclassifiedUI  bool          // trusted opt-in, not a tool argument
     ObservationMode      ObservationMode // semantic_first by default; semantic_only forbids pixels
+    AllowGeometryDiagnostics bool      // trusted developer projection; false for model output
+    AllowedApplications  []ApplicationIdentity // trusted phase 2 installed identities; model sees AppRef
     MaxActionsPerMinute  int
     MaxImageBytesSession int64
     MaxRetainedBytes     int64
@@ -472,6 +494,8 @@ comuse wait window-appears --title "Save*" [--timeout 5s]
 comuse mcp --transport stdio
 ```
 
+The coordinate commands above are developer low-level facilities. The default model MCP surface uses the semantic read/write/action tools in §8.2. Phase 2 adds `comuse apps --json` and `comuse open-app --app-id <installed-id> [--activate] [--timeout 5s]`; the one-shot discovery ID selects a fresh identity-checked candidate under a trusted launch profile, not an authorization token or a cross-session `AppRef`.
+
 `--json` is global: output uses the shared envelope, with explicit observation payloads for image/list/tree results. Stdout contains results only; logs go to stderr. Images are written to a requested file or emitted only through an explicit image output option. Do not present raw base64 text as a token-efficiency feature.
 
 Session-local references cannot be reused by unrelated one-shot CLI invocations. `comuse windows` includes a native discovery ID alongside its session reference. One-shot commands use `--window-id` to resolve a fresh process/window identity and `WindowRef`, then enforce a trusted CLI profile's permitted applications/window constraints. The discovery ID selects a candidate; it is not authorization, and a reused ID must not bypass identity/policy checks. A one-shot `a11y` emits a fresh full JSON snapshot; it cannot accept a baseline or element ID from an earlier invocation. Diffs, historical reads, and element actions initially use persistent library or MCP sessions, including CLI-launched `comuse mcp`. Future scripts can maintain a session; they must preserve the same core lifetimes rather than serialize native handles to disk.
@@ -496,22 +520,24 @@ Exit codes: 0 successful operation, 1 execution/observation failure, 2 policy/ap
 | Tool | Initial params | Returns | Phase |
 |---|---|---|---|
 | `computer_state` | — | state and capability status | v0.1 |
-| `computer_screenshot` | `window_ref`, `region?`, image budget | explicit image block and transform/redaction metadata | optional qualified fallback after semantic foundation |
+| `computer_screenshot` | `window_ref`, optional `element_ref` with `state_id`, image budget | explicit image block; Comuse computes authorized crop, host keeps transforms | phase 2 qualified fallback |
 | `computer_windows` | bounded list options | authorized window references | v0.1 |
 | `computer_a11y` | `window_ref`, text budget, `mode: auto/full/stored`, `since?`, `state_id?` | §4.5 JSON snapshot/delta/unchanged; explicit historical marker for stored state | v0.1 semantic foundation |
-| `computer_click` | `action_id`, `window_ref`, `x,y`, `button`, `count?` | execution envelope | v0.1 |
-| `computer_type` | `action_id`, `window_ref`, `text`, `clear?`, `delay?` | execution and verification status | v0.1 |
-| `computer_press_key` | `action_id`, `window_ref`, `keys`, `hold?` | execution envelope | v0.1 |
-| `computer_scroll` | `action_id`, `window_ref`, `dx,dy`, `at` | execution envelope | v0.1 |
-| `computer_drag` | `action_id`, `window_ref`, `from,to`, `steps`, `duration?` | execution and cleanup status | v0.1 |
+| `computer_read_element` | `window_ref`, `element_ref`, `state_id`, text budget | fresh permitted text/value or explicit unavailable/refused status | phase 1, qualified readable targets |
+| `computer_write_element` | `action_id`, `window_ref`, `element_ref`, `state_id`, `text`, `mode: replace/insert` | execution and readback verification status | phase 1, qualified writable targets |
+| `computer_scroll_element` | `action_id`, `window_ref`, `element_ref`, `state_id`, bounded direction/amount | execution envelope; internal placement and scroll conversion | phase 1, qualified scrollable targets |
 | `computer_wait` | bounded `until`, `timeout` | observed condition, not action success | v0.1 |
 | `computer_click_element` | `action_id`, `window_ref`, `element_ref`, `state_id` | validated execution envelope and execution method | v0.1 semantic foundation, after identity qualification |
 | `computer_element_action` | `action_id`, `window_ref`, `element_ref`, `state_id`, advertised action kind | validated execution envelope | v0.1, qualified native actions only |
+| `computer_apps` | bounded inventory options | authorized installed application names/references | phase 2 / v0.2 |
+| `computer_open_app` | `action_id`, `app_ref`, `activate?`, readiness timeout | launch outcome, readiness status, eligible window reference when available | phase 2 / v0.2 |
 | Pixel diff / `computer_text` | separately qualified contracts | optional image/OCR observations | deferred |
 
 No image is returned by mutating tools. A host requests `computer_screenshot` explicitly; `semantic_only` sessions reject it and do not advertise image capability. The host must have a vision-capable consumer to interpret fallback images; Comuse does not choose a model or invoke hidden vision/OCR work. Semantic diffs use `computer_a11y` with `since`, not a separate pixel-diff tool. Tool descriptions remain short; detailed documentation belongs in server instructions/resources.
 
-Use MCP `structuredContent` and an output schema for the envelope, with discriminated snapshot/delta/unchanged schemas and compatible JSON text serialization as required by the selected version. A host should avoid adding redundant copies of structured and text output to model context. Return tool execution failures with `isError: true`; malformed requests use the appropriate protocol error. Core typed errors include `policy_refused`, `approval_required`, `element_stale`, `state_expired`, `permission_denied`, `unsupported`, `backend_unavailable`, `desktop_busy`, `rate_limited`, and `budget_exceeded`. Reject contradictory mode/baseline/historical parameters during input validation.
+No default model tool takes screen coordinates, pixel crop rectangles, free-form selectors, arbitrary app paths, or raw window-focused typing. Read/write tools bind the field explicitly. Low-level library/CLI coordinate facilities remain available for developers, but are not automatically advertised as a recovery route when semantic targeting fails. Visual-only tasks lacking a validated target have an explicit support limit. This keeps the LLM's responsibility at choosing the content and operation; Comuse owns input mechanics.
+
+Use MCP `structuredContent` and an output schema for the envelope, with discriminated snapshot/delta/unchanged schemas and compatible JSON text serialization as required by the selected version. A host should avoid adding redundant copies of structured and text output to model context. Return tool execution failures with `isError: true`; malformed requests use the appropriate protocol error. Core typed errors include `policy_refused`, `approval_required`, `element_stale`, `state_expired`, `permission_denied`, `unsupported`, `backend_unavailable`, `desktop_busy`, `rate_limited`, and `budget_exceeded`, plus phase 2 `app_stale`/`launch_failed` outcomes. Reject contradictory mode/baseline/historical parameters during input validation.
 
 Use `notifications/cancelled` for cancellation and progress notifications only under the negotiated protocol's progress-token contract. Native operations and cleanup honor bounded deadlines; cancellation does not erase an action that already posted input.
 
@@ -605,6 +631,7 @@ Acceptance compares the **same tasks, model/version/detail, host context policy,
 - Concurrency tests prove a second process cannot obtain desktop writer ownership and that composites cannot interleave. Include cleanup failure, rejected replay, and loss of post-action state.
 - Golden/synthetic image tests cover transforms, Retina/downscale/crop mapping, redaction ordering, JPEG/PNG attempt/byte/pixel caps, and incompatible capture requests. Bound text-tree traversal and explicitly report truncation.
 - Semantic contract tests prove that applying a delta to its exact baseline reconstructs the fresh normalized snapshot, including property omission, additions/removals, focus, text, geometry, reparenting, and child ordering. Cover unchanged state, skipped responses, stale/foreign baselines, duplicate/out-of-order application, schema mismatch, partial/concurrently changing trees, size-based resets, and TTL/count/byte eviction. Historical retrieval must return the original state or `state_expired`, never a substituted live state.
+- Model-contract tests reject coordinate and implicit-focus write parameters, prove default state omits geometry, and exercise explicit element read/replace/insert, target movement, focus changes, caret ambiguity, stale edits, protected values, unsupported targets, and unavailable verification. Geometry changes appear only in the separately scoped diagnostic projection. Phase 2 tests cover authorized inventory, installed identity drift, launch/activation admission, already-running apps, readiness timeouts, replay/cancellation, and independent window scopes.
 - Privacy/mode tests prove redaction precedes diffing and retention, hidden-value changes do not leak through deltas/IDs, revocation prevents historical reads, and semantic-only observation/input/waits never invoke capture or require Screen Recording. Host reconstruction, compaction recovery, and duplicate MCP content handling are integration checks, not LLM-memory assumptions.
 - Native tests cover Swift/Apple-object ownership, ABI version/argument/status validation, Go callback-handle lifetimes, pixel formats/stride, callback cancellation/completion races, main-thread dispatch, and repeated open/capture/close. Core unit tests cannot prove these properties.
 - CLI/SDK integration tests cover stdin/stdout isolation, schemas, output/execution status, capability negotiation, and cancellation. HTTP security/protocol tests are prerequisites for adding HTTP, not v0.1 requirements.
@@ -627,9 +654,9 @@ The next task is a bounded macOS feasibility spike: build/link the Go and Swift 
 
 Implement in dependency order, preserving the mandatory safety baseline at every mutating stage:
 
-1. Full semantic JSON snapshots, bounded state/reference retention, and qualified element actions through the core, library, CLI full-state path, and persistent MCP adapter.
+1. Phase 1: full semantic JSON snapshots without model geometry, bounded state/reference retention, and qualified element reads/writes/actions through the core, library, CLI full-state path, and persistent MCP adapter. Comuse owns focus, geometry, and input delivery; no model-coordinate recovery path.
 2. Deterministic semantic diffs, unchanged responses, original-state retrieval, host reconstruction guidance, and full-state recovery. Establish equivalence with fresh snapshots before measuring efficiency.
-3. Explicit authorized screenshot fallback with image budgets, coordinate metadata, mode enforcement, and separate image-task qualification.
+3. Phase 2: opening authorized installed applications with bounded launch/readiness results, plus explicit authorized screenshot fallback with image budgets, internal coordinate metadata, mode enforcement, and separate qualification. Both depend on the phase 1 semantic foundation; app opening also works in semantic-only mode.
 4. Signed release, real-host fixtures/soak, comparative cost/latency evidence, documented application limitations, and independent review.
 
 Do not start deferred platforms/features to compensate for an unqualified native foundation. Do not advertise element/diff/image capability before its stage is qualified.
@@ -640,8 +667,8 @@ Do not start deferred platforms/features to compensate for an unqualified native
 
 | Phase | Scope and exit gate |
 |---|---|
-| **v0.1 macOS semantic foundation** | Apple Silicon/macOS 14+ feasibility evidence; Go core + Swift backend; CLI full-state and persistent library/MCP stdio; full JSON snapshots and qualified element actions first, then semantic diffs/unchanged/history recovery; complete safety baseline; benchmark and fixture harness. Exit: reconstruction equivalence, identity/staleness correctness, semantic-only permission evidence, and explicit ownership/cleanup evidence. |
-| **v0.2 stable macOS and explicit fallback** | Separately qualified bounded JPEG/PNG fallback in semantic-first mode; signed/notarized distribution and upgrade/permission qualification; measured soak/resource/latency thresholds; real-host E2E and model-cost comparisons; optional Intel qualification. Exit: §13 release acceptance and independent review. |
+| **Phase 1 / v0.1 macOS semantic foundation** | Apple Silicon/macOS 14+ feasibility evidence; Go core + Swift backend; CLI full-state and persistent library/MCP stdio; coordinate-free model snapshots and qualified element reads/writes/actions first, then semantic diffs/unchanged/history recovery; work with already running authorized apps; complete safety baseline; benchmark and fixture harness. Exit: reconstruction equivalence, identity/staleness/read/write correctness, semantic-only permission evidence, and explicit ownership/cleanup evidence. |
+| **Phase 2 / v0.2 app opening, stable macOS, and explicit fallback** | Authorized installed-app discovery/opening, live application identity, activation and bounded launch/readiness handling; separately qualified bounded JPEG/PNG fallback in semantic-first mode; signed/notarized distribution and upgrade/permission qualification; measured soak/resource/latency thresholds; real-host E2E and model-cost comparisons; optional Intel qualification. Exit: §13 release acceptance, phase 2 app-opening qualification, and independent review. |
 | **v0.3 optional adapters/features** | Authenticated streamable HTTP, bounded scripts, pixel-diff history, OCR, or resource links only as separate evidence-backed slices. None is required to call the local macOS release stable. |
 | **v1.0** | Stable public Go API and documented compatibility after proven macOS use. Additional platforms remain separately scoped and qualified. |
 | **Future** | Linux X11/Wayland, Windows, multi-display, remote backends, embedded OCR, or alternate capture/encode optimizations based on demonstrated demand. |
@@ -682,6 +709,9 @@ type StateID string    // immutable redacted semantic state in one session/scope
 type ScopeID string    // window/display/selector/budget/policy identity
 type ObservationMode string // semantic_first | semantic_only; trusted policy
 type ElementActionKind string // qualified advertised operations only
+type WriteMode string // replace | insert; explicit element target, never implicit focus
+type AppRef string // phase 2 opaque reference bound to authorized installed identity
+type OpenApplication struct { Application AppRef; Activate bool; ReadinessTimeout time.Duration }
 
 type ScrollDelta struct { DX, DY int } // explicit logical wheel steps; positive DY = down
 type TextBudget struct { MaxDepth, MaxNodes, MaxBytes int; Timeout time.Duration }
@@ -723,7 +753,25 @@ Primary element-click tool; policy and approval are host-controlled:
 }
 ```
 
-The core checks that the expected state belongs to the session/window/scope and included the element, then validates the live target and policy before execution (§4.4). If the expected state expired, require a fresh observation rather than trusting the ID. No `confirm`, `preapprove`, `include_image`, or unbounded alternative target is accepted through this tool. Coordinate clicks retain a separate schema with finite/out-of-bounds checks; do not mix coordinate/path/element targets ambiguously.
+The core checks that the expected state belongs to the session/window/scope and included the element, then validates the live target and policy before execution (§4.4). If the expected state expired, require a fresh observation rather than trusting the ID. No `confirm`, `preapprove`, `include_image`, coordinates, or unbounded alternative target is accepted through this tool. Read/write/scroll schemas use the same explicit element/state binding with their bounded semantic parameters. Low-level coordinate commands remain library/CLI developer facilities; do not mix them into the model tool schema.
+
+For a separate snapshot containing a qualified writable field `e13`, the model can request replacement directly:
+
+```json
+{
+  "tool": "computer_write_element",
+  "arguments": {
+    "action_id": "a_write_1",
+    "window_ref": "win_7",
+    "element_ref": "e13",
+    "state_id": "s_field_1",
+    "text": "quarterly report",
+    "mode": "replace"
+  }
+}
+```
+
+Comuse owns focus, replacement mechanics, and any readback. The corresponding `computer_read_element` uses the same window/element/state binding plus a text budget and does not inject input. Neither operation accepts coordinates.
 
 ---
 
@@ -731,7 +779,7 @@ The core checks that the expected state belongs to the session/window/scope and 
 
 A representative future task is “open Settings, change theme to dark”:
 
-1. Discover an authorized window and request a full semantic JSON snapshot. The host retains its state ID and projection.
+1. Discover an authorized window and request a full semantic JSON snapshot without coordinates. In phase 2, first open an authorized installed app if needed, then use the eligible returned window reference. The host retains its state ID and projection.
 2. Request a qualified element action using the window, element reference, and expected state ID; Comuse validates the live target and authority.
 3. Wait for a bounded semantic condition; do not equate a posted action with success.
 4. Observe with `since` set to the host's retained state ID. Apply eligible diffs atomically; replace state on an explicit recovery snapshot. Supply a full projection when model context has been reset.
@@ -750,6 +798,7 @@ Primary references for the design (API availability, toolchain/SDK versions, and
 - [Apple CGDisplayStream](https://developer.apple.com/documentation/coregraphics/cgdisplaystream) — deprecated; not selected for the new backend.
 - [Apple Accessibility AXUIElement](https://developer.apple.com/documentation/applicationservices/axuielement) and [AXIsProcessTrusted](https://developer.apple.com/documentation/applicationservices/1460720-axisprocesstrusted).
 - [Apple accessibility model](https://developer.apple.com/library/archive/documentation/Accessibility/Conceptual/AccessibilityMacOSX/OSXAXmodel.html) — semantic hierarchy, properties, actions, and application-provided accessibility support.
+- [Apple NSWorkspace application opening](https://developer.apple.com/documentation/appkit/nsworkspace/openapplication(at:configuration:completionhandler:)) — phase 2 native installed-app launch; running status is separate from accessible-window readiness.
 - [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) — an alternative generic patch format; §4.5 selects complete semantic record replacement instead.
 - [Apple notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 - [Swift 6.3 C interoperability](https://www.swift.org/blog/swift-6.3-released/) — supported C exports and header-validated implementations.
