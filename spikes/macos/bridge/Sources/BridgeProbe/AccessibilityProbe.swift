@@ -34,6 +34,18 @@ private struct ProcessIdentity {
     let launchDate: Date
 }
 
+struct AccessibilityTargetMetadata {
+    let nonce: String
+    let processStartReference: String
+    let windowReference: String
+    let reference: String
+    let stateID: String?
+    let stateComplete: Bool
+    let role: String
+    let identifier: String?
+    let isProtected: Bool
+}
+
 enum AccessibilityResolution {
     case resolved(AXUIElement)
     case expired
@@ -73,6 +85,8 @@ private final class AXReferenceStore {
         let parentReference: String?
         let role: String
         let identifier: String?
+        var stateID: String?
+        var stateComplete: Bool
         var childReferences: [String]
         var expiresAt: ContinuousClock.Instant
     }
@@ -152,7 +166,7 @@ private final class AXReferenceStore {
         }
         guard windows.count + elements.count < maximumRetainedReferences else { return nil }
         let reference = UUID().uuidString
-        elements[reference] = ElementEntry(reference: reference, identity: identity, nonce: nonce, windowReference: windowReference, window: window, element: element, parent: parent, parentReference: parentReference, role: role, identifier: identifier, childReferences: [], expiresAt: ContinuousClock().now.advanced(by: referenceLifetime))
+        elements[reference] = ElementEntry(reference: reference, identity: identity, nonce: nonce, windowReference: windowReference, window: window, element: element, parent: parent, parentReference: parentReference, role: role, identifier: identifier, stateID: nil, stateComplete: false, childReferences: [], expiresAt: ContinuousClock().now.advanced(by: referenceLifetime))
         expiredReferences.removeValue(forKey: reference)
         return reference
     }
@@ -231,6 +245,22 @@ func resolveAccessibilityElementResult(_ ref: String, pid: Int32) -> Accessibili
           sameAXElement(entry.element, parent: entry.parent),
           currentAXClassificationMatches(entry) else { return .stale }
     return .resolved(entry.element)
+}
+
+@MainActor
+func accessibilityTargetMetadata(_ ref: String, pid: Int32) -> AccessibilityTargetMetadata? {
+    axReferences.purgeExpired()
+    guard let entry = axReferences.elements[ref], entry.identity.pid == pid,
+          let currentIdentity = processIdentity(pid: pid), sameProcessIdentity(currentIdentity, entry.identity),
+          AXIsProcessTrusted(),
+          fixtureWindowStillMatches(entry.window, identity: entry.identity, nonce: entry.nonce),
+          sameAXElement(entry.element, parent: entry.parent),
+          let role = copyAXAttribute(entry.element, kAXRoleAttribute) as? String,
+          (copyAXAttribute(entry.element, kAXIdentifierAttribute) as? String) == entry.identifier,
+          let processStartReference = axReferences.processes[pid]?.reference else { return nil }
+    let subrole = copyAXAttribute(entry.element, kAXSubroleAttribute) as? String
+    let isProtected = role == (kAXTextFieldRole as String) && subrole == (kAXSecureTextFieldSubrole as String)
+    return AccessibilityTargetMetadata(nonce: entry.nonce, processStartReference: processStartReference, windowReference: entry.windowReference, reference: entry.reference, stateID: entry.stateID, stateComplete: entry.stateComplete, role: role, identifier: entry.identifier, isProtected: isProtected)
 }
 
 @MainActor
@@ -374,14 +404,19 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
             let cost = identifier.utf8.count
             if textBytes + cost <= maximumAXTextBytes { textBytes += cost } else { truncated = true }
         }
-        if includeValues, nodes[index].identifier == "textfield", nodes[index].role == (kAXTextFieldRole as String) {
-            let subrole = copyAXAttribute(nodes[index].element, kAXSubroleAttribute, deadline: deadline) as? String
+        let allowedValueTarget =
+            (nodes[index].identifier == "textfield" && nodes[index].role == (kAXTextFieldRole as String)) ||
+            (nodes[index].identifier == "counter-value" && nodes[index].role == (kAXStaticTextRole as String))
+        if includeValues, allowedValueTarget {
+            let subrole = nodes[index].role == (kAXTextFieldRole as String)
+                ? copyAXAttribute(nodes[index].element, kAXSubroleAttribute, deadline: deadline) as? String
+                : nil
             if subrole != (kAXSecureTextFieldSubrole as String),
                let value = copyAXAttribute(nodes[index].element, kAXValueAttribute, deadline: deadline) as? String {
                 let cost = value.utf8.count
                 if textBytes + cost <= maximumAXTextBytes {
                     nodes[index].value = value
-                    nodes[index].valueStatus = "included_synthetic_normal"
+                    nodes[index].valueStatus = nodes[index].identifier == "textfield" ? "included_synthetic_normal" : "included_synthetic_counter"
                     textBytes += cost
                 } else {
                     nodes[index].valueStatus = "omitted_limit"
@@ -390,6 +425,8 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
             } else {
                 nodes[index].valueStatus = "omitted_protected_or_unavailable"
             }
+        } else {
+            nodes[index].valueStatus = "omitted"
         }
         guard let children = copyAXAttribute(nodes[index].element, kAXChildrenAttribute, deadline: deadline) as? [AXUIElement] else {
             truncated = true
@@ -460,6 +497,13 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
     let canonicalData = (try? JSONSerialization.data(withJSONObject: canonicalRows, options: [.sortedKeys])) ?? Data()
     let stateID = SHA256.hash(data: canonicalData).map { String(format: "%02x", $0) }.joined()
     let complete = !truncated && !concurrentChange && nodes.allSatisfy(\.visited)
+    for reference in observedReferences {
+        guard var entry = axReferences.elements[reference] else { continue }
+        entry.stateID = stateID
+        entry.stateComplete = complete
+        entry.expiresAt = ContinuousClock().now.advanced(by: referenceLifetime)
+        axReferences.elements[reference] = entry
+    }
     if complete {
         axReferences.removeUnobservedElements(identity: identity, nonce: scope.nonce, windowReference: windowReference, observed: observedReferences)
     }
