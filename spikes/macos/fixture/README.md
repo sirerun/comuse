@@ -7,10 +7,11 @@ This experimental macOS 14+ source fixture presents only synthetic controls for 
 From the repository root, build a new app bundle and all Swift build products on the external volume:
 
 ```sh
+export COMUSE_ARTIFACT_ROOT=/path/on/the/operator-verified-external-volume
 spikes/macos/fixture/build-app.sh \
-  /Volumes/BuildOffload/artifacts/comuse-fixture-build \
-  /Volumes/BuildOffload/artifacts/comuse-fixture-run-a/ComuseFixture.app
-open -n /Volumes/BuildOffload/artifacts/comuse-fixture-run-a/ComuseFixture.app \
+  "$COMUSE_ARTIFACT_ROOT/comuse-fixture-build" \
+  "$COMUSE_ARTIFACT_ROOT/comuse-fixture/ComuseFixture.app"
+open -n "$COMUSE_ARTIFACT_ROOT/comuse-fixture/ComuseFixture.app" \
   --args --fixture-nonce run-a
 ```
 
@@ -20,7 +21,7 @@ Run core state/configuration tests or build the debug app package with the Swift
 
 ```sh
 swift test --package-path spikes/macos/fixture \
-  --scratch-path /Volumes/BuildOffload/artifacts/comuse-fixture-test-cache --jobs 2
+  --scratch-path "$COMUSE_ARTIFACT_ROOT/comuse-fixture-test-cache" --jobs 2
 ```
 
 ## Stable accessibility controls and postconditions
