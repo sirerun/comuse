@@ -8,6 +8,6 @@ The only source of native library path and fixture identity is an owner-only tru
 {"library_path":"/absolute/path/to/libComuseBridge.dylib","fixture":{"pid":1234,"bundle_id":"com.sirerun.comuse.fixture","nonce":"fixture-nonce"}}
 ```
 
-Pass it with `--config /absolute/path/to/config.json`. CLI arguments cannot change PID, bundle ID, nonce, or library path. `--window-index 0` is required for `a11y`; `--include-values` is opt-in and passes only the native/semantic fixture allowlist. Secure values remain omitted. The CLI does not expose native JSON, approvals, input, or app launch.
+Pass it with `--config /absolute/path/to/config.json`. CLI arguments cannot change PID, bundle ID, nonce, or library path. `--include-values` is opt-in and passes only the native/semantic fixture allowlist. Secure values remain omitted. The CLI does not expose native JSON, approvals, input, or app launch.
 
 This candidate does not establish Accessibility trust, native fixture launch, permission-grant, live AX, or GUI acceptance. `doctor` reports current AX and event-posting permission without prompting. Input remains compile-closed and is not routed by this CLI.

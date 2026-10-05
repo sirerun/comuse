@@ -54,7 +54,6 @@ type clientFactory func(string) (nativeClient, error)
 type cliOptions struct {
 	configPath    string
 	includeValues bool
-	windowIndex   int
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openNative)) }
@@ -69,9 +68,8 @@ func run(args []string, stdout, stderr io.Writer, open clientFactory) int {
 	var options cliOptions
 	flags.StringVar(&options.configPath, "config", "", "trusted local config file")
 	flags.BoolVar(&options.includeValues, "include-values", false, "include allowlisted synthetic fixture values (a11y only)")
-	flags.IntVar(&options.windowIndex, "window-index", -1, "zero-based fixture window selected for a11y")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 1 || options.configPath == "" {
-		fmt.Fprintln(stderr, "usage: cliprobe --config <trusted-file> [--include-values] [--window-index N] hello|doctor|windows|a11y")
+		fmt.Fprintln(stderr, "usage: cliprobe --config <trusted-file> [--include-values] hello|doctor|windows|a11y")
 		return exitUsage
 	}
 	op := flags.Arg(0)
@@ -79,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer, open clientFactory) int {
 		fmt.Fprintln(stderr, "unsupported read operation")
 		return exitUsage
 	}
-	if options.includeValues && op != "a11y" || (op == "a11y" && options.windowIndex < 0) || (op != "a11y" && options.windowIndex >= 0) {
+	if options.includeValues && op != "a11y" {
 		fmt.Fprintln(stderr, "operation-specific flags are invalid")
 		return exitUsage
 	}
@@ -169,10 +167,7 @@ func dispatch(ctx context.Context, client nativeClient, op string, options cliOp
 	if len(windowResult.Windows) != 1 {
 		return nil, errors.New("fixture window selection is ambiguous")
 	}
-	if options.windowIndex < 0 || options.windowIndex >= len(windowResult.Windows) {
-		return nil, errors.New("selected window index is out of range")
-	}
-	selectedRef := windowResult.Windows[options.windowIndex].Ref
+	selectedRef := windowResult.Windows[0].Ref
 	if selectedRef == "" || windowResult.ProcessStartRef == "" {
 		return nil, errors.New("selected window reference is empty")
 	}
@@ -288,11 +283,29 @@ func readTrustedConfig(path string) (trustedConfig, error) {
 	if !filepath.IsAbs(path) {
 		return config, errors.New("config path must be absolute")
 	}
-	info, err := os.Lstat(path)
+	parentInfo, err := os.Lstat(filepath.Dir(path))
 	if err != nil {
 		return config, err
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0022 != 0 {
+	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 || !ok || parentStat.Uid != uint32(os.Geteuid()) || parentInfo.Mode().Perm()&0022 != 0 {
+		return config, errors.New("config directory must be a current-user-owned real directory not writable by group or others")
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return config, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return config, errors.New("config descriptor is invalid")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return config, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
 		return config, errors.New("config must be a regular file not writable by group or others")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -302,9 +315,12 @@ func readTrustedConfig(path string) (trustedConfig, error) {
 	if info.Size() <= 0 || info.Size() > maxConfigBytes {
 		return config, errors.New("config size is invalid")
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
 	if err != nil {
 		return config, err
+	}
+	if len(data) == 0 || len(data) > maxConfigBytes {
+		return config, errors.New("config size is invalid")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
