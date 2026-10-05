@@ -58,6 +58,16 @@ struct AccessibilityProbeTests {
         #expect(object["result"] is NSNull)
     }
 
+    @Test
+    func unknownTextFieldClassificationFailsClosedBeforeValueAccess() {
+        #expect(isKnownNonsecureTextField(role: "AXTextField", subrole: nil, identifier: "textfield") == false)
+        #expect(isKnownNonsecureTextField(role: "AXTextField", subrole: "AXSecureTextField", identifier: "textfield") == false)
+        #expect(isKnownNonsecureTextField(role: "AXTextField", subrole: "AXTextField", identifier: nil) == false)
+        #expect(isProtectedOrUncertainTextField(role: "AXTextField", subrole: nil, identifier: "textfield"))
+        #expect(isProtectedOrUncertainTextField(role: "AXTextField", subrole: "AXSecureTextField", identifier: "securefield"))
+        #expect(isKnownNonsecureTextField(role: "AXTextField", subrole: "AXTextField", identifier: "textfield"))
+    }
+
     private func decode(_ request: String) throws -> [String: Any] {
         let data = handleAccessibilityProbe(Data(request.utf8))
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
