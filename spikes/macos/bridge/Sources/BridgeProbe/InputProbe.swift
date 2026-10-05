@@ -187,6 +187,7 @@ private func freshInputSnapshot(scope: InputScope) -> [String: Any] {
         "schema_version": 1,
         "request_id": UUID().uuidString,
         "op": "a11y",
+        "window_ref": scope.windowReference,
         "include_values": true,
         "scope": ["pid": scope.pid, "bundle_id": scope.bundleID, "fixture_nonce": scope.nonce],
     ]
