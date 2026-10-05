@@ -642,11 +642,12 @@ private func copyAXAttribute(_ element: AXUIElement, _ attribute: String, deadli
 private func probeResponse(requestID: String, status: String, error: String? = nil, result: [String: Any]? = nil) -> Data {
     var envelope: [String: Any] = ["schema_version": 1, "request_id": requestID, "status": status]
     if let error {
-        envelope["error"] = ["code": error]
+        envelope["error"] = error
+        envelope["result"] = NSNull()
     } else {
         envelope["error"] = NSNull()
+        envelope["result"] = result ?? [:]
     }
-    envelope["result"] = result ?? [:]
     guard let data = try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]) else { return Data() }
     return data
 }
