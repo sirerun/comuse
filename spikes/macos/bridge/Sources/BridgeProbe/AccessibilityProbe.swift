@@ -315,18 +315,27 @@ private func listFixtureWindows(scope: ProbeScope, requestID: String) -> Data {
     let processStartReference = axReferences.processReference(identity)
     let appElement = AXUIElementCreateApplication(scope.pid)
     AXUIElementSetMessagingTimeout(appElement, 0.05)
-    let deadline = Date().addingTimeInterval(maximumAXDuration)
+    let deadline = ProcessInfo.processInfo.systemUptime + maximumAXDuration
     guard let rawWindows = copyAXAttribute(appElement, kAXWindowsAttribute, deadline: deadline) as? [AXUIElement] else {
+        if ProcessInfo.processInfo.systemUptime >= deadline {
+            return probeResponse(requestID: requestID, status: "partial", result: [
+                "process_start_ref": processStartReference,
+                "windows": [],
+                "coverage": ["status": "partial", "window_limit": maximumAXNodes, "window_count": 0, "deadline_ms": Int(maximumAXDuration * 1000), "timed_out": true, "truncated": false, "reason": "deadline"],
+            ])
+        }
         return probeResponse(requestID: requestID, status: "error", error: "windows_unavailable")
     }
 
     var rows: [[String: Any]] = []
     var observed = Set<String>()
     var timedOut = false
+    var windowUncertain = false
     for window in rawWindows.prefix(maximumAXNodes) {
         AXUIElementSetMessagingTimeout(window, 0.05)
         guard let title = copyAXAttribute(window, kAXTitleAttribute, deadline: deadline) as? String else {
-            timedOut = Date() >= deadline
+            timedOut = ProcessInfo.processInfo.systemUptime >= deadline
+            windowUncertain = true
             if timedOut { break }
             continue
         }
@@ -338,23 +347,24 @@ private func listFixtureWindows(scope: ProbeScope, requestID: String) -> Data {
         rows.append(["ref": reference, "role": "window"])
     }
     let capped = rawWindows.count > maximumAXNodes
-    let complete = !timedOut && !capped
-    guard !rows.isEmpty else {
+    let complete = !timedOut && !capped && !windowUncertain
+    guard !rows.isEmpty || timedOut else {
         return probeResponse(requestID: requestID, status: "error", error: "fixture_window_unavailable")
     }
     let stillSame = currentProcessMatches(identity) && rows.allSatisfy { row in
         guard let reference = row["ref"] as? String, let entry = axReferences.windows[reference] else { return false }
-        return fixtureWindowStillMatches(entry.window, identity: identity, nonce: scope.nonce)
+        return fixtureWindowStillMatches(entry.window, identity: identity, nonce: scope.nonce, deadline: deadline)
     }
+    let validationTimedOut = ProcessInfo.processInfo.systemUptime >= deadline
     if complete && stillSame {
         axReferences.removeUnobservedWindows(identity: identity, nonce: scope.nonce, observed: observed)
     }
-    let partial = !complete || !stillSame
-    let windowCoverageReason: Any = stillSame ? NSNull() : "concurrent_change"
+    let partial = !complete || !stillSame || validationTimedOut
+    let windowCoverageReason: Any = timedOut || validationTimedOut ? "deadline" : (capped ? "window_limit" : (windowUncertain ? "bounded_or_ax_uncertainty" : (!stillSame ? "concurrent_change" : NSNull())))
     let result: [String: Any] = [
         "process_start_ref": processStartReference,
         "windows": rows,
-        "coverage": ["status": partial ? "partial" : "complete", "window_limit": maximumAXNodes, "window_count": rows.count, "deadline_ms": Int(maximumAXDuration * 1000), "timed_out": timedOut, "truncated": capped, "reason": windowCoverageReason],
+        "coverage": ["status": partial ? "partial" : "complete", "window_limit": maximumAXNodes, "window_count": rows.count, "deadline_ms": Int(maximumAXDuration * 1000), "timed_out": timedOut || validationTimedOut, "truncated": capped, "reason": windowCoverageReason],
     ]
     return probeResponse(requestID: requestID, status: partial ? "partial" : "completed", result: result)
 }
@@ -388,7 +398,7 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
     let processStartReference = axReferences.processReference(identity)
     let appElement = AXUIElementCreateApplication(scope.pid)
     AXUIElementSetMessagingTimeout(appElement, 0.05)
-    let windowDeadline = Date().addingTimeInterval(maximumAXDuration)
+    let windowDeadline = ProcessInfo.processInfo.systemUptime + maximumAXDuration
     guard let rawWindows = copyAXAttribute(appElement, kAXWindowsAttribute, deadline: windowDeadline) as? [AXUIElement] else {
         return probeResponse(requestID: requestID, status: "error", error: "fixture_window_unavailable")
     }
@@ -401,7 +411,7 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
             matchedWindow = candidate
             break
         }
-        if Date() >= windowDeadline { break }
+        if ProcessInfo.processInfo.systemUptime >= windowDeadline { break }
     }
     guard let window = matchedWindow else {
         return probeResponse(requestID: requestID, status: "error", error: "fixture_window_unavailable")
@@ -413,14 +423,14 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
         return probeResponse(requestID: requestID, status: "error", error: "scope_mismatch")
     }
 
-    let deadline = Date().addingTimeInterval(maximumAXDuration)
+    let deadline = ProcessInfo.processInfo.systemUptime + maximumAXDuration
     var nodes = [ObservedNode(element: window, parent: appElement, parentIndex: nil, depth: 0)]
     var stack = [0]
     var visited = 0
     var textBytes = 0
     var truncated = false
     while let index = stack.popLast() {
-        if Date() >= deadline || visited >= maximumAXNodes || textBytes >= maximumAXTextBytes {
+        if ProcessInfo.processInfo.systemUptime >= deadline || visited >= maximumAXNodes || textBytes >= maximumAXTextBytes {
             truncated = true
             break
         }
@@ -581,9 +591,9 @@ private func currentProcessMatches(_ expected: ProcessIdentity) -> Bool {
 }
 
 @MainActor
-private func fixtureWindowStillMatches(_ window: AXUIElement, identity: ProcessIdentity, nonce: String) -> Bool {
+private func fixtureWindowStillMatches(_ window: AXUIElement, identity: ProcessIdentity, nonce: String, deadline: TimeInterval? = nil) -> Bool {
     guard let currentIdentity = processIdentity(pid: identity.pid), sameProcessIdentity(currentIdentity, identity) else { return false }
-    let deadline = Date().addingTimeInterval(maximumAXDuration)
+    let deadline = deadline ?? (ProcessInfo.processInfo.systemUptime + maximumAXDuration)
     let appElement = AXUIElementCreateApplication(identity.pid)
     AXUIElementSetMessagingTimeout(appElement, 0.05)
     guard let windows = copyAXAttribute(appElement, kAXWindowsAttribute, deadline: deadline) as? [AXUIElement] else { return false }
@@ -618,9 +628,9 @@ private func currentAXClassificationMatches(_ entry: AXReferenceStore.ElementEnt
 }
 
 @MainActor
-private func copyAXAttribute(_ element: AXUIElement, _ attribute: String, deadline: Date? = nil) -> CFTypeRef? {
+private func copyAXAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> CFTypeRef? {
     if let deadline {
-        let remaining = deadline.timeIntervalSinceNow
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
         guard remaining > 0 else { return nil }
         AXUIElementSetMessagingTimeout(element, Float(min(0.05, remaining)))
     }
