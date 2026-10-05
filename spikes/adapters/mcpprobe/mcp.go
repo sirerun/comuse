@@ -145,7 +145,7 @@ func New(config Config, backend Backend, logger *slog.Logger) (*Server, error) {
 }
 
 func ValidateConfig(config Config) error {
-	if config.FixturePID <= 0 || config.FixtureBundleID != FixtureBundleID ||
+	if config.FixturePID <= 0 || config.FixturePID > int(1<<31-1) || config.FixtureBundleID != FixtureBundleID ||
 		!validNonce(config.FixtureNonce) || !safeToken(config.ProcessLaunchGeneration, 128) ||
 		!filepath.IsAbs(config.NativeLibraryPath) || strings.TrimSpace(config.NativeLibraryPath) != config.NativeLibraryPath || strings.ContainsRune(config.NativeLibraryPath, '\x00') {
 		return ErrInvalidConfig
