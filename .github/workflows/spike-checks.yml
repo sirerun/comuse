@@ -1,0 +1,129 @@
+name: Spike checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: spike-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Run Go and cgo-disabled checks
+        run: |
+          mkdir -p "$RUNNER_TEMP/comuse-artifacts"
+          scripts/spike/check.sh --artifact-root "$RUNNER_TEMP/comuse-artifacts" --select go
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-go-evidence
+          path: ${{ runner.temp }}/comuse-artifacts/**
+          if-no-files-found: warn
+
+  swift:
+    # macos-14 is a documented GitHub-hosted public runner label. Tests execute
+    # on that runner image; the package's deployment target is compile evidence.
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Run Swift bridge tests and deployment-target compile
+        run: |
+          mkdir -p "$RUNNER_TEMP/comuse-artifacts"
+          scripts/spike/check.sh --artifact-root "$RUNNER_TEMP/comuse-artifacts" --select swift
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-swift-evidence
+          path: ${{ runner.temp }}/comuse-artifacts/**
+          if-no-files-found: warn
+
+  fixture:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test fixture source only
+        run: |
+          mkdir -p "$RUNNER_TEMP/comuse-artifacts"
+          scripts/spike/check.sh --artifact-root "$RUNNER_TEMP/comuse-artifacts" --select fixture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-fixture-evidence
+          path: ${{ runner.temp }}/comuse-artifacts/**
+          if-no-files-found: warn
+
+  native:
+    # macos-26 is a documented GitHub-hosted public runner label.
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Run real Go to Swift ABI smoke (no GUI or TCC prompt)
+        run: |
+          mkdir -p "$RUNNER_TEMP/comuse-artifacts"
+          scripts/spike/check.sh --artifact-root "$RUNNER_TEMP/comuse-artifacts" --select native
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-native-evidence
+          path: ${{ runner.temp }}/comuse-artifacts/**
+          if-no-files-found: warn
+
+  cli:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Run CLI adapter compile and tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/comuse-artifacts"
+          scripts/spike/check.sh --artifact-root "$RUNNER_TEMP/comuse-artifacts" --select cli
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-cli-evidence
+          path: ${{ runner.temp }}/comuse-artifacts/**
+          if-no-files-found: warn
+
+  mock-adapters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Run MCP mock checks or record not-run status
+        run: |
+          mkdir -p "$RUNNER_TEMP/comuse-artifacts"
+          scripts/spike/check.sh --artifact-root "$RUNNER_TEMP/comuse-artifacts" --select mcp
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-mock-evidence
+          path: ${{ runner.temp }}/comuse-artifacts/**
+          if-no-files-found: warn
