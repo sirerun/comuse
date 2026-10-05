@@ -227,8 +227,12 @@ func TestResultLimitAndIOFrameLimitAreExplicit(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport := server.stdioTransport()
-	if transport.MaxLineLength != MaxFrameBytes {
-		t.Fatalf("stdio max line length = %d, want %d", transport.MaxLineLength, MaxFrameBytes)
+	ioTransport, ok := transport.(*mcp.IOTransport)
+	if !ok {
+		t.Fatalf("stdio transport type = %T, want *mcp.IOTransport", transport)
+	}
+	if ioTransport.MaxLineLength != MaxFrameBytes {
+		t.Fatalf("stdio max line length = %d, want %d", ioTransport.MaxLineLength, MaxFrameBytes)
 	}
 	ioTransport := &mcp.IOTransport{MaxLineLength: MaxFrameBytes}
 	if ioTransport.MaxLineLength != MaxFrameBytes {
@@ -366,9 +370,17 @@ func TestDoctorRequiresExactUnpromptedCheckPair(t *testing.T) {
 func TestBoundedFrameWriterCapsCompleteResponseWithNearLimitID(t *testing.T) {
 	writerBuffer := &bytes.Buffer{}
 	writer := &boundedFrameWriter{writer: writerBuffer, maxFrameBytes: MaxFrameBytes}
+	id, err := jsonrpc.MakeID(strings.Repeat("r", MaxFrameBytes-200))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(map[string]any{"payload": strings.Repeat("private-response-canary", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := &jsonrpc.Response{
-		ID:     jsonrpc.StringID(strings.Repeat("r", MaxFrameBytes-200)),
-		Result: map[string]any{"payload": strings.Repeat("private-response-canary", 32)},
+		ID:     id,
+		Result: result,
 	}
 	frame, err := jsonrpc.EncodeMessage(response)
 	if err != nil {
@@ -404,9 +416,13 @@ func TestBoundedFrameWriterCapsCompleteResponseWithNearLimitID(t *testing.T) {
 func TestBoundedFrameWriterFailsClosedWhenErrorCannotEchoID(t *testing.T) {
 	writerBuffer := &bytes.Buffer{}
 	writer := &boundedFrameWriter{writer: writerBuffer, maxFrameBytes: MaxFrameBytes}
+	id, err := jsonrpc.MakeID(strings.Repeat("i", MaxFrameBytes-32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := &jsonrpc.Response{
-		ID:     jsonrpc.StringID(strings.Repeat("i", MaxFrameBytes-32)),
-		Result: "nonempty-result",
+		ID:     id,
+		Result: json.RawMessage(`"nonempty-result"`),
 	}
 	frame, err := jsonrpc.EncodeMessage(response)
 	if err != nil {
