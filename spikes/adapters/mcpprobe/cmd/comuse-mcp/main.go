@@ -10,11 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"time"
 
 	"github.com/sirerun/comuse/spikes/adapters/mcpprobe"
 	"github.com/sirerun/comuse/spikes/bridgeclient"
 )
+
+func init() { runtime.LockOSThread() }
 
 func main() {
 	if err := run(); err != nil {
