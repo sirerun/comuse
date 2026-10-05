@@ -149,7 +149,7 @@ func TestUnsupportedActionRejectedBeforeAdmissionAndBackend(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported action")
 	}
-	if backend.calls != 0 || journal.begins != 0 || lease.releases != 1 {
+	if backend.calls != 0 || journal.begins != 0 || lease.releases != 0 {
 		t.Fatalf("calls=%d begins=%d releases=%d", backend.calls, journal.begins, lease.releases)
 	}
 }
