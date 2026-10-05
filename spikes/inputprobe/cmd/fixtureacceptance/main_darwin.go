@@ -74,7 +74,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 64
 	}
 	defer clearBytes(commitmentKey)
-	if subtle.ConstantTimeCompare(journalKey, commitmentKey) == 1 || filepath.Clean(diskConfig.JournalKeyFile) == filepath.Clean(diskConfig.CommitmentKeyFile) {
+	if err := validateDistinctKeys(diskConfig.JournalKeyFile, diskConfig.CommitmentKeyFile, journalKey, commitmentKey); err != nil {
 		writeStderr(stderr, "fixture acceptance key files refused")
 		return 64
 	}
@@ -82,11 +82,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		writeStderr(stderr, "fixture acceptance journal directory refused")
 		return 64
 	}
-	if diskConfig.FixturePID <= 0 || diskConfig.FixturePID > int64(^uint32(0)>>1) || !validNonce(diskConfig.FixtureNonce) || !filepath.IsAbs(diskConfig.LibraryPath) {
-		writeStderr(stderr, "fixture acceptance configuration refused")
-		return 64
-	}
-
 	config := inputprobe.FixtureAcceptanceConfig{
 		Scenario:            diskConfig.Scenario,
 		LibraryPath:         diskConfig.LibraryPath,
@@ -141,20 +136,39 @@ func readTrustedConfig(path string) (trustedConfig, error) {
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return trustedConfig{}, errors.New("trailing trusted config data")
 	}
+	if err := validateTrustedConfig(config, path); err != nil {
+		return trustedConfig{}, err
+	}
+	return config, nil
+}
+
+func validateTrustedConfig(config trustedConfig, configPath string) error {
 	if config.SchemaVersion != 1 {
-		return trustedConfig{}, errors.New("unsupported trusted config version")
+		return errors.New("unsupported trusted config version")
 	}
 	switch config.Scenario {
 	case inputprobe.FixtureReadNormalValue, inputprobe.FixtureReplaceNormalText, inputprobe.FixturePressCounter:
 	default:
-		return trustedConfig{}, errors.New("unsupported fixture scenario")
+		return errors.New("unsupported fixture scenario")
+	}
+	if config.FixturePID <= 0 || config.FixturePID > int64(^uint32(0)>>1) || !validNonce(config.FixtureNonce) ||
+		!filepath.IsAbs(config.LibraryPath) || !filepath.IsAbs(config.PrivateJournalRoot) {
+		return errors.New("invalid fixture target config")
 	}
 	for _, filePath := range []string{config.JournalKeyFile, config.CommitmentKeyFile} {
-		if !filepath.IsAbs(filePath) || filepath.Clean(filePath) != filePath || filepath.Clean(filePath) == filepath.Clean(path) {
-			return trustedConfig{}, errors.New("invalid private key path")
+		if !filepath.IsAbs(filePath) || filepath.Clean(filePath) != filePath || filepath.Clean(filePath) == filepath.Clean(configPath) {
+			return errors.New("invalid private key path")
 		}
 	}
-	return config, nil
+	return nil
+}
+
+func validateDistinctKeys(journalPath, commitmentPath string, journalKey, commitmentKey []byte) error {
+	if filepath.Clean(journalPath) == filepath.Clean(commitmentPath) ||
+		len(journalKey) != keyBytes || len(commitmentKey) != keyBytes || subtle.ConstantTimeCompare(journalKey, commitmentKey) == 1 {
+		return errors.New("journal and commitment keys must be distinct")
+	}
+	return nil
 }
 
 func rejectDuplicateConfigKeys(data []byte) error {
@@ -217,13 +231,8 @@ func readPrivateRegularFile(path string, maxBytes int64) (data []byte, resultErr
 		}
 	}()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 ||
-		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || info.Size() > maxBytes {
+	if err != nil || validatePrivateFileInfo(info, maxBytes, uint32(syscall.Getuid())) != nil {
 		return nil, errors.New("private regular file with bounded size required")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != uint32(syscall.Getuid()) {
-		return nil, errors.New("private file owner mismatch")
 	}
 	data, err = io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil || int64(len(data)) > maxBytes {
@@ -237,23 +246,31 @@ func validatePrivateDirectory(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return errors.New("absolute clean directory required")
 	}
-	current := string(filepath.Separator)
-	for _, component := range strings.Split(strings.TrimPrefix(path, current), current) {
-		if component == "" {
-			continue
-		}
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return errors.New("directory component refused")
-		}
-	}
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode().Perm() != 0o700 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || validatePrivateDirectoryInfo(info, uint32(syscall.Getuid())) != nil {
+		return errors.New("private directory mode required")
+	}
+	return nil
+}
+
+func validatePrivateFileInfo(info os.FileInfo, maxBytes int64, owner uint32) error {
+	if info == nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 ||
+		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || info.Size() > maxBytes {
+		return errors.New("private regular file with bounded size required")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != owner {
+		return errors.New("private file owner mismatch")
+	}
+	return nil
+}
+
+func validatePrivateDirectoryInfo(info os.FileInfo, owner uint32) error {
+	if info == nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return errors.New("private directory mode required")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != uint32(syscall.Getuid()) {
+	if !ok || stat.Uid != owner {
 		return errors.New("private directory owner mismatch")
 	}
 	return nil
@@ -284,7 +301,14 @@ func writeBoundedReport(writer io.Writer, report inputprobe.FixtureAcceptanceRep
 		return errors.New("acceptance report exceeds output bound")
 	}
 	data = append(data, '\n')
-	_, err = io.Copy(writer, bytes.NewReader(data))
+	return writeBoundedBytes(writer, data)
+}
+
+func writeBoundedBytes(writer io.Writer, data []byte) error {
+	if len(data) > maxReportBytes {
+		return errors.New("acceptance report exceeds output bound")
+	}
+	_, err := io.Copy(writer, bytes.NewReader(data))
 	return err
 }
 
