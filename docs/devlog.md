@@ -67,3 +67,9 @@ Three parallel Luna lanes prepare concrete durable host composition, a fixed-sce
 The synthetic fixture process is running and matches its configured bundle/nonce. Actual doctor observed Accessibility and event posting available without prompts. OS session metadata reports the desktop locked; fixture window discovery is unavailable. No unlock, permission prompt, real-user-app reads/pixels, or input mutation was attempted. T1.48 and GUI acceptance remain held; compiler, fake backend, source review and readonly startup evidence do not satisfy them.
 
 Independent review found and assigned durable close, retry ownership and report truthfulness failures in the new composition. Final assembled Go/race/vet/lint/Swift checks and two nonauthor exact-head reviews remain required after all fixes. Detailed private command receipts and paths stay in the task artifact ledger rather than public documentation.
+
+### Final local source checks and fixture command
+
+The complete Go, disabled-cgo, race and vet passes, Swift bridge (14) and fixture core (3) test passes, and four native command builds are recorded at `66f1765c6cd92799de1f6a3e3054a9aaf4aeaeca`. Configured lint with both finding caps disabled passes with zero issues at `b610d747e974861a62a437a96b822e196e64d3c3` after an equivalent test predicate change. Independent source reviews are clear; authored hunks remain excluded from each cross-review.
+
+The actual dedicated fixture command opened the native bridge on its process-main owner and emitted only bounded outcome fields: held, exit 75, fixture_window_unavailable. It did not satisfy GUI acceptance. Its current supported lifetime is the dedicated process; a long-lived embedding needs a retained-owner retry API. The fixed fixture facade issues only a predeclared trusted-host scenario approval, while the generic factory/executor has no automatic approval path. Native input remains disabled and ordinary CLI/MCP remain readonly.
