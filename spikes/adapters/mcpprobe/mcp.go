@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sirerun/comuse/spikes/semanticprobe"
@@ -31,6 +33,7 @@ var (
 	ErrInvalidArgs   = errors.New("invalid tool arguments")
 	ErrStaleWindow   = errors.New("window reference is not from the current fixture observation")
 	ErrResultLimit   = errors.New("tool result exceeds the bounded MCP response size")
+	ErrOutboundFrame = errors.New("complete MCP response exceeds the stdio frame limit")
 )
 
 // Config is supplied by trusted host startup code. Tool inputs cannot change it.
@@ -159,8 +162,11 @@ func (server *Server) RunStdio(ctx context.Context) error {
 	return server.server.Run(ctx, server.stdioTransport())
 }
 
-func (server *Server) stdioTransport() *mcp.StdioTransport {
-	return &mcp.StdioTransport{MaxLineLength: MaxFrameBytes}
+func (server *Server) stdioTransport() mcp.Transport {
+	return &mcp.IOTransport{
+		Reader: os.Stdin, Writer: &boundedFrameWriter{writer: os.Stdout, maxFrameBytes: MaxFrameBytes},
+		MaxLineLength: MaxFrameBytes,
+	}
 }
 
 func (server *Server) registerTools() {
@@ -190,19 +196,27 @@ func (server *Server) handleDoctor(ctx context.Context, request *mcp.CallToolReq
 	}
 	result, err := server.backend.Doctor(ctx, server.config)
 	if err == nil {
-		if result.Status != "complete" || len(result.Checks) > 2 {
-			err = ErrNativeContract
-		} else {
-			for _, check := range result.Checks {
-				if (check.Name != "accessibility" && check.Name != "event_posting") ||
-					(check.Status != "available" && check.Status != "unavailable") || check.Prompted {
-					err = ErrNativeContract
-					break
-				}
-			}
-		}
+		err = validateDoctorResult(result)
 	}
 	return server.reply(result.Status, result, err)
+}
+
+func validateDoctorResult(result DoctorResult) error {
+	if result.Status != "complete" || len(result.Checks) != 2 {
+		return ErrNativeContract
+	}
+	seen := map[string]bool{}
+	for _, check := range result.Checks {
+		if (check.Name != "accessibility" && check.Name != "event_posting") || seen[check.Name] ||
+			(check.Status != "available" && check.Status != "unavailable") || check.Prompted {
+			return ErrNativeContract
+		}
+		seen[check.Name] = true
+	}
+	if !seen["accessibility"] || !seen["event_posting"] {
+		return ErrNativeContract
+	}
+	return nil
 }
 
 func (server *Server) handleWindows(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -272,7 +286,7 @@ func (server *Server) handleAccessibility(ctx context.Context, request *mcp.Call
 		}
 		return server.reply("partial", snapshot, nil)
 	}
-	if snapshot.Status != semanticprobe.SnapshotComplete || snapshot.Coverage.Status != "complete" || snapshot.NativeStateID == "" || snapshot.CanonicalStateID == "" {
+	if snapshot.Status != semanticprobe.SnapshotComplete || snapshot.Coverage.Status != "complete" || snapshot.CanonicalStateID == "" {
 		return server.reply("error", nil, ErrNativeContract)
 	}
 	return server.reply("complete", snapshot, nil)
@@ -309,6 +323,64 @@ func (server *Server) clearWindows() {
 	server.windowGeneration++
 	server.mu.Unlock()
 }
+
+// boundedFrameWriter caps complete outbound JSON-RPC frames after SDK framing,
+// including the echoed request ID. Oversized responses are replaced by a
+// small correlated JSON-RPC error when that error fits; otherwise the write
+// fails without emitting a truncated frame or response content.
+type boundedFrameWriter struct {
+	writer        io.Writer
+	maxFrameBytes int
+	mu            sync.Mutex
+}
+
+func (writer *boundedFrameWriter) Write(frame []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if writer.writer == nil || writer.maxFrameBytes <= 0 {
+		return 0, ErrOutboundFrame
+	}
+	if len(frame) <= writer.maxFrameBytes {
+		return writer.writeComplete(frame, len(frame))
+	}
+
+	message, err := jsonrpc.DecodeMessage(bytes.TrimSpace(frame))
+	if err != nil {
+		return 0, ErrOutboundFrame
+	}
+	response, ok := message.(*jsonrpc.Response)
+	if !ok {
+		return 0, ErrOutboundFrame
+	}
+	fallback := &jsonrpc.Response{
+		ID: response.ID,
+		Error: &jsonrpc.Error{
+			Code: jsonrpc.CodeInternalError, Message: "complete MCP response exceeds the configured stdio frame limit",
+		},
+	}
+	encoded, err := jsonrpc.EncodeMessage(fallback)
+	if err != nil {
+		return 0, ErrOutboundFrame
+	}
+	encoded = append(encoded, '\n')
+	if len(encoded) > writer.maxFrameBytes {
+		return 0, ErrOutboundFrame
+	}
+	return writer.writeComplete(encoded, len(frame))
+}
+
+func (writer *boundedFrameWriter) writeComplete(data []byte, reportedBytes int) (int, error) {
+	written, err := writer.writer.Write(data)
+	if err != nil {
+		return 0, err
+	}
+	if written != len(data) {
+		return 0, io.ErrShortWrite
+	}
+	return reportedBytes, nil
+}
+
+func (*boundedFrameWriter) Close() error { return nil }
 
 func (server *Server) reply(status string, data any, err error) (*mcp.CallToolResult, error) {
 	status = normalizeStatus(status)
