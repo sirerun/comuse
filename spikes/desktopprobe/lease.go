@@ -31,13 +31,14 @@ const (
 )
 
 var (
-	ErrUnsupportedLock = errors.New("desktopprobe writer exclusion is unsupported on this platform")
-	ErrDirty           = errors.New("desktopprobe host state is dirty; trusted reconciliation is required")
-	ErrBindingMismatch = errors.New("action ID was already used with a different binding commitment")
-	ErrNoTicket        = errors.New("action is already recorded and cannot be dispatched again")
-	ErrTicketUsed      = errors.New("dispatch ticket has already been consumed")
-	ErrClosed          = errors.New("desktopprobe lease is closed")
-	ErrCleanupPanic    = errors.New("desktopprobe cleanup callback panicked")
+	ErrUnsupportedLock   = errors.New("desktopprobe writer exclusion is unsupported on this platform")
+	ErrDirty             = errors.New("desktopprobe host state is dirty; trusted reconciliation is required")
+	ErrBindingMismatch   = errors.New("action ID was already used with a different binding commitment")
+	ErrNoTicket          = errors.New("action is already recorded and cannot be dispatched again")
+	ErrTicketUsed        = errors.New("dispatch ticket has already been consumed")
+	ErrClosed            = errors.New("desktopprobe lease is closed")
+	ErrCleanupPanic      = errors.New("desktopprobe cleanup callback panicked")
+	ErrCloseNotPersisted = errors.New("desktopprobe close state was not durably persisted; writer lock remains held")
 )
 
 type Outcome string
@@ -125,6 +126,7 @@ type Lease struct {
 	lockFile *os.File
 	state    diskState
 	active   map[string]*cleanupEntry
+	write    func(string, []byte) error
 	closed   bool
 	closing  bool
 }
@@ -216,7 +218,7 @@ func Acquire(ctx context.Context, root string) (*Lease, error) {
 		_ = lockFile.Close()
 		return nil, err
 	}
-	lease := &Lease{root: root, lockFile: lockFile, active: make(map[string]*cleanupEntry)}
+	lease := &Lease{root: root, lockFile: lockFile, active: make(map[string]*cleanupEntry), write: atomicWrite}
 	lease.state, err = loadState(root)
 	if err != nil {
 		_ = releaseFileLock(lockFile)
@@ -329,6 +331,9 @@ func (l *Lease) FinishWithMetadata(ticket *Ticket, outcome Outcome, metadata Saf
 	}
 	if !validSafeActionMetadata(metadata) {
 		return errors.New("invalid safe action metadata")
+	}
+	if !metadataMatchesOutcome(outcome, metadata) {
+		return errors.New("action outcome conflicts with safe metadata execution")
 	}
 	ticket.mu.Lock()
 	defer ticket.mu.Unlock()
@@ -609,7 +614,14 @@ func (l *Lease) Close(ctx context.Context) error {
 			l.markDirtyLocked("unresolved_action_on_close")
 		}
 	}
-	cleanupErr = errors.Join(cleanupErr, l.saveLocked())
+	saveErr := l.saveLocked()
+	cleanupErr = errors.Join(cleanupErr, saveErr)
+	if saveErr != nil {
+		// The durable dirty/terminal state is not confirmed. Keep both the lease
+		// object and flock retryable; releasing it could admit another writer.
+		l.mu.Unlock()
+		return errors.Join(cleanupErr, ErrCloseNotPersisted)
+	}
 	if l.state.Dirty {
 		cleanupErr = errors.Join(cleanupErr, ErrDirty)
 	}
@@ -660,7 +672,11 @@ func (l *Lease) saveLocked() error {
 	if len(data) > maxLedgerBytes {
 		return errors.New("replay ledger exceeds size limit")
 	}
-	return atomicWrite(filepath.Join(l.root, "replay-v1.json"), data)
+	write := l.write
+	if write == nil {
+		write = atomicWrite
+	}
+	return write(filepath.Join(l.root, "replay-v1.json"), data)
 }
 
 func loadState(root string) (loaded diskState, resultErr error) {
@@ -712,12 +728,12 @@ func loadState(root string) (loaded diskState, resultErr error) {
 		return diskState{}, errors.New("replay ledger exceeds record limits")
 	}
 	for id, record := range state.Actions {
-		if validateActionID(id) != nil || record.Binding == "" || !validRecordedOutcome(record.Outcome) || !validSafeActionMetadata(record.Metadata) {
+		if validateActionID(id) != nil || record.Binding == "" || !validRecordedOutcome(record.Outcome) || !validSafeActionMetadata(record.Metadata) || !metadataMatchesOutcome(record.Outcome, record.Metadata) {
 			return diskState{}, fmt.Errorf("invalid replay record %q", id)
 		}
 	}
 	for id, record := range state.Tombstones {
-		if validateActionID(id) != nil || record.Binding == "" || !validOutcome(record.Outcome) || !validSafeActionMetadata(record.Metadata) {
+		if validateActionID(id) != nil || record.Binding == "" || !validOutcome(record.Outcome) || !validSafeActionMetadata(record.Metadata) || !metadataMatchesOutcome(record.Outcome, record.Metadata) {
 			return diskState{}, fmt.Errorf("invalid replay tombstone %q", id)
 		}
 	}
@@ -845,6 +861,10 @@ func validSafeActionMetadata(value SafeActionMetadata) bool {
 	default:
 		return false
 	}
+}
+
+func metadataMatchesOutcome(outcome Outcome, value SafeActionMetadata) bool {
+	return value.Execution == "" || value.Execution == string(outcome)
 }
 
 // BindingCommitment hashes a caller-keyed opaque commitment into a fixed-size

@@ -133,6 +133,57 @@ func TestQuarantineRetainsWriterUntilOwnerClose(t *testing.T) {
 	}
 }
 
+func TestClosePersistenceFailureRetainsWriterUntilRetryAndRestartStaysDirty(t *testing.T) {
+	lease, root := testLease(t)
+	var binding [32]byte
+	if _, _, err := lease.Begin("uncertain-action", binding); err != nil {
+		t.Fatal(err)
+	}
+	write := lease.write
+	lease.write = func(string, []byte) error { return errors.New("injected durable write failure") }
+	if err := lease.Quarantine("native_drain_incomplete"); err == nil {
+		t.Fatal("injected Quarantine persistence failure was ignored")
+	}
+	if err := lease.Close(context.Background()); !errors.Is(err, ErrCloseNotPersisted) {
+		t.Fatalf("Close after failed dirty persistence = %v, want ErrCloseNotPersisted", err)
+	}
+	lease.mu.Lock()
+	closed, lockFile := lease.closed, lease.lockFile
+	lease.mu.Unlock()
+	if closed || lockFile == nil {
+		t.Fatal("lease closed or dropped writer lock without durable dirty state")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	if _, err := Acquire(ctx, root); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contending Acquire after failed Close = %v, want lock timeout", err)
+	}
+	lease.write = write
+	if err := lease.Close(context.Background()); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Close retry = %v, want durable dirty close", err)
+	}
+	restarted, err := Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeTestLease(t, restarted)
+	if _, _, err := restarted.Begin("new-after-restart", binding); !errors.Is(err, ErrDirty) {
+		t.Fatalf("new action after restart = %v, want ErrDirty", err)
+	}
+}
+
+func TestFinishRejectsMetadataOutcomeContradiction(t *testing.T) {
+	lease, _ := testLease(t)
+	ticket, _, err := lease.Begin("coherence-action", [32]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := SafeActionMetadata{Action: "replace", Execution: "partial", Verification: "failed", StateStatus: "partial", Cleanup: "released", ErrorCode: "postcondition_failed"}
+	if err := lease.FinishWithMetadata(ticket, OutcomeApplied, metadata); err == nil {
+		t.Fatal("accepted durable outcome contradicting metadata execution")
+	}
+}
+
 func TestInflightBecomesUnknownAfterRestart(t *testing.T) {
 	lease, root := testLease(t)
 	var binding [32]byte
