@@ -297,7 +297,7 @@ func (client *wireNativeClient) Call(_ context.Context, raw []byte) ([]byte, err
 			"observation_id": "observation-1", "state_id": strings.Repeat("a", 64),
 			"process_start_ref": "process-ref-1", "window_ref": "window-ref-1", "root_refs": []string{"root-ref"},
 			"elements": []any{map[string]any{"ref": "root-ref", "role": "AXWindow", "value_status": "omitted", "parent_ref": nil, "child_refs": []string{}}},
-			"coverage": map[string]any{"status": "complete", "reason": nil, "depth_limit": MaxDepth, "node_limit": MaxElements, "text_byte_limit": MaxTextBytes, "deadline_ms": MaxDeadlineMS, "visited": 1, "text_bytes": 0, "truncated": false},
+			"coverage": map[string]any{"status": "complete", "reason": nil, "depth_limit": semanticprobe.MaxDepth, "node_limit": semanticprobe.MaxElements, "text_byte_limit": semanticprobe.MaxTextBytes, "deadline_ms": semanticprobe.MaxDeadlineMS, "visited": 1, "text_bytes": 0, "truncated": false},
 		}
 	default:
 		return nil, errors.New("unexpected native operation")
