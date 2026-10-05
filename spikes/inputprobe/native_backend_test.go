@@ -37,6 +37,8 @@ func (*inspectOnlyClient) InputCall(context.Context, bridgeclient.HostInputReque
 	return nil, nil
 }
 
+func (*inspectOnlyClient) Close(context.Context) error { return nil }
+
 func TestInspectRequestsMetadataOnlyAndDoesNotBindProjectionState(t *testing.T) {
 	client := &inspectOnlyClient{}
 	backend, err := NewBridgeBackend(client)

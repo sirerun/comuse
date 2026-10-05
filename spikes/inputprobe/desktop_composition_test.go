@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirerun/comuse/spikes/bridgeclient"
 	"github.com/sirerun/comuse/spikes/desktopprobe"
 )
 
@@ -84,6 +85,14 @@ func TestDesktopJournalCreateOnlyReplayPersistsRedactedOutcome(t *testing.T) {
 }
 
 type drainTestBackend struct{ closed bool }
+
+func (*drainTestBackend) Inspect(context.Context, NativeTargetRequest) (NativeClassification, error) {
+	return NativeClassification{}, nil
+}
+
+func (*drainTestBackend) inputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error) {
+	return nil, nil
+}
 
 func (backend *drainTestBackend) CloseAndDrain(context.Context) error {
 	backend.closed = true

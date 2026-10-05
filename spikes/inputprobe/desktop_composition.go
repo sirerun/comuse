@@ -117,10 +117,13 @@ func (host *desktopInputHost) closeAfterNativeDrain(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	host.mu.Lock()
-	host.closed = true
-	host.mu.Unlock()
-	return host.writer.closeQuarantined(ctx)
+	settled, closeErr := host.writer.closeQuarantined(ctx)
+	if settled {
+		host.mu.Lock()
+		host.closed = true
+		host.mu.Unlock()
+	}
+	return closeErr
 }
 
 func (writer *desktopWriterAdapter) Acquire(ctx context.Context) (writerLease, error) {
@@ -136,10 +139,11 @@ func (lease *desktopLeaseAdapter) Release(ctx context.Context) error {
 		return errors.New("lease release requires a context")
 	}
 	err := lease.lease.Close(ctx)
+	settled := desktopLeaseCloseSettled(err)
 	lease.mu.Lock()
-	lease.closed = err == nil || errors.Is(err, desktopprobe.ErrDirty)
+	lease.closed = settled
 	lease.mu.Unlock()
-	if err != nil && !errors.Is(err, desktopprobe.ErrDirty) {
+	if !settled {
 		lease.owner.retain(lease)
 	}
 	return err
@@ -160,7 +164,7 @@ func (writer *desktopWriterAdapter) retain(lease *desktopLeaseAdapter) {
 	writer.mu.Unlock()
 }
 
-func (writer *desktopWriterAdapter) closeQuarantined(ctx context.Context) error {
+func (writer *desktopWriterAdapter) closeQuarantined(ctx context.Context) (bool, error) {
 	writer.mu.Lock()
 	leases := make([]*desktopLeaseAdapter, 0, len(writer.quarantined))
 	for lease := range writer.quarantined {
@@ -168,19 +172,27 @@ func (writer *desktopWriterAdapter) closeQuarantined(ctx context.Context) error 
 	}
 	writer.mu.Unlock()
 	var result error
+	settledAll := true
 	for _, lease := range leases {
 		err := lease.lease.Close(ctx)
-		if err == nil || errors.Is(err, desktopprobe.ErrDirty) {
+		settled := desktopLeaseCloseSettled(err)
+		if settled {
 			writer.mu.Lock()
 			delete(writer.quarantined, lease)
 			writer.mu.Unlock()
 			lease.mu.Lock()
 			lease.closed = true
 			lease.mu.Unlock()
+		} else {
+			settledAll = false
 		}
 		result = errors.Join(result, err)
 	}
-	return result
+	return settledAll, result
+}
+
+func desktopLeaseCloseSettled(err error) bool {
+	return err == nil || errors.Is(err, desktopprobe.ErrDirty) && !errors.Is(err, desktopprobe.ErrCloseNotPersisted)
 }
 
 func (journal *desktopJournalAdapter) Lookup(ctx context.Context, actionID string) (JournalRecord, bool, error) {
