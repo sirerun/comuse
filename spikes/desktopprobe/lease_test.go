@@ -99,6 +99,9 @@ func TestInflightBecomesUnknownAfterRestart(t *testing.T) {
 	if err != nil || ticket != nil || prior == nil || prior.Outcome != OutcomeUnknown {
 		t.Fatalf("restart Begin = (%v, %v, %v), want prior unknown", ticket, prior, err)
 	}
+	if _, _, err := restarted.Begin("new-action-after-crash", binding); !errors.Is(err, ErrDirty) {
+		t.Fatalf("new action after unresolved crash = %v, want ErrDirty", err)
+	}
 }
 
 func TestHeldCleanupFailureDirtiesAndRequiresVerifier(t *testing.T) {
