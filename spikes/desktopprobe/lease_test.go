@@ -31,7 +31,7 @@ func testLease(t *testing.T) (*Lease, string) {
 		lease.mu.Lock()
 		dirty := lease.state.Dirty
 		lease.mu.Unlock()
-		if err != nil && !(errors.Is(err, ErrDirty) && dirty) {
+		if err != nil && (!errors.Is(err, ErrDirty) || !dirty) {
 			t.Errorf("closing test lease: %v", err)
 		}
 	})
