@@ -3,6 +3,7 @@ package inputprobe
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -138,4 +139,56 @@ func TestQuarantinedDesktopLeaseWaitsForNativeDrain(t *testing.T) {
 		t.Fatalf("new action after quarantined close = %v, want ErrDirty", err)
 	}
 	_ = reopened.Close(context.Background())
+}
+
+type finishFailureJournal struct{ delegate *desktopJournalAdapter }
+
+func (journal *finishFailureJournal) Lookup(ctx context.Context, id string) (JournalRecord, bool, error) {
+	return journal.delegate.Lookup(ctx, id)
+}
+func (journal *finishFailureJournal) Begin(ctx context.Context, record JournalRecord) (bool, error) {
+	return journal.delegate.Begin(ctx, record)
+}
+func (*finishFailureJournal) Finish(context.Context, JournalRecord) error {
+	return errors.New("injected terminal persistence failure")
+}
+
+func TestDirtyPersistsWhenTerminalJournalFinishFails(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "finish-failure-state")
+	key := bytes.Repeat([]byte{0x51}, 32)
+	writer := &desktopWriterAdapter{root: root, journalKey: key, quarantined: make(map[*desktopLeaseAdapter]struct{})}
+	base, err := writer.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := base.(*desktopLeaseAdapter)
+	journal := &desktopJournalAdapter{journalKey: key}
+	ctx := context.WithValue(context.Background(), writerLeaseContextKey{}, lease)
+	record := JournalRecord{ActionID: "finish-failure", Execution: "pending"}
+	if created, err := journal.Begin(ctx, record); err != nil || !created {
+		t.Fatalf("Begin = %v, %v", created, err)
+	}
+	executor, _, _, _, _, _ := fixtureInput(t)
+	executor.journal = &finishFailureJournal{delegate: journal}
+	response := []byte(`{"schema_version":"fixture.v0","request_id":"finish-failure","action_id":"finish-failure","action":"replace","execution":"unknown","verification":{"status":"unavailable"},"state_status":"unavailable","cleanup":{"status":"unknown"},"error":"dispatch_unknown","result":null}`)
+	if err := executor.finishUnknown(ctx, lease, record, response); err == nil {
+		t.Fatal("Finish failure was ignored")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if _, err := desktopprobe.Acquire(waitCtx, root); err == nil {
+		t.Fatal("writer lock released before native drain/close")
+	}
+	closeErr := lease.lease.Close(context.Background())
+	if !errors.Is(closeErr, desktopprobe.ErrDirty) {
+		t.Fatalf("close after unknown result = %v, want durable ErrDirty", closeErr)
+	}
+	restarted, err := desktopprobe.Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatalf("restart acquire = %v", err)
+	}
+	defer func() { _ = restarted.Close(context.Background()) }()
+	if _, _, err := restarted.Begin("later-action", [32]byte{}); !errors.Is(err, desktopprobe.ErrDirty) {
+		t.Fatalf("new action after unresolved terminal write = %v, want ErrDirty", err)
+	}
 }
