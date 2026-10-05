@@ -72,6 +72,7 @@ cd "$repo_root" || exit 73
 status_file="$evidence_dir/status.tsv"
 log_file="$evidence_dir/commands.log"
 tool_file="$evidence_dir/environment.txt"
+printf 'Comuse spike command log\n' > "$log_file" || exit 73
 template="$(dirname "$0")/evidence-template.md"
 cp "$template" "$evidence_dir/evidence.md" || exit 73
 printf 'selector\tstatus\tdetail\n' > "$status_file" || exit 73
