@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -165,6 +166,9 @@ func dispatch(ctx context.Context, client nativeClient, op string, options cliOp
 	if err := json.Unmarshal(windows.Result, &windowResult); err != nil {
 		return nil, err
 	}
+	if len(windowResult.Windows) != 1 {
+		return nil, errors.New("fixture window selection is ambiguous")
+	}
 	if options.windowIndex < 0 || options.windowIndex >= len(windowResult.Windows) {
 		return nil, errors.New("selected window index is out of range")
 	}
@@ -225,10 +229,18 @@ func callAndPump(ctx context.Context, client nativeClient, request map[string]an
 	for {
 		select {
 		case completed := <-result:
-			if len(completed.response) > 0 {
-				return completed.response, nil
+			requestID, _ := request["request_id"].(string)
+			envelope, validationErr := validateNativeTerminal(completed.response, requestID)
+			if validationErr != nil {
+				return nil, errors.Join(completed.err, validationErr)
 			}
-			return completed.response, completed.err
+			if completed.err != nil {
+				var nativeErr *bridgeclient.NativeError
+				if !errors.As(completed.err, &nativeErr) || (nativeErr.Status != "error" && nativeErr.Status != "cancelled") || envelope.Status != nativeErr.Status {
+					return nil, completed.err
+				}
+			}
+			return completed.response, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
@@ -237,6 +249,38 @@ func callAndPump(ctx context.Context, client nativeClient, request map[string]an
 			}
 		}
 	}
+}
+
+func validateNativeTerminal(data []byte, expectedRequestID string) (nativeEnvelope, error) {
+	var envelope nativeEnvelope
+	if len(data) == 0 || len(data) > maxOutputBytes || expectedRequestID == "" {
+		return envelope, errors.New("native response size or request identity is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return envelope, fmt.Errorf("invalid native response: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return envelope, errors.New("native response contains trailing JSON")
+	}
+	if envelope.SchemaVersion != 1 || envelope.RequestID != expectedRequestID {
+		return envelope, errors.New("native response identity mismatch")
+	}
+	switch envelope.Status {
+	case "completed", "partial":
+		if len(envelope.Result) == 0 || string(envelope.Result) == "null" || (len(envelope.Error) != 0 && string(envelope.Error) != "null") {
+			return envelope, errors.New("native response has an invalid success terminal")
+		}
+	case "error", "cancelled":
+		if len(envelope.Error) == 0 || string(envelope.Error) == "null" {
+			return envelope, errors.New("native response has an invalid failure terminal")
+		}
+	default:
+		return envelope, errors.New("native response has an unsupported terminal status")
+	}
+	return envelope, nil
 }
 
 func readTrustedConfig(path string) (trustedConfig, error) {
