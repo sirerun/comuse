@@ -45,6 +45,24 @@ private func seamTestCompletion(_ handle: UInt64, _ bytes: UnsafePointer<UInt8>?
 @Suite(.serialized)
 struct SeamTests {
     @Test
+    func readonlyRequestStartRejectsInputAndHostEntryRequiresMatchingRuntime() {
+        capture = Capture()
+        let request = Data(#"{"schema_version":1,"request_id":"host-only","op":"replace","action_id":"a","scope":{}}"#.utf8)
+        var handle: UInt64 = 0
+        let readonlyStatus = request.withUnsafeBytes { raw in
+            comuse_spike_request_start(raw.bindMemory(to: UInt8.self).baseAddress, raw.count, 42, seamTestCompletion, &handle)
+        }
+        #expect(readonlyStatus == 3)
+        #expect(handle == 0)
+        let hostStatus = request.withUnsafeBytes { raw in
+            comuse_spike_input_request_start(1, raw.bindMemory(to: UInt8.self).baseAddress, raw.count, 42, seamTestCompletion, &handle)
+        }
+        #expect(hostStatus == 10)
+        #expect(handle == 0)
+        #expect(capture.count() == 0)
+    }
+
+    @Test
     func versionedHelloCompletesAndDrains() throws {
         #expect(comuse_spike_abi_version() == 1)
         capture = Capture()

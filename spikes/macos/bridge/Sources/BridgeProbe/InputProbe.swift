@@ -125,7 +125,7 @@ private func executeInputProbe(_ request: InputRequest) -> Data {
         guard let oldValue = snapshotValue(result, ref: scope.elementReference), let newValue = request.text else {
             return inputResponse(requestID: request.requestID, actionID: request.actionID, action: request.operation, execution: "not_applied", stateStatus: "partial", verification: "unavailable", cleanup: "not_required", error: "value_unavailable")
         }
-        let setError = AXUIElementSetAttributeValue(element, kAXValueAttribute, newValue as CFString)
+        let setError = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFString)
         return verifyTextDispatch(request, expectedValue: newValue, dispatchError: setError, originalValue: oldValue)
     case "insert":
         guard let oldValue = snapshotValue(result, ref: scope.elementReference), let insertion = request.text,
@@ -135,7 +135,7 @@ private func executeInputProbe(_ request: InputRequest) -> Data {
             return inputResponse(requestID: request.requestID, actionID: request.actionID, action: request.operation, execution: "not_applied", stateStatus: "available", verification: "unavailable", cleanup: "not_required", error: "selection_unavailable")
         }
         let expectedValue = oldValue.replacingCharacters(in: swiftRange, with: insertion)
-        let setError = AXUIElementSetAttributeValue(element, kAXValueAttribute, expectedValue as CFString)
+        let setError = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, expectedValue as CFString)
         return verifyTextDispatch(request, expectedValue: expectedValue, dispatchError: setError, originalValue: oldValue)
     case "press":
         guard let countText = snapshotValue(forIdentifier: counterIdentifier, result: result),
@@ -217,8 +217,9 @@ private func snapshotValue(forIdentifier identifier: String, result: [String: An
 private func selectedUTF16Range(_ element: AXUIElement) -> NSRange? {
     var raw: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
-          let value = raw as? AXValue,
-          AXValueGetType(value) == .cfRange else { return nil }
+          let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    let value = unsafeBitCast(raw, to: AXValue.self)
+    guard AXValueGetType(value) == .cfRange else { return nil }
     var range = CFRange()
     guard AXValueGetValue(value, .cfRange, &range), range.location >= 0, range.length >= 0 else { return nil }
     return NSRange(location: range.location, length: range.length)
@@ -236,11 +237,11 @@ private func parseCounter(_ value: String) -> Int? {
 }
 
 private func inputResponse(requestID: String, actionID: String? = nil, action: String = "input", execution: String, stateStatus: String, verification: String, cleanup: String, error: String? = nil, result: [String: Any] = [:]) -> Data {
-    var envelope: [String: Any] = [
+    let envelope: [String: Any] = [
         "schema_version": "fixture.v0",
         "ok": error == nil,
         "request_id": requestID,
-        "action_id": actionID,
+        "action_id": actionID as Any? ?? NSNull(),
         "action": action,
         "execution": execution,
         "verification": ["status": verification],

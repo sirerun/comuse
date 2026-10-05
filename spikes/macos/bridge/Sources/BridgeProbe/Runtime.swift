@@ -123,12 +123,31 @@ func executeAccessibilityRequest(_ handle: UInt64) {
     nativeRegistry.entries[handle] = entry
     nativeRegistry.lock.unlock()
 
-    let response = handleAccessibilityProbe(entry.requestData)
-    guard validProbeEnvelope(response, requestID: entry.requestID) else {
+    let isHostInput = ["read_value", "replace", "press"].contains(entry.operation)
+    let response = isHostInput ? handleInputProbe(entry.requestData) : handleAccessibilityProbe(entry.requestData)
+    let isValid = isHostInput ? validHostInputEnvelope(response, requestID: entry.requestID) : validProbeEnvelope(response, requestID: entry.requestID)
+    guard isValid else {
         finishRequest(handle, data: makeProbeError(requestID: entry.requestID, code: "invalid_native_response", message: "AX probe returned an invalid versioned response envelope"))
         return
     }
     finishRequest(handle, data: response)
+}
+
+func validHostInputEnvelope(_ data: Data, requestID: String) -> Bool {
+    guard data.count <= maxResponseBytes,
+          let value = try? JSONSerialization.jsonObject(with: data),
+          let object = value as? [String: Any],
+          object["schema_version"] as? String == "fixture.v0",
+          object["request_id"] as? String == requestID,
+          let execution = object["execution"] as? String,
+          ["applied", "not_applied", "partial", "unknown"].contains(execution),
+          object["verification"] is [String: Any],
+          object["cleanup"] is [String: Any],
+          let result = object["result"],
+          let error = object["error"]
+    else { return false }
+    if error is NSNull { return !(result is NSNull) }
+    return error is String && result is NSNull
 }
 
 func validProbeEnvelope(_ data: Data, requestID: String) -> Bool {
@@ -144,20 +163,20 @@ func validProbeEnvelope(_ data: Data, requestID: String) -> Bool {
     }
     switch object["status"] as? String {
     case "completed", "partial":
-        return !(object["result"] is NSNull)
+        return !(object["result"] is NSNull) && (object["error"] is NSNull)
     case "cancelled", "error":
-        return !(object["error"] is NSNull)
+        return object["error"] is String && (object["result"] is NSNull)
     default:
         return false
     }
 }
 
-private func makeProbeError(requestID: String, code: String, message: String) -> Data {
+private func makeProbeError(requestID: String, code: String, message _: String) -> Data {
     let envelope: [String: Any] = [
         "schema_version": 1,
         "request_id": requestID,
         "status": "error",
-        "error": ["code": code, "message": message],
+        "error": code,
         "result": NSNull()
     ]
     return (try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])) ?? Data()

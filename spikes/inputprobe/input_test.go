@@ -55,14 +55,36 @@ func (journal *testJournal) Finish(_ context.Context, record JournalRecord) erro
 }
 
 type testBackend struct {
-	calls    int
-	response []byte
-	err      error
+	calls          int
+	inspects       int
+	response       []byte
+	err            error
+	classification *NativeClassification
+}
+
+func (backend *testBackend) Inspect(_ context.Context, request NativeTargetRequest) (NativeClassification, error) {
+	backend.inspects++
+	if backend.classification != nil {
+		return *backend.classification, nil
+	}
+	classification := NativeClassification{Complete: true, StateID: request.ExpectedStateID, ProcessStartRef: request.ProcessStartRef, WindowRef: request.WindowRef, ElementRef: request.ElementRef}
+	classification.Role, classification.Identifier, classification.InputClass, classification.ValueStatus = "AXTextField", "textfield", "fixture_normal_text_field", "included_synthetic_normal"
+	return classification, nil
 }
 
 func (backend *testBackend) InputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error) {
 	backend.calls++
 	return backend.response, backend.err
+}
+
+func TestFreshNativeClassificationRejectsProtectedBeforeAdmissionAndDispatch(t *testing.T) {
+	executor, request, journal, lease, backend, host := fixtureInput(t)
+	backend.classification = &NativeClassification{Complete: true, StateID: request.Scope.StateID, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef, Role: "AXTextField", Identifier: "securefield", InputClass: "protected_or_uncertain_text_field", ValueStatus: "omitted_protected_or_unavailable"}
+	request.Approval = approved(t, host, request)
+	response, err := executor.execute(context.Background(), request)
+	if err == nil || backend.inspects != 1 || backend.calls != 0 || journal.begins != 0 || lease.releases != 1 {
+		t.Fatalf("response=%s err=%v backend=%+v journal=%+v lease=%+v", response, err, backend, journal, lease)
+	}
 }
 
 func fixtureInput(t *testing.T) (*Executor, Request, *testJournal, *testLease, *testBackend, *policyprobe.HostAuthority) {
@@ -203,23 +225,38 @@ func TestTerminalResponsePersistsOnlyRedactedMetadataAndReplaysWithoutPlaintext(
 }
 
 func TestReplayPreservesSafeOutcomeClassification(t *testing.T) {
-	for _, test := range []struct { name, execution, code string; wantOK bool }{
+	for _, test := range []struct {
+		name, execution, code string
+		wantOK                bool
+	}{
 		{"pending becomes unknown", "pending", "", false},
 		{"unknown stays failure", "unknown", "dispatch_unknown", false},
 		{"refusal stays not applied", "not_applied", "policy_refused", false},
 		{"partial stays partial", "partial", "", true},
+		{"partial failure stays failure", "partial", "postcondition_failed", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			data := marshalReplay(JournalRecord{ActionID:"a", Execution:test.execution, ErrorCode:test.code})
+			data := marshalReplay(JournalRecord{ActionID: "a", Execution: test.execution, ErrorCode: test.code})
 			var response map[string]any
-			if err := json.Unmarshal(data, &response); err != nil { t.Fatal(err) }
-			if response["execution"] != mapPendingToUnknown(test.execution) || response["ok"] != test.wantOK { t.Fatalf("replay=%s", data) }
-			if response["result"] != nil { t.Fatalf("replay retained result: %s", data) }
+			if err := json.Unmarshal(data, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response["execution"] != mapPendingToUnknown(test.execution) || response["ok"] != test.wantOK {
+				t.Fatalf("replay=%s", data)
+			}
+			if response["result"] != nil {
+				t.Fatalf("replay retained result: %s", data)
+			}
 		})
 	}
 }
 
-func mapPendingToUnknown(execution string) string { if execution == "pending" { return "unknown" }; return execution }
+func mapPendingToUnknown(execution string) string {
+	if execution == "pending" {
+		return "unknown"
+	}
+	return execution
+}
 
 func TestUncertainCleanupQuarantinesWriterAndDoesNotRetry(t *testing.T) {
 	executor, request, journal, lease, backend, host := fixtureInput(t)
