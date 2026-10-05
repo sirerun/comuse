@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/sirerun/comuse/spikes/bridgeclient"
@@ -75,6 +76,11 @@ finished:
 	defer closeCancel()
 	if err := client.Close(closeCtx); err != nil {
 		fatal(err)
+	}
+	if _, err := bridgeclient.Open(*library); err == nil {
+		fatal(fmt.Errorf("bridgeclient reopened a second activated image in one process"))
+	} else if !strings.Contains(err.Error(), "native status 8") {
+		fatal(fmt.Errorf("second image rejection was not the process image-capacity status: %w", err))
 	}
 }
 

@@ -156,6 +156,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "seamprobe:", err)
 		os.Exit(1)
 	}
+	path := C.CString(*library)
+	defer C.free(unsafe.Pointer(path))
+	if status := int32(C.seam_open(path)); status != -4 {
+		fmt.Fprintf(os.Stderr, "seamprobe: expected process-pinned image status -4 on reopen, got %d\n", status)
+		os.Exit(1)
+	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "seamprobe: encoding response:", err)

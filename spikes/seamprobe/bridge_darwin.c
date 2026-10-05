@@ -9,6 +9,7 @@ typedef uint32_t (*version_fn)(void);
 typedef int32_t (*start_fn)(const uint8_t *, size_t, uint64_t, comuse_spike_completion_fn, uint64_t *);
 typedef int32_t (*handle_fn)(uint64_t);
 static void *library_handle;
+static void *pinned_handle;
 static version_fn version_call;
 static start_fn start_call;
 static handle_fn cancel_call;
@@ -19,6 +20,7 @@ static void completion(uint64_t handle, const uint8_t *bytes, size_t length, uin
     goComuseCompletion(handle, bytes, length, token);
 }
 int32_t seam_open(const char *path) {
+    if (pinned_handle) return -4;
     library_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!library_handle) return -1;
     version_call = (version_fn)dlsym(library_handle, "comuse_spike_abi_version");
@@ -26,10 +28,14 @@ int32_t seam_open(const char *path) {
     cancel_call = (handle_fn)dlsym(library_handle, "comuse_spike_request_cancel");
     drain_call = (handle_fn)dlsym(library_handle, "comuse_spike_request_drain");
     if (!version_call || !start_call || !cancel_call || !drain_call) { seam_close(); return -2; }
+    if (version_call() != COMUSE_SPIKE_ABI_VERSION) { seam_close(); return -3; }
+    // Once the hello queue can retain Swift closures, keep the activated image
+    // mapped until process exit; drain cannot prove every native stack epilogue.
+    pinned_handle = library_handle;
     return 0;
 }
 void seam_close(void) {
-    if (library_handle) dlclose(library_handle);
+    if (library_handle && library_handle != pinned_handle) dlclose(library_handle);
     library_handle = 0; version_call = 0; start_call = 0; cancel_call = 0; drain_call = 0;
 }
 uint32_t seam_version(void) { return version_call ? version_call() : 0; }
