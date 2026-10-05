@@ -23,6 +23,8 @@ issue only the predeclared approval for its selected synthetic-fixture scenario
 after scope and protected-target checks. It accepts no arbitrary action or text.
 
 The facade currently supports the dedicated command lifetime. On bounded native
-close failure, the command reports held and exits; persisted dirty/inflight
-state blocks restart admission. A long-lived embedding caller would need an
+close failure, the command reports held and exits. Persisted dirty/inflight
+state blocks restart for uncertain or quarantined actions. A clean terminal may
+already be durable and its writer released; process exit then ends the native
+callback lifetime and restart is permitted. A long-lived embedding caller needs an
 explicit retained-owner retry interface before this facade can support it.
