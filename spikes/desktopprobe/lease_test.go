@@ -27,7 +27,7 @@ func testLease(t *testing.T) (*Lease, string) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := lease.Close(ctx); err != nil {
+		if err := lease.Close(ctx); err != nil && !(errors.Is(err, ErrDirty) && lease.Dirty()) {
 			t.Errorf("closing test lease: %v", err)
 		}
 	})
@@ -185,53 +185,50 @@ func TestCloseTimeoutKeepsWriterLockUntilCleanupReturns(t *testing.T) {
 	close(release)
 	retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
 	defer retryCancel()
-	if err := lease.Close(retryCtx); !errors.Is(err, context.DeadlineExceeded) {
+	if err := lease.Close(retryCtx); !errors.Is(err, ErrDirty) {
 		t.Fatalf("retry Close after expired cleanup = %v, want persisted cleanup failure", err)
 	}
 	newLease, err := Acquire(retryCtx, root)
 	if err != nil {
 		t.Fatalf("Acquire after safe Close: %v", err)
 	}
-	if err := newLease.Close(retryCtx); err != nil {
+	if _, _, err := newLease.Begin("blocked-after-close", [32]byte{}); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Begin = %v, want ErrDirty", err)
+	}
+	if err := newLease.Close(retryCtx); !errors.Is(err, ErrDirty) {
 		t.Fatal(err)
 	}
 }
 
-func TestCloseTimeoutKeepsWriterLockUntilCleanupReturns(t *testing.T) {
+func TestCleanupPanicIsRedactedAndPersistsDirty(t *testing.T) {
 	lease, root := testLease(t)
-	release := make(chan struct{})
-	if _, err := lease.RegisterHeldInput("blocked-cleanup", func(context.Context) error {
-		<-release
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
-	errCh := make(chan error, 1)
-	go func() { errCh <- lease.Close(closeCtx) }()
-	err := <-errCh
-	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Close error = %v, want deadline", err)
-	}
-	contenderCtx, contenderCancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
-	_, acquireErr := Acquire(contenderCtx, root)
-	contenderCancel()
-	if !errors.Is(acquireErr, context.DeadlineExceeded) {
-		t.Fatalf("Acquire while cleanup is still running = %v, want deadline", acquireErr)
-	}
-	close(release)
-	retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
-	defer retryCancel()
-	if err := lease.Close(retryCtx); err != nil {
-		t.Fatalf("retry Close after cleanup returned: %v", err)
-	}
-	newLease, err := Acquire(retryCtx, root)
+	const canary = "private-panic-canary"
+	held, err := lease.RegisterHeldInput("panic-cleanup", func(context.Context) error { panic(canary) })
 	if err != nil {
-		t.Fatalf("Acquire after safe Close: %v", err)
-	}
-	if err := newLease.Close(retryCtx); err != nil {
 		t.Fatal(err)
+	}
+	err = held.Release(context.Background())
+	if !errors.Is(err, ErrCleanupPanic) || bytes.Contains([]byte(err.Error()), []byte(canary)) {
+		t.Fatalf("cleanup error was not redacted: %v", err)
+	}
+	if err := lease.Close(context.Background()); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Close = %v, want ErrDirty", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte(canary)) {
+			t.Fatal("panic payload persisted")
+		}
 	}
 }
 
