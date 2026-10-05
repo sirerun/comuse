@@ -131,19 +131,25 @@ func executeAccessibilityRequest(_ handle: UInt64) {
     finishRequest(handle, data: response)
 }
 
-private func validProbeEnvelope(_ data: Data, requestID: String) -> Bool {
+func validProbeEnvelope(_ data: Data, requestID: String) -> Bool {
     guard data.count <= maxResponseBytes,
           let value = try? JSONSerialization.jsonObject(with: data),
           let object = value as? [String: Any],
           object["schema_version"] as? Int == 1,
           object["request_id"] as? String == requestID,
-          object["status"] is String,
           object.keys.contains("error"),
           object.keys.contains("result")
     else {
         return false
     }
-    return true
+    switch object["status"] as? String {
+    case "completed", "partial":
+        return !(object["result"] is NSNull)
+    case "cancelled", "error":
+        return !(object["error"] is NSNull)
+    default:
+        return false
+    }
 }
 
 private func makeProbeError(requestID: String, code: String, message: String) -> Data {
