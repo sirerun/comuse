@@ -73,8 +73,8 @@ status_file="$evidence_dir/status.tsv"
 log_file="$evidence_dir/commands.log"
 tool_file="$evidence_dir/environment.txt"
 template="$(dirname "$0")/evidence-template.md"
-cp "$template" "$evidence_dir/evidence.md"
-printf 'selector\tstatus\tdetail\n' > "$status_file"
+cp "$template" "$evidence_dir/evidence.md" || exit 73
+printf 'selector\tstatus\tdetail\n' > "$status_file" || exit 73
 {
   printf 'head=%s\n' "$head_sha"
   printf 'selector=%s\n' "$selector"
@@ -86,13 +86,13 @@ printf 'selector\tstatus\tdetail\n' > "$status_file"
   printf 'artifact_root=%s\n' "$artifact_root"
   printf 'evidence_dir=%s\n' "$evidence_dir"
   printf 'fixture_launch=not_run\naccessibility_tcc=not_run\ninput_tcc=not_run\n'
-} > "$tool_file"
+} > "$tool_file" || exit 73
 
-record() { printf '%s\t%s\t%s\n' "$selector" "$1" "$2" >> "$status_file"; }
+record() { printf '%s\t%s\t%s\n' "$selector" "$1" "$2" >> "$status_file" || exit 73; }
 append_evidence() {
   {
     printf '\n## Run result\n\n- Selector: `%s`\n- Head: `%s`\n- Evidence directory: `%s`\n- Tool and launch state: see `environment.txt`\n- Command log: `commands.log`\n- Status: see `status.tsv`\n' "$selector" "$head_sha" "$evidence_dir"
-  } >> "$evidence_dir/evidence.md"
+  } >> "$evidence_dir/evidence.md" || exit 73
 }
 
 run_check() {
@@ -100,19 +100,19 @@ run_check() {
   local command_text
   printf -v command_text '%q ' "$@"
   local load_value="n/a"
-  printf '\n[%s] COMMAND %s\n' "$label" "$command_text" | tee -a "$log_file"
+  printf '\n[%s] COMMAND %s\n' "$label" "$command_text" | tee -a "$log_file" || exit 73
   if [[ "${GITHUB_ACTIONS:-false}" != "true" ]]; then
     local uptime_text
     uptime_text="$(LC_ALL=C uptime 2>&1)"
-    printf '[%s] uptime: %s\n' "$label" "$uptime_text" >> "$log_file"
+    printf '[%s] uptime: %s\n' "$label" "$uptime_text" >> "$log_file" || exit 73
     load_value="$(printf '%s\n' "$uptime_text" | sed -E 's/.*load averages?:[[:space:]]*([0-9]+([.][0-9]+)?).*/\1/' | tail -1)"
     if ! [[ "$load_value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-      printf '[%s] HELD: could not parse one-minute load from uptime: %s\n' "$label" "$uptime_text" | tee -a "$log_file"
+      printf '[%s] HELD: could not parse one-minute load from uptime: %s\n' "$label" "$uptime_text" | tee -a "$log_file" || exit 73
       record held "$label: load unavailable"
       return 75
     fi
     if ! awk -v load="$load_value" 'BEGIN { exit !(load <= 10) }'; then
-      printf '[%s] HELD: one-minute load %s exceeds 10\n' "$label" "$load_value" | tee -a "$log_file"
+      printf '[%s] HELD: one-minute load %s exceeds 10\n' "$label" "$load_value" | tee -a "$log_file" || exit 73
       record held "$label: one-minute load $load_value exceeds 10"
       return 75
     fi
@@ -120,10 +120,10 @@ run_check() {
   "$@" >> "$log_file" 2>&1
   local result=$?
   if ((result == 0)); then
-    printf '[%s] PASS (load=%s)\n' "$label" "$load_value" | tee -a "$log_file"
+    printf '[%s] PASS (load=%s)\n' "$label" "$load_value" | tee -a "$log_file" || exit 73
     record pass "$label"
   else
-    printf '[%s] FAIL (exit=%s, load=%s)\n' "$label" "$result" "$load_value" | tee -a "$log_file"
+    printf '[%s] FAIL (exit=%s, load=%s)\n' "$label" "$result" "$load_value" | tee -a "$log_file" || exit 73
     record fail "$label: exit $result"
   fi
   return "$result"
@@ -191,7 +191,11 @@ if [[ "$final_head" != "$head_sha" || -n "$final_status" ]]; then
 fi
 append_evidence
 printf 'EVIDENCE_DIR=%s\n' "$evidence_dir"
-cat "$status_file"
-awk -F '\t' 'NR > 1 { print $2 }' "$status_file" | grep -q '^fail$' && exit 1
-if awk -F '\t' 'NR > 1 { print $2 }' "$status_file" | grep -q '^held$'; then exit 75; fi
+cat "$status_file" || exit 73
+for required_file in "$status_file" "$tool_file" "$log_file" "$evidence_dir/evidence.md"; do
+  [[ -s "$required_file" ]] || exit 73
+done
+status_flags="$(awk -F '\t' 'NR > 1 { print $2 }' "$status_file")" || exit 73
+[[ "$status_flags" == *fail* ]] && exit 1
+[[ "$status_flags" == *held* ]] && exit 75
 exit "$result"
