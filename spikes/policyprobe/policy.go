@@ -439,6 +439,9 @@ func (gate *Gate) Admit(scope Scope, action Action, approval Approval) Decision 
 		if _, replayed := gate.consumed[approval.token]; replayed {
 			return gate.recordDecisionLocked(DecisionDeniedReplay, action.Kind, identity.PolicyVersion, now)
 		}
+		if _, expired := gate.expired[approval.token]; expired {
+			return gate.recordDecisionLocked(DecisionDeniedExpired, action.Kind, identity.PolicyVersion, now)
+		}
 		return gate.recordDecisionLocked(DecisionDeniedRevoked, action.Kind, identity.PolicyVersion, now)
 	}
 	if !now.Before(record.expiresAt) {
@@ -526,7 +529,7 @@ func (gate *Gate) cleanupLocked(now time.Time) {
 	for token, approval := range gate.approvals {
 		if !now.Before(approval.expiresAt) {
 			if len(gate.expired) < maxConsumed {
-				gate.expired[token] = approval.expiresAt
+				gate.expired[token] = now.Add(maxChallengeTTL)
 			}
 			delete(gate.approvals, token)
 		}
