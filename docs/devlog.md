@@ -47,3 +47,23 @@ The operator authorized the exact reviewed PR #6 merge using local evidence. Git
 ## 2026-10-04 rolling source assembly
 
 Three GPT-6-Luna slots progressed through runtime, AX, fixture, policy, compile-closed input, desktop replay and semantic projection; CLI/MCP follow while runtime findings are remediated. Secure projection and canonical/native state identities remain distinct. Persistent replay never silently recycles a retired action identifier, and timed-out cleanup retains writer ownership. Sources remain experimental and unqualified; actual native mutation routing is disabled. The partial assembled Go run failed a bridgeclient test compile and ran after the host load rebounded above its ceiling, so it does not satisfy acceptance. Numeric pre/post-lease guards are required before further checks. PR #6 remains the only landed implementation; its explicit local-check merge waiver does not apply to this candidate.
+
+## 2026-10-05 — Resumed local verification and locked-session boundary
+
+The owner authorizes local checks, independent exact-head review and normal protected merge while hosted Actions cannot start because of billing. This applies beyond the historical seam-only waiver. Hosted CI remains unavailable; it was not retried. The landed seam remains `2973799ab1c8acc02826eed95a7f55341b49f7d1`.
+
+Three parallel Luna lanes prepare concrete durable host composition, a fixed-scenario fixture command, and fresh independent source review. Native input remains compile-closed. No release, deployment, provider worker or real-user-app operation occurred.
+
+| Exact source | Observed check | Result and limit |
+|---|---|---|
+| `168d668668c2ce824ad9f888199ea3f066d3a44f` | `CGO_ENABLED=0 go test -p 2 ./...` | Passed available packages under the shared lease. |
+| `25634f6a96c189d3d02405d46e277a3a585067a2` | Built real MCP host; initialize, tools/list, hello, doctor, windows, EOF | Negotiated 2025-06-18, listed exactly four readonly tools, hello/doctor completed and native close exited 0. Windows returned truthful reference_unavailable. |
+| `e2229f54a5cc6668f61ab4bde3eeab5af65251e0` | Built seamprobe; real native normal and cancel-before-pump processes | Callback, cancellation, drain and second-image rejection passed. Swift bridge artifact was built from `7665aaf`. |
+| `e2229f54a5cc6668f61ab4bde3eeab5af65251e0` | Swift bridge build with `--triple arm64-apple-macosx14.0 --jobs 2` | Passed compile/link under the lease; no macOS 14 runtime qualification. |
+| `ee044d48cb976d04e9fba2bc906e7644b1e40463` | Swift fixture build with the same macOS 14 target | Passed compile/link under the lease; no GUI qualification. |
+| `d7ec58b8e5cfc80d3d93264a41c0f15b8f991272` | `go test -count=1 ./spikes/desktopprobe` | Passed, including failed-persistence writer exclusion regression. |
+| `361a7537be70561c29218675a0c07443d81fde3e` | Focused input test and full configured lint | Input compiled but a new test journal map panicked. Lint reported nine findings. Both remain author-owned remediation, not accepted checks. |
+
+The synthetic fixture process is running and matches its configured bundle/nonce. Actual doctor observed Accessibility and event posting available without prompts. OS session metadata reports the desktop locked; fixture window discovery is unavailable. No unlock, permission prompt, real-user-app reads/pixels, or input mutation was attempted. T1.48 and GUI acceptance remain held; compiler, fake backend, source review and readonly startup evidence do not satisfy them.
+
+Independent review found and assigned durable close, retry ownership and report truthfulness failures in the new composition. Final assembled Go/race/vet/lint/Swift checks and two nonauthor exact-head reviews remain required after all fixes. Detailed private command receipts and paths stay in the task artifact ledger rather than public documentation.
