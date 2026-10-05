@@ -61,14 +61,14 @@ type nativeBackend interface {
 }
 
 type NativeTargetRequest struct {
-	PID                                                                             int32
-	BundleID, FixtureNonce, ProcessStartRef, WindowRef, ElementRef, ExpectedStateID string
+	PID                                                            int32
+	BundleID, FixtureNonce, ProcessStartRef, WindowRef, ElementRef string
 }
 
 type NativeClassification struct {
-	Complete                                        bool
-	StateID, ProcessStartRef, WindowRef, ElementRef string
-	Role, Identifier, InputClass, ValueStatus       string
+	Complete                               bool
+	ProcessStartRef, WindowRef, ElementRef string
+	Role, Identifier, InputClass           string
 }
 
 type JournalRecord struct {
@@ -137,7 +137,7 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 	if err != nil {
 		return refusal(request.ActionID, "desktop_busy", "not_applied"), err
 	}
-	nativeScope := NativeTargetRequest{PID: request.Scope.Process.PID, BundleID: request.Scope.Process.BundleID, FixtureNonce: request.Scope.FixtureNonce, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef, ExpectedStateID: request.Scope.StateID}
+	nativeScope := NativeTargetRequest{PID: request.Scope.Process.PID, BundleID: request.Scope.Process.BundleID, FixtureNonce: request.Scope.FixtureNonce, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef}
 	classification, err := executor.backend.Inspect(ctx, nativeScope)
 	if err != nil {
 		_ = lease.Release(context.Background())
@@ -284,11 +284,27 @@ func (executor *Executor) finishUnknown(ctx context.Context, lease writerLease, 
 }
 
 func setTerminalMetadata(record *JournalRecord, native nativeEnvelope) {
-	record.Action = native.Action
-	record.Execution = native.Execution
-	record.Verification = native.Verification.Status
-	record.StateStatus = native.StateStatus
-	record.Cleanup = native.Cleanup.Status
+	record.Action = ""
+	if native.Action == "read_value" || native.Action == "replace" || native.Action == "press" {
+		record.Action = native.Action
+	}
+	record.Execution = "unknown"
+	if native.Execution == "not_applied" || native.Execution == "applied" || native.Execution == "partial" || native.Execution == "unknown" {
+		record.Execution = native.Execution
+	}
+	record.Verification = "unavailable"
+	if native.Verification.Status == "verified" || native.Verification.Status == "failed" || native.Verification.Status == "unavailable" {
+		record.Verification = native.Verification.Status
+	}
+	record.StateStatus = "unavailable"
+	if native.StateStatus == "available" || native.StateStatus == "partial" || native.StateStatus == "unavailable" {
+		record.StateStatus = native.StateStatus
+	}
+	record.Cleanup = "unknown"
+	if native.Cleanup.Status == "released" || native.Cleanup.Status == "not_required" || native.Cleanup.Status == "failed" || native.Cleanup.Status == "unknown" {
+		record.Cleanup = native.Cleanup.Status
+	}
+	record.ErrorCode = ""
 	if native.Error != nil {
 		if safeErrorCode(*native.Error) {
 			record.ErrorCode = *native.Error
@@ -309,15 +325,17 @@ func replaySummary(record JournalRecord) []byte {
 }
 
 func safeErrorCode(code string) bool {
-	if len(code) == 0 || len(code) > 64 {
+	switch code {
+	case "backend_unavailable", "backend_outcome_invalid", "cancelled_before_dispatch",
+		"classification_unavailable", "desktop_busy", "dispatch_unknown", "element_stale",
+		"native_error", "outcome_unknown", "policy_refused", "postcondition_failed",
+		"postcondition_unavailable", "protected_or_unsupported_target", "protected_target",
+		"scope_mismatch", "selection_unavailable", "state_expired", "unsupported",
+		"validation_error", "value_unavailable", "verification_unavailable":
+		return true
+	default:
 		return false
 	}
-	for _, r := range code {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
-			return false
-		}
-	}
-	return true
 }
 
 func (executor *Executor) commitment(request Request) ([32]byte, error) {
@@ -387,12 +405,12 @@ func validateRequest(request Request, operation string) error {
 }
 
 func classifyNativeTarget(request Request, operation string, target NativeClassification) (policyprobe.TargetKind, error) {
-	if !target.Complete || target.StateID != request.Scope.StateID || target.ProcessStartRef != request.Scope.Process.LaunchGeneration || target.WindowRef != request.Scope.WindowRef || target.ElementRef != request.Scope.ElementRef {
-		return 0, errors.New("fresh complete native observation does not match approved state and scope")
+	if !target.Complete || target.ProcessStartRef != request.Scope.Process.LaunchGeneration || target.WindowRef != request.Scope.WindowRef || target.ElementRef != request.Scope.ElementRef {
+		return 0, errors.New("fresh native metadata does not match bound process, window, and element scope")
 	}
 	switch operation {
 	case "read_value", "replace":
-		if target.InputClass != "fixture_normal_text_field" || target.Role != "AXTextField" || target.Identifier != "textfield" || target.ValueStatus != "included_synthetic_normal" {
+		if target.InputClass != "fixture_normal_text_field" || target.Role != "AXTextField" || target.Identifier != "textfield" {
 			return 0, errors.New("native target is protected, uncertain, or unsupported")
 		}
 		return policyprobe.TargetTextField, nil
@@ -482,8 +500,8 @@ func validateNativeResponse(response []byte, request Request, operation string) 
 	if envelope.Execution == "unknown" && envelope.Error == nil {
 		return errors.New("unknown native execution requires typed error")
 	}
-	if envelope.Error != nil && *envelope.Error == "" {
-		return errors.New("native error code is empty")
+	if envelope.Error != nil && !safeErrorCode(*envelope.Error) {
+		return errors.New("native error code is unrecognized")
 	}
 	return nil
 }
