@@ -20,7 +20,7 @@ At the design baseline the only tracked files are the license, RFC and vision. T
 
 A code graph CLI is installed but graph inspection found zero nodes/files; no callable graph MCP is available in this session. Bounded tracked-file/RFC discovery is therefore the qualified fallback. No production-controller enrollment or authoritative lifecycle snapshot was found: do not create a second scheduler or assume a service admission path. The host profile selector advertises baseline/delivery capabilities; installed packages are not proof of callable connections.
 
-| Capability | Qualified current binding | Planning boundary / execution refresh |
+| Capability | Qualified design-baseline binding (historical) | Planning boundary / execution refresh |
 |---|---|---|
 | Planning/coordination | Local file/git tools; native collaboration tools | Three GPT-6-Luna agents supplied planning inputs only. No implementation was dispatched. |
 | Worker execution | GPT-6-Luna, isolated task worktrees | Target ten workers plus coordinator; current runtime supports four active slots total, so only three workers here. Qualify a larger harness or explicitly batch the schedule; never claim ten ran here. |
