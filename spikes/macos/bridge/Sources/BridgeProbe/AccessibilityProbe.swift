@@ -629,7 +629,7 @@ func isProtectedOrUncertainTextField(role: String, subrole: String?, identifier:
 
 func isKnownNonsecureTextField(role: String, subrole: String?, identifier: String?) -> Bool {
     role == (kAXTextFieldRole as String) && identifier == "textfield" &&
-        subrole != nil && subrole != (kAXSecureTextFieldSubrole as String)
+        subrole == (kAXTextFieldRole as String)
 }
 
 @MainActor

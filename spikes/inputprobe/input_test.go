@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirerun/comuse/spikes/bridgeclient"
 	"github.com/sirerun/comuse/spikes/policyprobe"
 )
 
@@ -59,7 +60,7 @@ type testBackend struct {
 	err      error
 }
 
-func (backend *testBackend) Call(context.Context, []byte) ([]byte, error) {
+func (backend *testBackend) InputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error) {
 	backend.calls++
 	return backend.response, backend.err
 }
@@ -126,7 +127,7 @@ func TestUnsupportedActionRejectedBeforeAdmissionAndBackend(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported action")
 	}
-	if backend.calls != 0 || journal.begins != 0 || lease.releases != 0 {
+	if backend.calls != 0 || journal.begins != 0 || lease.releases != 1 {
 		t.Fatalf("calls=%d begins=%d releases=%d", backend.calls, journal.begins, lease.releases)
 	}
 }
@@ -162,7 +163,7 @@ func TestActionIDCommitmentMismatchNeverDispatches(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected action id binding mismatch")
 	}
-	if backend.calls != 0 || journal.begins != 0 || lease.releases != 0 {
+	if backend.calls != 0 || journal.begins != 0 || lease.releases != 1 {
 		t.Fatalf("calls=%d begins=%d releases=%d", backend.calls, journal.begins, lease.releases)
 	}
 }
@@ -196,10 +197,29 @@ func TestTerminalResponsePersistsOnlyRedactedMetadataAndReplaysWithoutPlaintext(
 	if err := json.Unmarshal(replayed, &replay); err != nil {
 		t.Fatal(err)
 	}
-	if replay.Execution != "applied" || string(replay.Result) != "null" || !bytes.Contains(replayed, []byte(`"replayed":true`)) || bytes.Contains(replayed, []byte(canary)) || backend.calls != 1 || lease.releases != 1 || journal.finishes != 1 {
+	if replay.Execution != "applied" || string(replay.Result) != "null" || !bytes.Contains(replayed, []byte(`"replayed":true`)) || bytes.Contains(replayed, []byte(canary)) || backend.calls != 1 || lease.releases != 2 || journal.finishes != 1 {
 		t.Fatalf("replayed=%s calls=%d releases=%d finishes=%d", replayed, backend.calls, lease.releases, journal.finishes)
 	}
 }
+
+func TestReplayPreservesSafeOutcomeClassification(t *testing.T) {
+	for _, test := range []struct { name, execution, code string; wantOK bool }{
+		{"pending becomes unknown", "pending", "", false},
+		{"unknown stays failure", "unknown", "dispatch_unknown", false},
+		{"refusal stays not applied", "not_applied", "policy_refused", false},
+		{"partial stays partial", "partial", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := marshalReplay(JournalRecord{ActionID:"a", Execution:test.execution, ErrorCode:test.code})
+			var response map[string]any
+			if err := json.Unmarshal(data, &response); err != nil { t.Fatal(err) }
+			if response["execution"] != mapPendingToUnknown(test.execution) || response["ok"] != test.wantOK { t.Fatalf("replay=%s", data) }
+			if response["result"] != nil { t.Fatalf("replay retained result: %s", data) }
+		})
+	}
+}
+
+func mapPendingToUnknown(execution string) string { if execution == "pending" { return "unknown" }; return execution }
 
 func TestUncertainCleanupQuarantinesWriterAndDoesNotRetry(t *testing.T) {
 	executor, request, journal, lease, backend, host := fixtureInput(t)

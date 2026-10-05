@@ -67,6 +67,7 @@ type JournalRecord struct {
 	Verification string
 	StateStatus  string
 	Cleanup      string
+	ErrorCode    string
 	UpdatedAt    time.Time
 }
 
@@ -268,10 +269,22 @@ func setTerminalMetadata(record *JournalRecord, native nativeEnvelope) {
 	record.Verification = native.Verification.Status
 	record.StateStatus = native.StateStatus
 	record.Cleanup = native.Cleanup.Status
+	if native.Error != nil {
+		var code string
+		if json.Unmarshal(native.Error, &code) == nil && safeErrorCode(code) { record.ErrorCode = code } else { record.ErrorCode = "native_error" }
+	}
 }
 
 func replaySummary(record JournalRecord) []byte {
+	if record.Execution == "pending" || record.Execution == "" { record.Execution, record.ErrorCode = "unknown", "outcome_unknown" }
+	if record.Execution == "unknown" && record.ErrorCode == "" { record.ErrorCode = "outcome_unknown" }
 	return marshalReplay(record)
+}
+
+func safeErrorCode(code string) bool {
+	if len(code) == 0 || len(code) > 64 { return false }
+	for _, r := range code { if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') { return false } }
+	return true
 }
 
 func (executor *Executor) commitment(request Request) ([32]byte, error) {
@@ -478,11 +491,14 @@ func marshalEnvelope(actionID, execution, verification, state, cleanup, code str
 }
 
 func marshalReplay(record JournalRecord) []byte {
+	var replayError any
+	if record.ErrorCode != "" { replayError = record.ErrorCode }
+	ok := record.Execution == "applied" || record.Execution == "partial"
 	payload, _ := json.Marshal(map[string]any{
-		"schema_version": "fixture.v0", "ok": true, "request_id": record.ActionID,
+		"schema_version": "fixture.v0", "ok": ok, "request_id": record.ActionID,
 		"action_id": record.ActionID, "action": record.Action, "execution": record.Execution,
 		"verification": map[string]any{"status": record.Verification}, "state_status": record.StateStatus,
-		"cleanup": map[string]any{"status": record.Cleanup}, "error": nil, "result": nil, "replayed": true,
+		"cleanup": map[string]any{"status": record.Cleanup}, "error": replayError, "result": nil, "replayed": true,
 	})
 	return payload
 }
