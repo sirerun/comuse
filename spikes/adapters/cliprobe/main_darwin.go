@@ -58,6 +58,12 @@ type cliOptions struct {
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openNative)) }
 
+func writeDiagnostic(writer io.Writer, values ...any) {
+	if _, err := fmt.Fprintln(writer, values...); err != nil {
+		return // Diagnostic output is best effort; keep the existing exit behavior.
+	}
+}
+
 func openNative(libraryPath string) (nativeClient, error) {
 	return bridgeclient.Open(libraryPath)
 }
@@ -69,26 +75,26 @@ func run(args []string, stdout, stderr io.Writer, open clientFactory) int {
 	flags.StringVar(&options.configPath, "config", "", "trusted local config file")
 	flags.BoolVar(&options.includeValues, "include-values", false, "include allowlisted synthetic fixture values (a11y only)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 1 || options.configPath == "" {
-		fmt.Fprintln(stderr, "usage: cliprobe --config <trusted-file> [--include-values] hello|doctor|windows|a11y")
+		writeDiagnostic(stderr, "usage: cliprobe --config <trusted-file> [--include-values] hello|doctor|windows|a11y")
 		return exitUsage
 	}
 	op := flags.Arg(0)
 	if op != "hello" && op != "doctor" && op != "windows" && op != "a11y" {
-		fmt.Fprintln(stderr, "unsupported read operation")
+		writeDiagnostic(stderr, "unsupported read operation")
 		return exitUsage
 	}
 	if options.includeValues && op != "a11y" {
-		fmt.Fprintln(stderr, "operation-specific flags are invalid")
+		writeDiagnostic(stderr, "operation-specific flags are invalid")
 		return exitUsage
 	}
 	config, err := readTrustedConfig(options.configPath)
 	if err != nil {
-		fmt.Fprintln(stderr, "config:", err)
+		writeDiagnostic(stderr, "config:", err)
 		return exitConfig
 	}
 	client, err := open(config.LibraryPath)
 	if err != nil {
-		fmt.Fprintln(stderr, "native runtime:", err)
+		writeDiagnostic(stderr, "native runtime:", err)
 		return exitNative
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -98,24 +104,24 @@ func run(args []string, stdout, stderr io.Writer, open clientFactory) int {
 	closeErr := client.Close(closeCtx)
 	closeCancel()
 	if callErr != nil {
-		fmt.Fprintln(stderr, "probe:", callErr)
+		writeDiagnostic(stderr, "probe:", callErr)
 		return exitNative
 	}
 	if closeErr != nil {
-		fmt.Fprintln(stderr, "runtime close:", closeErr)
+		writeDiagnostic(stderr, "runtime close:", closeErr)
 		return exitNative
 	}
 	if len(response) == 0 || len(response) > maxOutputBytes {
-		fmt.Fprintln(stderr, "probe response exceeded output limit")
+		writeDiagnostic(stderr, "probe response exceeded output limit")
 		return exitNative
 	}
 	if _, err := stdout.Write(append(response, '\n')); err != nil {
-		fmt.Fprintln(stderr, "stdout:", err)
+		writeDiagnostic(stderr, "stdout:", err)
 		return exitNative
 	}
 	var envelope nativeEnvelope
 	if err := json.Unmarshal(response, &envelope); err != nil {
-		fmt.Fprintln(stderr, "invalid native response")
+		writeDiagnostic(stderr, "invalid native response")
 		return exitNative
 	}
 	if envelope.Status == "partial" || envelope.Status == "cancelled" {
@@ -278,8 +284,7 @@ func validateNativeTerminal(data []byte, expectedRequestID string) (nativeEnvelo
 	return envelope, nil
 }
 
-func readTrustedConfig(path string) (trustedConfig, error) {
-	var config trustedConfig
+func readTrustedConfig(path string) (config trustedConfig, resultErr error) {
 	if !filepath.IsAbs(path) {
 		return config, errors.New("config path must be absolute")
 	}
@@ -300,7 +305,12 @@ func readTrustedConfig(path string) (trustedConfig, error) {
 		_ = syscall.Close(fd)
 		return config, errors.New("config descriptor is invalid")
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && resultErr == nil {
+			config = trustedConfig{}
+			resultErr = fmt.Errorf("close config file: %w", closeErr)
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return config, err
@@ -334,9 +344,10 @@ func readTrustedConfig(path string) (trustedConfig, error) {
 		return config, errors.New("config must contain an absolute library path and fixed fixture identity")
 	}
 	for _, char := range config.Fixture.Nonce {
-		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("._-", char)) {
-			return config, errors.New("fixture nonce has invalid characters")
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune("._-", char) {
+			continue
 		}
+		return config, errors.New("fixture nonce has invalid characters")
 	}
 	return config, nil
 }
