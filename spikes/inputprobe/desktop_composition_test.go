@@ -93,7 +93,11 @@ func TestDesktopJournalCreateOnlyReplayPersistsRedactedOutcome(t *testing.T) {
 	_ = verifyLease.Close(ctx)
 }
 
-type drainTestBackend struct{ closed bool }
+type drainTestBackend struct {
+	closed    bool
+	drainErrs []error
+	calls     int
+}
 
 func (*drainTestBackend) Inspect(context.Context, NativeTargetRequest) (NativeClassification, error) {
 	return NativeClassification{}, nil
@@ -104,6 +108,10 @@ func (*drainTestBackend) inputCall(context.Context, bridgeclient.HostInputReques
 }
 
 func (backend *drainTestBackend) CloseAndDrain(context.Context) error {
+	backend.calls++
+	if backend.calls <= len(backend.drainErrs) && backend.drainErrs[backend.calls-1] != nil {
+		return backend.drainErrs[backend.calls-1]
+	}
 	backend.closed = true
 	return nil
 }
@@ -190,5 +198,84 @@ func TestDirtyPersistsWhenTerminalJournalFinishFails(t *testing.T) {
 	defer func() { _ = restarted.Close(context.Background()) }()
 	if _, _, err := restarted.Begin("later-action", [32]byte{}); !errors.Is(err, desktopprobe.ErrDirty) {
 		t.Fatalf("new action after unresolved terminal write = %v, want ErrDirty", err)
+	}
+}
+
+func TestFailedDrainRetainsWriterAndRetryReleasesOnlyAfterSuccess(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "drain-retry-state")
+	writer := &desktopWriterAdapter{root: root, journalKey: bytes.Repeat([]byte{0x31}, 32), quarantined: make(map[*desktopLeaseAdapter]struct{})}
+	lease, err := writer.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Quarantine(context.Background(), errors.New("native outcome unknown")); err != nil {
+		t.Fatal(err)
+	}
+	backend := &drainTestBackend{drainErrs: []error{errors.New("native drain incomplete")}}
+	host := &desktopInputHost{writer: writer, backend: backend}
+	if err := host.closeAfterNativeDrain(context.Background()); err == nil {
+		t.Fatal("incomplete native drain was accepted")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := desktopprobe.Acquire(ctx, root); err == nil {
+		t.Fatal("failed native drain released the writer")
+	}
+	if _, err := host.execute(context.Background(), Request{}); !errors.Is(err, ErrHostClosed) {
+		t.Fatalf("closing host accepted a new request: %v", err)
+	}
+	closeErr := host.closeAfterNativeDrain(context.Background())
+	if closeErr != nil && !errors.Is(closeErr, desktopprobe.ErrDirty) {
+		t.Fatalf("retry close = %v", closeErr)
+	}
+	if backend.calls != 2 || !backend.closed {
+		t.Fatalf("drain calls=%d closed=%v", backend.calls, backend.closed)
+	}
+	restarted, err := desktopprobe.Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatalf("writer did not release after successful drain: %v", err)
+	}
+	defer func() { _ = restarted.Close(context.Background()) }()
+	if _, _, err := restarted.Begin("after-retry", [32]byte{}); !errors.Is(err, desktopprobe.ErrDirty) {
+		t.Fatalf("new action after quarantined drain retry = %v, want ErrDirty", err)
+	}
+}
+
+func TestDesktopJournalRejectsPriorActionUnderDifferentJournalKey(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "journal-key-binding")
+	keyA := bytes.Repeat([]byte{0x41}, 32)
+	keyB := bytes.Repeat([]byte{0x42}, 32)
+	commitment := bytes.Repeat([]byte{0x53}, 32)
+	writerA := &desktopWriterAdapter{root: root, journalKey: keyA, quarantined: make(map[*desktopLeaseAdapter]struct{})}
+	leaseA, err := writerA.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctxA := context.WithValue(context.Background(), writerLeaseContextKey{}, leaseA.(*desktopLeaseAdapter))
+	journalA := &desktopJournalAdapter{journalKey: keyA}
+	record := JournalRecord{ActionID: "bound-action", Execution: "pending"}
+	copy(record.Commitment[:], commitment)
+	if created, err := journalA.Begin(ctxA, record); err != nil || !created {
+		t.Fatalf("first Begin = %v, %v", created, err)
+	}
+	terminal := record
+	terminal.Execution, terminal.Verification, terminal.Cleanup = "not_applied", "verified", "released"
+	if err := journalA.Finish(ctxA, terminal); err != nil {
+		t.Fatal(err)
+	}
+	if err := leaseA.Release(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	writerB := &desktopWriterAdapter{root: root, journalKey: keyB, quarantined: make(map[*desktopLeaseAdapter]struct{})}
+	leaseB, err := writerB.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = leaseB.Release(context.Background()) }()
+	ctxB := context.WithValue(context.Background(), writerLeaseContextKey{}, leaseB.(*desktopLeaseAdapter))
+	journalB := &desktopJournalAdapter{journalKey: keyB}
+	if created, err := journalB.Begin(ctxB, record); err == nil || created {
+		t.Fatalf("journal key mismatch was accepted: created=%v err=%v", created, err)
 	}
 }
