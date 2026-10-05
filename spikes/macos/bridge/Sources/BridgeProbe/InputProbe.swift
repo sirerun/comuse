@@ -55,9 +55,9 @@ private func decodeInputRequest(_ data: Data) -> InputRequest? {
           let actionID = object["action_id"] as? String, !actionID.isEmpty, actionID.utf8.count <= 128,
           let operation = object["op"] as? String,
           let rawScope = object["scope"] as? [String: Any],
-          let pidValue = rawScope["pid"] as? NSNumber, pidValue.int64Value > 0, pidValue.int64Value <= Int32.max,
+          let pidValue = rawScope["pid"] as? NSNumber, let pid = strictFixturePID(pidValue),
           let bundleID = rawScope["bundle_id"] as? String,
-          let nonce = rawScope["fixture_nonce"] as? String, !nonce.isEmpty, nonce.utf8.count <= 128,
+          let nonce = rawScope["fixture_nonce"] as? String, validFixtureNonce(nonce),
           let processStartReference = rawScope["process_start_ref"] as? String, !processStartReference.isEmpty,
           let windowReference = rawScope["window_ref"] as? String, !windowReference.isEmpty,
           let elementReference = rawScope["element_ref"] as? String, !elementReference.isEmpty,
@@ -74,7 +74,7 @@ private func decodeInputRequest(_ data: Data) -> InputRequest? {
         requestID: requestID,
         actionID: actionID,
         operation: operation,
-        scope: InputScope(pid: pidValue.int32Value, bundleID: bundleID, nonce: nonce, processStartReference: processStartReference, windowReference: windowReference, elementReference: elementReference, expectedStateID: expectedStateID),
+        scope: InputScope(pid: pid, bundleID: bundleID, nonce: nonce, processStartReference: processStartReference, windowReference: windowReference, elementReference: elementReference, expectedStateID: expectedStateID),
         text: text
     )
 }
