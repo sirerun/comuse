@@ -113,7 +113,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func writeStderr(writer io.Writer, message string) {
-	_, _ = fmt.Fprintln(writer, message)
+	if _, err := fmt.Fprintln(writer, message); err != nil {
+		return // stderr is best effort; the caller preserves its normal exit code.
+	}
 }
 
 func readTrustedConfig(path string) (trustedConfig, error) {
