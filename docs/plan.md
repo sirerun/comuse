@@ -179,3 +179,7 @@ The shared host remains above the build-load ceiling, so new builds/tests are he
 ## Review capacity refresh
 
 A fresh non-author reviewer spawn failed at the harness total-thread limit. The E1 epic now records three task-partitioned Luna cross-review receipts, with two non-author reviews per implementation task and explicit author exclusions even within shared source files. Final review still follows assembled verification at an exact head. The trusted host input composition is speculative same-candidate source; ordinary CLI/MCP remain read-only and native mutation activation remains gated.
+
+## 2026-10-05 source progress clarification
+
+The fixture-scoped MCP SDK probe now has server and adapter source under `spikes/adapters/mcpprobe`. Earlier statements that no MCP server is implemented describe the planning baseline. T1.18/T1.28 and integrated verification/acceptance remain unchecked; source existence does not establish a verified server or live native acceptance. The resumed local delivery and review gates are recorded in E1.
