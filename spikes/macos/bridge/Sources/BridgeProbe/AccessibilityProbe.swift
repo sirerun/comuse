@@ -283,7 +283,7 @@ private func decodeProbeRequest(_ data: Data) -> ProbeRequest? {
               let nonce = rawScope["fixture_nonce"] as? String,
               validFixtureNonce(nonce) else { return nil }
         scope = ProbeScope(pid: pid_t(pid), bundleID: bundleID, nonce: nonce)
-    } else if operation != "doctor" {
+    } else if operation != "doctor" && operation != "windows" {
         return nil
     }
     let windowReference = object["window_ref"] as? String
