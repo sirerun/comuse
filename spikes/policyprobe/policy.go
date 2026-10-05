@@ -57,6 +57,7 @@ type Scope struct {
 	SessionID     string
 	Process       ProcessIdentity
 	FixtureNonce  string
+	StateID       string
 	WindowRef     string
 	WindowTitle   string
 	ElementRef    string
@@ -190,6 +191,7 @@ type scopeIdentity struct {
 	SessionID     string
 	Process       ProcessIdentity
 	FixtureNonce  string
+	StateID       string
 	WindowRef     string
 	ElementRef    string
 	PolicyVersion uint64
@@ -550,6 +552,7 @@ func makeScopeIdentity(scope Scope) (scopeIdentity, error) {
 		scope.Process.PID <= 0 || scope.Process.BundleID == "" || len(scope.Process.BundleID) > 256 ||
 		scope.Process.LaunchGeneration == "" || len(scope.Process.LaunchGeneration) > 128 ||
 		scope.FixtureNonce == "" || len(scope.FixtureNonce) > 64 ||
+		scope.StateID == "" || len(scope.StateID) > 128 ||
 		scope.WindowRef == "" || len(scope.WindowRef) > 256 ||
 		scope.WindowTitle == "" || len(scope.WindowTitle) > 256 ||
 		scope.ElementRef == "" || len(scope.ElementRef) > 256 || scope.ExpiresAt.IsZero() {
@@ -557,7 +560,7 @@ func makeScopeIdentity(scope Scope) (scopeIdentity, error) {
 	}
 	return scopeIdentity{
 		PrincipalID: scope.PrincipalID, SessionID: scope.SessionID, Process: scope.Process,
-		FixtureNonce: scope.FixtureNonce, WindowRef: scope.WindowRef, ElementRef: scope.ElementRef,
+		FixtureNonce: scope.FixtureNonce, StateID: scope.StateID, WindowRef: scope.WindowRef, ElementRef: scope.ElementRef,
 		PolicyVersion: scope.PolicyVersion, ScopeExpiryNS: scope.ExpiresAt.UTC().UnixNano(),
 	}, nil
 }
@@ -621,6 +624,7 @@ func writeScope(writer hash.Hash, scope scopeIdentity) {
 	writeString(writer, scope.Process.BundleID)
 	writeString(writer, scope.Process.LaunchGeneration)
 	writeString(writer, scope.FixtureNonce)
+	writeString(writer, scope.StateID)
 	writeString(writer, scope.WindowRef)
 	writeString(writer, scope.ElementRef)
 	writeUint64(writer, scope.PolicyVersion)
