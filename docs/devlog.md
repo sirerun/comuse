@@ -39,3 +39,7 @@ SEAM-001 now preserves a validated completed terminal response after a cancellat
 PR #6 is unmerged. GitHub's check annotation reports that the account billing lock prevented the job from starting. The merge skill treats failed checks as a blocker; no merge/landed, full native fixture acceptance, release or deployment evidence exists. T1.5-dependent coding lanes remain undispatched.
 
 - Coordinator final Swift validation at source `5021d94` passed all four lifecycle/byte-boundary tests. The nonnil 32 KiB + 1 buffer was rejected before handle allocation, and valid JSON padded to exactly 32 KiB completed and drained. Native source is unchanged from the already successful mixed-runtime smoke. Final exact-head review receipts are recorded with PR #6; shipping remains blocked on failed CI/account access.
+
+## Seam landing and maximum Luna source batch
+
+The operator authorized the exact reviewed PR #6 merge using local evidence. GitHub rebase landed at `2973799`; target reachability and a zero-diff comparison with the reviewed candidate were observed. CI remains billing-blocked; this is an explicit seam-only exception. Three Luna lanes now implement native runtime, scoped AX observation and the controlled fixture. The source batch contract records additive runtime/main-thread integration and exclusive file ownership. Heavy builds remain subject to fresh host load and shared lease; actual native permission and fixture evidence are still pending.
