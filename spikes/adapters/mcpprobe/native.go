@@ -199,7 +199,7 @@ func (backend *NativeBackend) call(ctx context.Context, request nativeRequest, e
 	if err := json.Unmarshal(response, &envelope); err != nil || envelope.SchemaVersion != 1 || envelope.RequestID != id {
 		return nativeEnvelope{}, errors.New("invalid native response envelope")
 	}
-	if envelope.Status != expectedStatus && !(allowPartial && envelope.Status == "partial") {
+	if !(envelope.Status == expectedStatus || allowPartial && envelope.Status == "partial") {
 		code := safeNativeCode(string(envelope.Error))
 		if code == "" {
 			code = "native_error"

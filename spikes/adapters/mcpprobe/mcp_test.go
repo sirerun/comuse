@@ -249,7 +249,11 @@ func TestResultLimitAndIOFrameLimitAreExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() {
+		if err := connection.Close(); err != nil {
+			t.Errorf("close bounded transport: %v", err)
+		}
+	}()
 	if _, err := connection.Read(context.Background()); err == nil {
 		t.Fatal("IOTransport accepted a JSON-RPC line above its configured limit")
 	}

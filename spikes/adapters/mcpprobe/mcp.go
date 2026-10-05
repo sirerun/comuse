@@ -129,11 +129,7 @@ func New(config Config, backend Backend, logger *slog.Logger) (*Server, error) {
 	if backend == nil || ValidateConfig(config) != nil {
 		return nil, ErrInvalidConfig
 	}
-	scope := Scope{
-		NativeLibraryPath: config.NativeLibraryPath, FixturePID: config.FixturePID,
-		FixtureBundleID: config.FixtureBundleID, FixtureNonce: config.FixtureNonce,
-		ProcessLaunchGeneration: config.ProcessLaunchGeneration,
-	}
+	scope := Scope(config)
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -521,10 +517,11 @@ func validNonce(value string) bool {
 		return false
 	}
 	for _, char := range []byte(value) {
-		if !((char >= '0' && char <= '9') || (char >= 'A' && char <= 'Z') ||
-			(char >= 'a' && char <= 'z') || char == '.' || char == '_' || char == '-') {
-			return false
+		if (char >= '0' && char <= '9') || (char >= 'A' && char <= 'Z') ||
+			(char >= 'a' && char <= 'z') || char == '.' || char == '_' || char == '-' {
+			continue
 		}
+		return false
 	}
 	return true
 }
