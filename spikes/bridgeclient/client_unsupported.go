@@ -4,11 +4,8 @@ package bridgeclient
 
 import (
 	"context"
-	"errors"
 	"time"
 )
-
-var ErrUnsupported = errors.New("native Swift bridge requires macOS with cgo enabled")
 
 type Client struct{}
 

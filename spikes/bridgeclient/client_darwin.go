@@ -24,12 +24,6 @@ import (
 const maxPumpDuration = 250 * time.Millisecond
 const callbackDrainTimeout = 2 * time.Second
 
-var (
-	ErrNotMainThread    = errors.New("bridgeclient Open, Pump, and Close require the actual process main thread")
-	ErrCallOnMainThread = errors.New("Call cannot wait on the process main thread; run it from a worker while the owner pumps")
-	ErrClosed           = errors.New("bridgeclient is closing or closed")
-)
-
 type completion struct {
 	handle uint64
 	bytes  []byte
