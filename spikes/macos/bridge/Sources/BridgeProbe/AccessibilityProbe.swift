@@ -20,6 +20,7 @@ private struct ProbeRequest {
     let operation: String
     let scope: ProbeScope?
     let includeValues: Bool
+    let windowReference: String?
 }
 
 private struct ProbeScope {
@@ -216,7 +217,10 @@ func handleAccessibilityProbe(_ requestData: Data) -> Data {
         guard let scope = request.scope else {
             return probeResponse(requestID: request.requestID, status: "error", error: "scope_required")
         }
-        response = observeFixtureAccessibility(scope: scope, requestID: request.requestID, includeValues: request.includeValues)
+        guard let windowReference = request.windowReference else {
+            return probeResponse(requestID: request.requestID, status: "error", error: "window_ref_required")
+        }
+        response = observeFixtureAccessibility(scope: scope, requestID: request.requestID, includeValues: request.includeValues, requestedWindowReference: windowReference)
     default:
         response = probeResponse(requestID: request.requestID, status: "error", error: "unsupported_operation")
     }
@@ -282,7 +286,9 @@ private func decodeProbeRequest(_ data: Data) -> ProbeRequest? {
     } else if operation != "doctor" {
         return nil
     }
-    return ProbeRequest(requestID: requestID, operation: operation, scope: scope, includeValues: object["include_values"] as? Bool == true)
+    let windowReference = object["window_ref"] as? String
+    if operation == "a11y" && (windowReference == nil || windowReference!.isEmpty || windowReference!.utf8.count > 128) { return nil }
+    return ProbeRequest(requestID: requestID, operation: operation, scope: scope, includeValues: object["include_values"] as? Bool == true, windowReference: windowReference)
 }
 
 func strictFixturePID(_ number: NSNumber) -> Int32? {
@@ -368,12 +374,17 @@ private struct ObservedNode {
 }
 
 @MainActor
-private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, includeValues: Bool) -> Data {
+private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, includeValues: Bool, requestedWindowReference: String) -> Data {
     guard scope.bundleID == fixtureBundleIdentifier,
           let identity = validateProcess(scope), AXIsProcessTrusted() else {
         return probeResponse(requestID: requestID, status: "error", error: "scope_or_permission_denied")
     }
     axReferences.prepareScope(identity, nonce: scope.nonce)
+    guard let requestedWindow = axReferences.windows[requestedWindowReference],
+          requestedWindow.nonce == scope.nonce,
+          sameProcessIdentity(requestedWindow.identity, identity) else {
+        return probeResponse(requestID: requestID, status: "error", error: "stale_window_reference")
+    }
     let processStartReference = axReferences.processReference(identity)
     let appElement = AXUIElementCreateApplication(scope.pid)
     AXUIElementSetMessagingTimeout(appElement, 0.05)
@@ -385,7 +396,8 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
     for candidate in rawWindows.prefix(maximumAXNodes) {
         AXUIElementSetMessagingTimeout(candidate, 0.05)
         if let title = copyAXAttribute(candidate, kAXTitleAttribute, deadline: windowDeadline) as? String,
-           title == "Comuse Fixture \(scope.nonce)" {
+           title == "Comuse Fixture \(scope.nonce)",
+           CFEqual(candidate, requestedWindow.window) {
             matchedWindow = candidate
             break
         }
@@ -396,6 +408,9 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
     }
     guard let windowReference = axReferences.windowReference(window, identity: identity, nonce: scope.nonce) else {
         return probeResponse(requestID: requestID, status: "error", error: "reference_limit_exceeded")
+    }
+    guard windowReference == requestedWindowReference else {
+        return probeResponse(requestID: requestID, status: "error", error: "scope_mismatch")
     }
 
     let deadline = Date().addingTimeInterval(maximumAXDuration)

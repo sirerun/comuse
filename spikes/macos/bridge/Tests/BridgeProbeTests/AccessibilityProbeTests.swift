@@ -34,6 +34,14 @@ struct AccessibilityProbeTests {
     }
 
     @Test
+    func accessibilityObservationRequiresWindowReference() throws {
+        let request = #"{"schema_version":1,"request_id":"a11y-1","op":"a11y","scope":{"pid":123,"bundle_id":"com.sirerun.comuse.fixture","fixture_nonce":"nonce-1"}}"#
+        let response = try decode(request)
+        #expect(response["status"] as? String == "error")
+        #expect((response["error"] as? [String: String])?["code"] == "invalid_request")
+    }
+
+    @Test
     func malformedAndOversizedPayloadsAreBounded() throws {
         let malformed = try decode("{}")
         #expect(malformed["status"] as? String == "error")
