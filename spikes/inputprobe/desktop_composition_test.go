@@ -259,7 +259,7 @@ func TestDesktopJournalRejectsPriorActionUnderDifferentJournalKey(t *testing.T) 
 		t.Fatalf("first Begin = %v, %v", created, err)
 	}
 	terminal := record
-	terminal.Execution, terminal.Verification, terminal.Cleanup = "not_applied", "verified", "released"
+	terminal.Action, terminal.Execution, terminal.Verification, terminal.StateStatus, terminal.Cleanup = "read_value", "not_applied", "verified", "available", "released"
 	if err := journalA.Finish(ctxA, terminal); err != nil {
 		t.Fatal(err)
 	}
