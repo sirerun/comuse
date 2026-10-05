@@ -65,8 +65,8 @@ export GOCACHE="$evidence_dir/go-build"
 export GOMODCACHE="$evidence_dir/go-mod"
 export SWIFTPM_MODULECACHE="$evidence_dir/cache/swift-modules"
 export CLANG_MODULE_CACHE_PATH="$evidence_dir/cache/clang-modules"
-mkdir -p "$SWIFTPM_MODULECACHE"
-mkdir -p "$CLANG_MODULE_CACHE_PATH"
+mkdir -p "$SWIFTPM_MODULECACHE" || exit 73
+mkdir -p "$CLANG_MODULE_CACHE_PATH" || exit 73
 
 cd "$repo_root" || exit 73
 status_file="$evidence_dir/status.tsv"
@@ -158,6 +158,7 @@ case "$selector" in
   native)
     if [[ "$(uname -s)" != Darwin ]]; then
       record not_run "native Swift dylib smoke requires macOS"
+      result=75
     else
       binpath_file="$evidence_dir/bridge-bin-path.txt"
       run_check "swift-bridge-build-binpath" bash -c 'swift build --package-path spikes/macos/bridge --scratch-path "$1" --jobs 2 --show-bin-path > "$2"' _ "$evidence_dir/swift-scratch/native" "$binpath_file" || result=$?
@@ -180,6 +181,7 @@ case "$selector" in
       run_check "go-mcp-server-tests" go test ./cmd/comuse-mcp/... || result=$?
     else
       record not_run "no MCP adapter/server package exists at this head"
+      result=75
     fi
     ;;
 esac
