@@ -803,9 +803,10 @@ func validateActionID(id string) error {
 		return errors.New("action ID must be nonempty and at most 128 bytes")
 	}
 	for _, char := range id {
-		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("._:-", char)) {
-			return errors.New("action ID contains unsupported characters")
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune("._:-", char) {
+			continue
 		}
+		return errors.New("action ID contains unsupported characters")
 	}
 	return nil
 }
