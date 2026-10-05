@@ -107,7 +107,7 @@ func RunFixtureAcceptance(ctx context.Context, capability hostcap.Capability, co
 		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if closeErr := host.closeAfterNativeDrain(closeCtx); closeErr != nil {
-			report.Cleanup = "unknown"
+			applyFixtureCloseFailure(&report)
 			if err == nil {
 				err = errors.New("fixture host did not close cleanly")
 			}
@@ -182,33 +182,57 @@ func RunFixtureAcceptance(ctx context.Context, capability hostcap.Capability, co
 	executionData, executionErr := runWorkerAndPump(ctx, client, func(callCtx context.Context) ([]byte, error) {
 		return host.execute(callCtx, request)
 	})
-	if len(executionData) != 0 {
-		var envelope nativeEnvelope
-		if json.Unmarshal(executionData, &envelope) == nil && envelope.RequestID == request.ActionID {
-			report.Execution = envelope.Execution
-			report.Verification = envelope.Verification.Status
-			report.StateStatus = envelope.StateStatus
-			report.Cleanup = envelope.Cleanup.Status
-			if envelope.Error != nil && safeErrorCode(*envelope.Error) {
-				report.ErrorCode = *envelope.Error
-			}
-			readOnlyComplete := config.Scenario == FixtureReadNormalValue && envelope.Execution == "not_applied"
-			if (envelope.Execution == "applied" || readOnlyComplete) && envelope.Error == nil && envelope.Verification.Status == "verified" && envelope.Cleanup.Status != "failed" && envelope.Cleanup.Status != "unknown" {
-				report.Status = "completed"
-			} else if envelope.Execution == "partial" {
-				report.Status = "partial"
-			} else {
-				report.Status = "held"
-			}
-		}
+	if err := applyFixtureExecution(&report, executionData, request.ActionID, config.Scenario, executionErr); err != nil {
+		return report, err
 	}
-	if executionErr != nil && report.ErrorCode == "" {
-		report.ErrorCode = "native_input_unavailable"
+	return report, nil
+}
+
+func applyFixtureExecution(report *FixtureAcceptanceReport, data []byte, requestID string, scenario FixtureScenario, executionErr error) error {
+	var envelope nativeEnvelope
+	if report == nil || len(data) == 0 || json.Unmarshal(data, &envelope) != nil || envelope.RequestID != requestID {
+		if report != nil {
+			report.Status, report.ErrorCode = "held", "backend_outcome_invalid"
+		}
+		return errors.New("fixture input result is missing or mismatched")
+	}
+	report.Execution = envelope.Execution
+	report.Verification = envelope.Verification.Status
+	report.StateStatus = envelope.StateStatus
+	report.Cleanup = envelope.Cleanup.Status
+	if envelope.Error != nil && safeErrorCode(*envelope.Error) {
+		report.ErrorCode = *envelope.Error
+	}
+	if executionErr != nil {
+		report.Status = "held"
+		if report.ErrorCode == "" {
+			report.ErrorCode = "native_input_unavailable"
+		}
+		return errors.New("fixture input did not complete cleanly")
+	}
+	readOnlyComplete := scenario == FixtureReadNormalValue && envelope.Execution == "not_applied"
+	if (envelope.Execution == "applied" || readOnlyComplete) && envelope.Error == nil && envelope.Verification.Status == "verified" && envelope.Cleanup.Status != "failed" && envelope.Cleanup.Status != "unknown" {
+		report.Status = "completed"
+	} else if envelope.Execution == "partial" {
+		report.Status = "partial"
+	} else {
+		report.Status = "held"
 	}
 	if report.Status == "held" && report.ErrorCode == "" {
 		report.ErrorCode = "outcome_unknown"
 	}
-	return report, nil
+	return nil
+}
+
+func applyFixtureCloseFailure(report *FixtureAcceptanceReport) {
+	if report == nil {
+		return
+	}
+	report.Status = "held"
+	report.Cleanup = "unknown"
+	if report.ErrorCode == "" {
+		report.ErrorCode = "native_close_failed"
+	}
 }
 
 func validateFixtureAcceptanceConfig(config FixtureAcceptanceConfig) error {
@@ -266,6 +290,7 @@ func callAndPump(ctx context.Context, client *bridgeclient.Client, request any) 
 
 func runWorkerAndPump(ctx context.Context, client *bridgeclient.Client, work func(context.Context) ([]byte, error)) ([]byte, error) {
 	callCtx, cancelCall := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelCall()
 	type result struct {
 		data []byte
 		err  error

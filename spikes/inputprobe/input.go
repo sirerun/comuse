@@ -284,14 +284,14 @@ func (executor *Executor) finishUnknown(ctx context.Context, lease writerLease, 
 		record.ErrorCode = "outcome_unknown"
 	}
 	record.UpdatedAt = executor.clock()
-	journalCtx := context.WithValue(ctx, writerLeaseContextKey{}, lease)
-	journalErr := executor.journal.Finish(journalCtx, record)
-	quarantineCause := journalErr
-	if quarantineCause == nil {
-		quarantineCause = errors.New("native execution outcome requires quarantine")
+	quarantineCause := errors.New("native execution outcome requires quarantine")
+	if err := lease.Quarantine(context.Background(), quarantineCause); err != nil {
+		// Keep the durable action inflight when Dirty cannot be committed. Restart
+		// recovery promotes unresolved inflight actions to Dirty before admission.
+		return err
 	}
-	quarantineErr := lease.Quarantine(context.Background(), quarantineCause)
-	return errors.Join(journalErr, quarantineErr)
+	journalCtx := context.WithValue(ctx, writerLeaseContextKey{}, lease)
+	return executor.journal.Finish(journalCtx, record)
 }
 
 func setTerminalMetadata(record *JournalRecord, native nativeEnvelope) {

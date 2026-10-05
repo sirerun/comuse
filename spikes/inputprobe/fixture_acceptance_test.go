@@ -2,6 +2,7 @@ package inputprobe
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -66,3 +67,20 @@ func TestFixedScenarioRequiresPositiveExactNativeTarget(t *testing.T) {
 }
 
 func stringPointer(value string) *string { return &value }
+
+func TestFixtureExecutionErrorCannotReportCompleted(t *testing.T) {
+	report := FixtureAcceptanceReport{Status: "held"}
+	response := []byte(`{"schema_version":1,"request_id":"action-1","execution":"applied","verification":{"status":"verified"},"state_status":"complete","cleanup":{"status":"complete"},"error":null}`)
+	err := applyFixtureExecution(&report, response, "action-1", FixtureReplaceNormalText, errors.New("pump failed"))
+	if err == nil || report.Status == "completed" {
+		t.Fatalf("execution error was accepted: report=%+v err=%v", report, err)
+	}
+}
+
+func TestFixtureCloseFailureCannotReportCompleted(t *testing.T) {
+	report := FixtureAcceptanceReport{Status: "completed", Cleanup: "complete"}
+	applyFixtureCloseFailure(&report)
+	if report.Status != "held" || report.Cleanup != "unknown" || report.ErrorCode != "native_close_failed" {
+		t.Fatalf("close failure report = %+v", report)
+	}
+}

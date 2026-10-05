@@ -16,10 +16,16 @@ type testWriter struct{ lease *testLease }
 
 func (writer testWriter) Acquire(context.Context) (writerLease, error) { return writer.lease, nil }
 
-type testLease struct{ releases, quarantines int }
+type testLease struct {
+	releases, quarantines int
+	quarantineErr         error
+}
 
-func (lease *testLease) Release(context.Context) error           { lease.releases++; return nil }
-func (lease *testLease) Quarantine(context.Context, error) error { lease.quarantines++; return nil }
+func (lease *testLease) Release(context.Context) error { lease.releases++; return nil }
+func (lease *testLease) Quarantine(context.Context, error) error {
+	lease.quarantines++
+	return lease.quarantineErr
+}
 
 type testJournal struct {
 	records             map[string]JournalRecord
@@ -112,6 +118,7 @@ func TestFinishUnknownPersistsOnlyAllowlistedMetadata(t *testing.T) {
 
 func TestFinishUnknownPreservesValidatedPartialFailureForReplay(t *testing.T) {
 	executor, _, journal, lease, _, _ := fixtureInput(t)
+	journal.records = make(map[string]JournalRecord)
 	response := []byte(`{"schema_version":"fixture.v0","request_id":"action-1","action_id":"action-1","action":"replace","execution":"partial","verification":{"status":"failed"},"state_status":"partial","cleanup":{"status":"not_required"},"error":"postcondition_failed","result":{"expected_value":"private_text_canary"}}`)
 	record := JournalRecord{ActionID: "action-1", Execution: "pending"}
 	if err := executor.finishUnknown(context.Background(), lease, record, response); err != nil {
@@ -128,6 +135,20 @@ func TestFinishUnknownPreservesValidatedPartialFailureForReplay(t *testing.T) {
 	}
 	if envelope["execution"] != "partial" || envelope["ok"] != false || bytes.Contains(replayed, []byte("private_text_canary")) {
 		t.Fatalf("partial replay was not truthful/redacted: %s", replayed)
+	}
+}
+
+func TestFinishUnknownKeepsInflightJournalWhenQuarantineCannotPersist(t *testing.T) {
+	executor, _, journal, lease, _, _ := fixtureInput(t)
+	journal.records = make(map[string]JournalRecord)
+	lease.quarantineErr = errors.New("dirty marker persistence failed")
+	response := []byte(`{"schema_version":"fixture.v0","request_id":"action-1","action_id":"action-1","action":"replace","execution":"unknown","verification":{"status":"unavailable"},"state_status":"unavailable","cleanup":{"status":"unknown"},"error":"dispatch_unknown","result":null}`)
+	record := JournalRecord{ActionID: "action-1", Execution: "pending"}
+	if err := executor.finishUnknown(context.Background(), lease, record, response); err == nil {
+		t.Fatal("finish unexpectedly succeeded without durable quarantine")
+	}
+	if journal.finishes != 0 || lease.quarantines != 1 {
+		t.Fatalf("journal finishes=%d quarantines=%d; terminal record must not be written before Dirty", journal.finishes, lease.quarantines)
 	}
 }
 

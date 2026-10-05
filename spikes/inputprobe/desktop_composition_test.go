@@ -74,6 +74,14 @@ func TestDesktopJournalCreateOnlyReplayPersistsRedactedOutcome(t *testing.T) {
 	if err != nil || !found || prior.Execution != "partial" || prior.ErrorCode != "postcondition_failed" || prior.Verification != "failed" {
 		t.Fatalf("replay prior = %+v, found %v, err %v", prior, found, err)
 	}
+	replayed := replaySummary(prior)
+	if bytes.Contains(replayed, []byte("synthetic_text_canary")) || bytes.Contains(replayed, []byte("original")) {
+		t.Fatalf("durable replay contains native value text: %s", replayed)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(replayed, &envelope); err != nil || envelope["execution"] != "partial" || envelope["ok"] != false {
+		t.Fatalf("durable partial replay is not truthful: %s (%v)", replayed, err)
+	}
 	if err := second.Release(ctx); err != nil {
 		t.Fatal(err)
 	}
