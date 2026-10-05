@@ -48,7 +48,7 @@ type writerLease interface {
 // hash. Begin must be durable before policy approval consumption or dispatch.
 type durableJournal interface {
 	Lookup(context.Context, string) (JournalRecord, bool, error)
-	Begin(context.Context, JournalRecord) error
+	Begin(context.Context, JournalRecord) (created bool, err error)
 	Finish(context.Context, JournalRecord) error
 }
 
@@ -59,12 +59,15 @@ type nativeBackend interface {
 }
 
 type JournalRecord struct {
-	ActionID   string
-	Commitment [32]byte
-	StateID    string
-	Execution  string
-	Response   []byte
-	UpdatedAt  time.Time
+	ActionID     string
+	Commitment   [32]byte
+	StateID      string
+	Action       string
+	Execution    string
+	Verification string
+	StateStatus  string
+	Cleanup      string
+	UpdatedAt    time.Time
 }
 
 // Request is assembled by the trusted host from a normalized fixture
@@ -120,28 +123,48 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 	if err != nil {
 		return refusal(request.ActionID, "validation_error", "not_applied"), err
 	}
-	prior, found, err := executor.journal.Lookup(ctx, request.ActionID)
-	if err != nil {
-		return refusal(request.ActionID, "backend_unavailable", "not_applied"), err
-	}
-	if found {
-		if !hmac.Equal(prior.Commitment[:], commitment[:]) {
-			return refusal(request.ActionID, "policy_refused", "not_applied"), errors.New("action id replay binding mismatch")
-		}
-		if len(prior.Response) == 0 || prior.Execution == "unknown" {
-			return unknown(request.ActionID, "replay_result_expired"), nil
-		}
-		return append([]byte(nil), prior.Response...), nil
-	}
-
 	lease, err := executor.writer.Acquire(ctx)
 	if err != nil {
 		return refusal(request.ActionID, "desktop_busy", "not_applied"), err
 	}
+	prior, found, err := executor.journal.Lookup(ctx, request.ActionID)
+	if err != nil {
+		_ = lease.Release(context.Background())
+		return refusal(request.ActionID, "backend_unavailable", "not_applied"), err
+	}
+	if found {
+		if !hmac.Equal(prior.Commitment[:], commitment[:]) {
+			_ = lease.Release(context.Background())
+			return refusal(request.ActionID, "policy_refused", "not_applied"), errors.New("action id replay binding mismatch")
+		}
+		response := replaySummary(prior)
+		if err := lease.Release(ctx); err != nil {
+			return unknown(request.ActionID, "backend_unavailable"), err
+		}
+		return response, nil
+	}
 	record := JournalRecord{ActionID: request.ActionID, Commitment: commitment, StateID: request.Scope.StateID, Execution: "pending", UpdatedAt: executor.clock()}
-	if err := executor.journal.Begin(ctx, record); err != nil {
+	created, err := executor.journal.Begin(ctx, record)
+	if err != nil {
 		_ = lease.Quarantine(context.Background(), err)
 		return refusal(request.ActionID, "backend_unavailable", "not_applied"), err
+	}
+	if !created {
+		prior, found, lookupErr := executor.journal.Lookup(ctx, request.ActionID)
+		if lookupErr != nil || !found {
+			cause := errors.Join(errors.New("action begin conflicted without a readable prior"), lookupErr)
+			_ = lease.Quarantine(context.Background(), cause)
+			return unknown(request.ActionID, "backend_unavailable"), cause
+		}
+		if !hmac.Equal(prior.Commitment[:], commitment[:]) {
+			_ = lease.Release(context.Background())
+			return refusal(request.ActionID, "policy_refused", "not_applied"), errors.New("action id replay binding mismatch")
+		}
+		response := replaySummary(prior)
+		if err := lease.Release(ctx); err != nil {
+			return unknown(request.ActionID, "backend_unavailable"), err
+		}
+		return response, nil
 	}
 
 	decision := executor.gate.Admit(request.Scope, request.Action, request.Approval)
@@ -204,7 +227,13 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 
 func (executor *Executor) finish(ctx context.Context, lease writerLease, record JournalRecord, execution string, response []byte) error {
 	record.Execution = execution
-	record.Response = append([]byte(nil), response...)
+	var native nativeEnvelope
+	if json.Unmarshal(response, &native) == nil {
+		setTerminalMetadata(&record, native)
+	}
+	if record.Execution == "" {
+		record.Execution = execution
+	}
 	record.UpdatedAt = executor.clock()
 	if err := executor.journal.Finish(ctx, record); err != nil {
 		_ = lease.Quarantine(context.Background(), err)
@@ -218,8 +247,11 @@ func (executor *Executor) finish(ctx context.Context, lease writerLease, record 
 }
 
 func (executor *Executor) finishUnknown(ctx context.Context, lease writerLease, record JournalRecord, response []byte) error {
+	var native nativeEnvelope
+	if json.Unmarshal(response, &native) == nil {
+		setTerminalMetadata(&record, native)
+	}
 	record.Execution = "unknown"
-	record.Response = append([]byte(nil), response...)
 	record.UpdatedAt = executor.clock()
 	journalErr := executor.journal.Finish(ctx, record)
 	quarantineCause := journalErr
@@ -228,6 +260,18 @@ func (executor *Executor) finishUnknown(ctx context.Context, lease writerLease, 
 	}
 	quarantineErr := lease.Quarantine(context.Background(), quarantineCause)
 	return errors.Join(journalErr, quarantineErr)
+}
+
+func setTerminalMetadata(record *JournalRecord, native nativeEnvelope) {
+	record.Action = native.Action
+	record.Execution = native.Execution
+	record.Verification = native.Verification.Status
+	record.StateStatus = native.StateStatus
+	record.Cleanup = native.Cleanup.Status
+}
+
+func replaySummary(record JournalRecord) []byte {
+	return marshalReplay(record)
 }
 
 func (executor *Executor) commitment(request Request) ([32]byte, error) {
@@ -345,9 +389,8 @@ type nativeEnvelope struct {
 	Cleanup     struct {
 		Status string `json:"status"`
 	} `json:"cleanup"`
-	Error *struct {
-		Code string `json:"code"`
-	} `json:"error"`
+	Error  *string         `json:"error"`
+	Result json.RawMessage `json:"result"`
 }
 
 func validateNativeResponse(response []byte, request Request, operation string) error {
@@ -366,8 +409,15 @@ func validateNativeResponse(response []byte, request Request, operation string) 
 		envelope.ActionID != request.ActionID || envelope.Action != operation {
 		return errors.New("native response envelope does not match admitted request")
 	}
+	if envelope.Error != nil {
+		if *envelope.Error == "" || len(envelope.Result) != 0 && string(envelope.Result) != "null" {
+			return errors.New("native failure response has invalid error/result fields")
+		}
+	} else if len(envelope.Result) == 0 || string(envelope.Result) == "null" {
+		return errors.New("native success response has no result object")
+	}
 	switch envelope.Execution {
-	case "not_applied", "applied", "partially_applied", "unknown":
+	case "not_applied", "applied", "partial", "unknown":
 	default:
 		return errors.New("native response execution state is invalid")
 	}
@@ -388,6 +438,9 @@ func validateNativeResponse(response []byte, request Request, operation string) 
 	}
 	if envelope.Execution == "unknown" && envelope.Error == nil {
 		return errors.New("unknown native execution requires typed error")
+	}
+	if envelope.Error != nil && *envelope.Error == "" {
+		return errors.New("native error code is empty")
 	}
 	return nil
 }
@@ -411,11 +464,25 @@ func unknown(actionID, code string) []byte {
 }
 
 func marshalEnvelope(actionID, execution, verification, state, cleanup, code string) []byte {
+	var responseError any
+	if code != "" {
+		responseError = code
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"schema_version": "fixture.v0", "ok": code == "", "request_id": actionID,
 		"action_id": actionID, "action": "input", "execution": execution,
 		"verification": map[string]any{"status": verification}, "state_status": state,
-		"cleanup": map[string]any{"status": cleanup}, "error": map[string]any{"code": code},
+		"cleanup": map[string]any{"status": cleanup}, "error": responseError, "result": nil,
+	})
+	return payload
+}
+
+func marshalReplay(record JournalRecord) []byte {
+	payload, _ := json.Marshal(map[string]any{
+		"schema_version": "fixture.v0", "ok": true, "request_id": record.ActionID,
+		"action_id": record.ActionID, "action": record.Action, "execution": record.Execution,
+		"verification": map[string]any{"status": record.Verification}, "state_status": record.StateStatus,
+		"cleanup": map[string]any{"status": record.Cleanup}, "error": nil, "result": nil, "replayed": true,
 	})
 	return payload
 }
