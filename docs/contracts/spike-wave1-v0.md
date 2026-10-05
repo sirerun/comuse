@@ -29,3 +29,20 @@ Approval binding includes the complete native state identifier. Semantic canonic
 Desktop writer exclusion uses an OS process lock and a persistent bounded replay ledger. In-flight or unknown actions never receive a redispatch ticket. Expiration cannot silently make an action ID reusable; capacity fails closed. Crash-held input makes the state dirty; trusted reconciliation must verify cleanup before clearing it. No event posting is enabled by this source batch.
 
 Runtime lifetime amendment: activating a Swift image pins it for the process lifetime. Logical Close drains callback/runtime ownership; it must not advertise physical image unloading. The host restarts for native upgrades, and activation retention is bounded. Cancellation must serialize against library close.
+
+## Trusted host input source amendment
+
+An optional additive ABI v1 symbol is proposed for the same speculative candidate:
+
+```c
+int32_t comuse_spike_input_request_start(
+    uint64_t runtime_id, const uint8_t *request_json, size_t request_len,
+    uint64_t callback_token, comuse_spike_completion_fn completion,
+    uint64_t *out_handle);
+```
+
+It shares the existing asynchronous handle/cancel/drain lifecycle. The registered runtime must be active; request admission may originate on a Go worker while the proven process main thread pumps. All AX work executes on the main actor. The optional symbol does not make older ABI v1 read-only libraries unloadable or incompatible; missing host capability fails explicitly. Ordinary request-start and `bridgeclient.Call` remain read-only. The native mutation handler remains compile-closed pending integrated review/verification.
+
+This low-level ABI is exclusively for the trusted in-process Go host. A typed host backend constructs native input JSON internally; no model raw JSON, admission boolean, serialized approval or secret enables it. CLI/MCP tools cannot route to it. Native scope/reference/state/protected-target checks remain mandatory. The host already possesses approval authority; this ABI does not sandbox arbitrary code running with that host's authority.
+
+Trusted input composition acquires the shared writer lease, performs a fresh read-only native metadata/classification check before hashing payloads, rejects protected targets, normalizes the typed action, computes a private keyed commitment, and durably begins or resolves replay. Prior outcomes never dispatch or consume a new approval. A new ticket consumes exactly one opaque approval before dispatch. Pending native ownership is recorded durably and retained/quarantined through incomplete callback drain or cleanup. No CGEvent posting or insertion fallback is added.

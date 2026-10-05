@@ -55,7 +55,7 @@ Workers own named distinct files/directories and never modify common seam files 
 
 ## 5. Checkable Work Breakdown
 
-### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (0/33)
+### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (9/41)
 ### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (0/1)
 ### E3 -- Phase 1 semantic diffs and recovery -> docs/plans/E3-phase1-diffs-recovery.md (0/1)
 ### E4 -- Phase 2 authorized application opening -> docs/plans/E4-phase2-app-opening.md (0/1)
@@ -175,3 +175,7 @@ Preflight: clean main at `590fb6e`, public GitHub repository, no open PRs, no ac
 PR #6 landed at `2973799` after explicit operator authorization to use its recorded local checks despite the GitHub billing lock. The assembled feasibility candidate now contains fixture packaging, native runtime, AX identity/topology, partial terminal handling and state-bound approvals. Those later sources are not yet verified or independently reviewed. The current three Luna workers own L03 input, L06 writer/replay and L07 semantic projection; L05 policy source has completed its coding handoff. This is the documented four-slot fallback with rolling refill, not ten simultaneous workers.
 
 The shared host remains above the build-load ceiling, so new builds/tests are held. No fixture launch, Accessibility grant, native mutation acceptance or later CI exception is inferred from source handoff. The PR #6 local-check authorization applies to that seam only.
+
+## Review capacity refresh
+
+A fresh non-author reviewer spawn failed at the harness total-thread limit. The E1 epic now records three task-partitioned Luna cross-review receipts, with two non-author reviews per implementation task and explicit author exclusions even within shared source files. Final review still follows assembled verification at an exact head. The trusted host input composition is speculative same-candidate source; ordinary CLI/MCP remain read-only and native mutation activation remains gated.

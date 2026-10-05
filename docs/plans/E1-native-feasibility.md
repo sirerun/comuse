@@ -109,3 +109,21 @@ Coordinator findings: POLICY-EXP-001 expired diagnostic tombstones were removed 
 T1.31 additionally depends on T1.40. Final non-author reviews T1.32/T1.33 cover T1.39 and all coordinator integration changes at the exact candidate head.
 
 A partial Go run on assembled `765cc24` failed BUILD-001; policyprobe and seamprobe subprocess tests returned success, while inputprobe had no tests at that revision. The one-minute host load rose from a prior sub-10 observation to above 10 at command entry, so this run is diagnostic only and not a gate-compliant acceptance receipt. The shared lease was released. Subsequent checks require a numeric load guard immediately before claiming and again before running. New input source tests are now assembled but unrun. No later source/native/CI/release qualification is inferred.
+
+## Capacity override and trusted host composition
+
+The harness rejected creation of a fresh reviewer because its total-thread cap includes completed coding threads. Existing Luna agents therefore perform task-partitioned non-author cross-review at the exact assembled head. Preliminary source reviews do not satisfy verification dependencies. Each implementation task requires two reviewers who did not author that task's changes; their own changes are explicitly excluded, including separate author changes within a shared file. Receipts must enumerate covered task/commit/hunk scopes and exclusions, with the complete union checked by the coordinator. This preserves independent coverage without claiming fresh review threads existed.
+
+| Reviewer | Covered final implementation partitions | Authored partitions excluded |
+|---|---|---|
+| Native/CLI author | L01 runtime and lifetime fixes, L04 fixture, L05 policy, L06 desktop, L07 semantics, L09 MCP, L10 tooling, coordinator records | L02 AX, L03 input, L08 CLI, T1.41 host additions |
+| Policy/semantic/MCP/fixture author | L01 runtime and lifetime fixes, L02 AX, L03 input, L06 desktop, L08 CLI, L10 tooling, T1.41 host additions, coordinator records | L04 fixture, L05 policy, L07 semantics, L09 MCP |
+| Runtime/desktop/tooling author | L02 AX, L03 input, L04 fixture, L05 policy, L07 semantics, L08 CLI, L09 MCP, T1.41 host additions, coordinator records | L01 runtime and own lifetime fixes, L06 desktop, L10 tooling |
+
+T1.32/T1.33 receive the first two partition receipts; T1.43 receives the third. This matrix supersedes the earlier two fresh reviewer scheduling assumption, not the exact-head/non-author/verification gates. Root authored records receive non-author reviews; source-only cherry-pick assembly is separately checked for exact tree equivalence and interface compatibility.
+
+- [ ] T1.41 Compose trusted fixture input with writer/replay/native host boundary Owner: L03 under coordinator delegation kind: agent stage: implement lane: agent blocked-by: [T1.12, T1.14, T1.15, T1.30] acc: [Typed host-only asynchronous input entry point and journal composition preserve readonly adapters, protected classification before hashing, exactly one approval consume, replay suppression, native scope/state checks and callback/writer ownership; mutation remains disabled until the applicable safety gate. Same-candidate speculative source may precede completed integrated verification, never task acceptance.]
+- [ ] T1.42 Verify trusted host composition Owner: coordinator kind: agent stage: verify lane: agent blocked-by: [T1.41, T1.6] acc: [Source/unit/real native evidence is separated, negative readonly/protected/stale/replay/cancel cases pass under load/lease gates, and live mutations require reviewed integrated fixture-only admission and observed permissions.]
+- [ ] T1.43 Third non-author exact-head partition review Owner: runtime author reviewing only other authors' partitions kind: agent stage: review lane: agent blocked-by: [T1.31] acc: [Exact-head receipt covers the third matrix partition, excludes authored implementation/hunks, resolves all blockers, and completes two non-author reviews for every implementation task.]
+
+T1.31 additionally depends on T1.42. T1.34 additionally depends on T1.43. These rows do not imply source feasibility or acceptance of a live input path; T1.41 source preparation is explicitly speculative within this candidate.
