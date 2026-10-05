@@ -239,6 +239,7 @@ func Acquire(ctx context.Context, root string) (*Lease, error) {
 			record.Outcome = OutcomeUnknown
 			record.Updated = time.Now().UTC()
 			lease.state.Actions[id] = record
+			lease.markDirtyLocked("unresolved_action_after_restart")
 		}
 	}
 	if err = lease.saveLocked(); err != nil {
