@@ -72,6 +72,21 @@ func writeConfig(t *testing.T) string {
 	return path
 }
 
+func TestConfigReaderRejectsSymlinkWithoutFollowingIt(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(target, []byte(`{"library_path":"/tmp/lib.dylib","fixture":{"pid":123,"bundle_id":"com.sirerun.comuse.fixture","nonce":"n"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTrustedConfig(link); err == nil {
+		t.Fatal("symlink config was accepted")
+	}
+}
+
 func TestHelloUsesTrustedConfigAndBoundedJSONOutput(t *testing.T) {
 	client := &fakeClient{responses: [][]byte{[]byte(`{"schema_version":1,"request_id":"cliprobe-1","status":"completed","result":{"version":"v1"}}`)}}
 	var stdout, stderr strings.Builder
@@ -82,13 +97,13 @@ func TestHelloUsesTrustedConfigAndBoundedJSONOutput(t *testing.T) {
 	}
 }
 
-func TestA11yResolvesSelectedWindowInsideOneRuntime(t *testing.T) {
+func TestA11yResolvesOnlyUnambiguousFixtureWindowInsideOneRuntime(t *testing.T) {
 	client := &fakeClient{responses: [][]byte{
 		[]byte(`{"schema_version":1,"request_id":"cliprobe-windows","status":"completed","result":{"process_start_ref":"process-ref","windows":[{"ref":"opaque-window"}]}}`),
 		[]byte(`{"schema_version":1,"request_id":"cliprobe-a11y","status":"completed","result":{"observation_id":"obs-1","state_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","process_start_ref":"process-ref","window_ref":"opaque-window","root_refs":["root"],"elements":[{"ref":"root","role":"AXWindow","value_status":"omitted","child_refs":[],"parent_ref":null}],"coverage":{"status":"complete","reason":null,"depth_limit":16,"node_limit":256,"text_byte_limit":16384,"deadline_ms":250,"visited":1,"text_bytes":0,"truncated":false}}}`),
 	}}
 	var stdout, stderr strings.Builder
-	status := run([]string{"--config", writeConfig(t), "--window-index", "0", "--include-values", "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
+	status := run([]string{"--config", writeConfig(t), "--include-values", "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
 	if status != exitOK || !client.closed || len(client.requests) != 2 || client.requests[1]["window_ref"] != "opaque-window" || client.requests[1]["include_values"] != true || !strings.Contains(stdout.String(), `"canonical_state_id"`) {
 		t.Fatalf("status=%d closed=%v requests=%#v stdout=%q stderr=%q", status, client.closed, client.requests, stdout.String(), stderr.String())
 	}
@@ -98,7 +113,7 @@ func TestPartialWindowEnumerationIsEmittedWithPartialExitAndNoFollowup(t *testin
 	partial := []byte(`{"schema_version":1,"request_id":"cliprobe-windows","status":"partial","result":{"windows":[]}}`)
 	client := &fakeClient{responses: [][]byte{partial}}
 	var stdout, stderr strings.Builder
-	status := run([]string{"--config", writeConfig(t), "--window-index", "0", "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
+	status := run([]string{"--config", writeConfig(t), "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
 	if status != exitPartial || len(client.requests) != 1 || !strings.Contains(stdout.String(), `"status":"partial"`) {
 		t.Fatalf("status=%d requests=%d stdout=%q stderr=%q", status, len(client.requests), stdout.String(), stderr.String())
 	}
@@ -142,7 +157,7 @@ func TestCloseGetsFreshBudgetAfterSlowOperation(t *testing.T) {
 func TestMultipleFixtureWindowsAreRejectedAsAmbiguous(t *testing.T) {
 	client := &fakeClient{responses: [][]byte{[]byte(`{"schema_version":1,"request_id":"cliprobe-windows","status":"completed","result":{"process_start_ref":"process-ref","windows":[{"ref":"first"},{"ref":"second"}]}}`)}}
 	var stdout, stderr strings.Builder
-	status := run([]string{"--config", writeConfig(t), "--window-index", "0", "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
+	status := run([]string{"--config", writeConfig(t), "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
 	if status != exitNative || len(client.requests) != 1 || stdout.Len() != 0 {
 		t.Fatalf("status=%d requests=%d stdout=%q stderr=%q", status, len(client.requests), stdout.String(), stderr.String())
 	}
