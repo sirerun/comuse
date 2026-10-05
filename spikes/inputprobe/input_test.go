@@ -331,7 +331,7 @@ func TestUncertainCleanupQuarantinesWriterAndDoesNotRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lease.quarantines != 1 || lease.releases != 0 || journal.records[request.ActionID].Execution != "unknown" {
+	if lease.quarantines != 1 || lease.releases != 0 || journal.records[request.ActionID].Execution != "applied" || journal.records[request.ActionID].Verification != "verified" || journal.records[request.ActionID].Cleanup != "unknown" || journal.records[request.ActionID].ErrorCode != "outcome_unknown" {
 		t.Fatalf("quarantines=%d releases=%d record=%+v", lease.quarantines, lease.releases, journal.records[request.ActionID])
 	}
 	if _, err := executor.execute(context.Background(), request); err != nil {
