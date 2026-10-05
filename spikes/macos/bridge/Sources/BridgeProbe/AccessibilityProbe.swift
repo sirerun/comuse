@@ -516,6 +516,15 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
             "value_status": nodes[index].valueStatus,
             "child_refs": childReferences,
         ]
+        if nodes[index].role == (kAXTextFieldRole as String) {
+            let subrole = copyAXAttribute(nodes[index].element, kAXSubroleAttribute, deadline: deadline) as? String
+            row["input_classification"] = isKnownNonsecureTextField(role: nodes[index].role, subrole: subrole, identifier: nodes[index].identifier)
+                ? "fixture_normal_text_field" : "protected_or_uncertain_text_field"
+        } else if nodes[index].role == (kAXButtonRole as String), nodes[index].identifier == "buttoncounter" {
+            row["input_classification"] = "fixture_button"
+        } else {
+            row["input_classification"] = "unsupported"
+        }
         if let parentReference = nodes[index].parentIndex.flatMap({ references[$0] }) { row["parent_ref"] = parentReference }
         if index == 0 { row["parent_ref"] = NSNull() }
         if let identifier = nodes[index].identifier, identifier.utf8.count <= 256 { row["identifier"] = identifier }

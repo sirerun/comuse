@@ -10,6 +10,7 @@ struct comuse_bridge_library {
     int activated;
     uint32_t (*abi_version)(void);
     int32_t (*request_start)(const uint8_t *, size_t, uint64_t, comuse_spike_completion_fn, uint64_t *);
+    int32_t (*input_request_start)(uint64_t, const uint8_t *, size_t, uint64_t, comuse_spike_completion_fn, uint64_t *);
     int32_t (*request_cancel)(uint64_t);
     int32_t (*request_drain)(uint64_t);
     int32_t (*runtime_open)(uint64_t *);
@@ -49,6 +50,7 @@ int32_t bridge_library_open(const char *path, comuse_bridge_library **out_librar
     }
     LOAD_SYMBOL(library->abi_version, library->image, "comuse_spike_abi_version");
     LOAD_SYMBOL(library->request_start, library->image, "comuse_spike_request_start");
+    *(void **)(&library->input_request_start) = dlsym(library->image, "comuse_spike_input_request_start");
     LOAD_SYMBOL(library->request_cancel, library->image, "comuse_spike_request_cancel");
     LOAD_SYMBOL(library->request_drain, library->image, "comuse_spike_request_drain");
     LOAD_SYMBOL(library->runtime_open, library->image, "comuse_spike_runtime_open");
@@ -100,6 +102,11 @@ int32_t bridge_runtime_close(comuse_bridge_library *library, uint64_t runtime) {
 }
 int32_t bridge_request_start(comuse_bridge_library *library, const uint8_t *request, size_t length, uint64_t token, uint64_t *out_handle) {
     return library ? library->request_start(request, length, token, bridge_completion, out_handle) : COMUSE_SPIKE_INVALID_ARGUMENT;
+}
+int32_t bridge_input_request_start(comuse_bridge_library *library, uint64_t runtime, const uint8_t *request, size_t length, uint64_t token, uint64_t *out_handle) {
+    if (!library) return COMUSE_SPIKE_INVALID_ARGUMENT;
+    if (!library->input_request_start) return COMUSE_SPIKE_UNSUPPORTED_OPERATION;
+    return library->input_request_start(runtime, request, length, token, bridge_completion, out_handle);
 }
 int32_t bridge_request_cancel(comuse_bridge_library *library, uint64_t handle) {
     return library ? library->request_cancel(handle) : COMUSE_SPIKE_INVALID_ARGUMENT;

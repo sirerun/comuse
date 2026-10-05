@@ -110,7 +110,9 @@ func startRequest(
     _ length: Int,
     _ callbackToken: UInt64,
     _ callback: (@convention(c) (UInt64, UnsafePointer<UInt8>?, Int, UInt64) -> Void)?,
-    _ outHandle: UnsafeMutablePointer<UInt64>?
+    _ outHandle: UnsafeMutablePointer<UInt64>?,
+    expectedRuntimeID: UInt64? = nil,
+    hostInputOnly: Bool = false
 ) -> Int32 {
     guard let bytes, let callback, let outHandle, length >= 0 else {
         return 2
@@ -122,7 +124,7 @@ func startRequest(
     guard let request = try? JSONDecoder().decode(SpikeRequest.self, from: requestData),
           request.schema_version == 1,
           !request.request_id.isEmpty,
-          request.op == "hello" || supportedOperations.contains(request.op)
+          (hostInputOnly ? ["read_value", "replace", "press"].contains(request.op) : (request.op == "hello" || supportedOperations.contains(request.op)))
     else {
         return 3
     }
@@ -141,6 +143,14 @@ func startRequest(
         guard runtime.acceptingRequests else {
             nativeRegistry.lock.unlock()
             return 11
+        }
+        if let expectedRuntimeID, runtime.id != expectedRuntimeID {
+            nativeRegistry.lock.unlock()
+            return 10
+        }
+        if hostInputOnly && expectedRuntimeID == nil {
+            nativeRegistry.lock.unlock()
+            return 10
         }
         runtimeID = runtime.id
     }

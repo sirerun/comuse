@@ -15,11 +15,12 @@ enum comuse_spike_status {
     COMUSE_SPIKE_UNKNOWN_HANDLE = 5, COMUSE_SPIKE_NOT_DRAINABLE = 6,
     COMUSE_SPIKE_INTERNAL_ERROR = 7, COMUSE_SPIKE_CAPACITY_EXCEEDED = 8,
     COMUSE_SPIKE_WRONG_THREAD = 9, COMUSE_SPIKE_RUNTIME_REQUIRED = 10,
-    COMUSE_SPIKE_RUNTIME_CLOSED = 11
+    COMUSE_SPIKE_RUNTIME_CLOSED = 11, COMUSE_SPIKE_UNSUPPORTED_OPERATION = 12
 };
 typedef void (*comuse_spike_completion_fn)(uint64_t handle, const uint8_t *bytes, size_t length, uint64_t callback_token);
 uint32_t comuse_spike_abi_version(void);
 int32_t comuse_spike_request_start(const uint8_t *request, size_t request_len, uint64_t callback_token, comuse_spike_completion_fn completion, uint64_t *out_handle);
+int32_t comuse_spike_input_request_start(uint64_t runtime, const uint8_t *request, size_t request_len, uint64_t callback_token, comuse_spike_completion_fn completion, uint64_t *out_handle);
 int32_t comuse_spike_request_cancel(uint64_t handle);
 int32_t comuse_spike_request_drain(uint64_t handle);
 int32_t comuse_spike_runtime_open(uint64_t *out_runtime);

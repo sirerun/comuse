@@ -9,12 +9,14 @@ struct InputProbeTests {
     func invalidRequestsAreRejectedBeforeAnyNativeAction() throws {
         let response = try decode("{}")
         #expect(response["execution"] as? String == "not_applied")
-        #expect((response["error"] as? [String: String])?["code"] == "validation_error")
+        #expect(response["error"] as? String == "validation_error")
+        #expect(response["result"] is NSNull)
 
         let oversized = handleInputProbe(Data(repeating: 0x20, count: 32 * 1024 + 1))
         let oversizedResponse = try #require(JSONSerialization.jsonObject(with: oversized) as? [String: Any])
         #expect(oversizedResponse["execution"] as? String == "not_applied")
-        #expect((oversizedResponse["error"] as? [String: String])?["code"] == "validation_error")
+        #expect(oversizedResponse["error"] as? String == "validation_error")
+        #expect(oversizedResponse["result"] is NSNull)
     }
 
     @Test
@@ -26,7 +28,8 @@ struct InputProbeTests {
         #expect(response["action"] as? String == "replace")
         #expect(response["execution"] as? String == "not_applied")
         #expect(response["cleanup"] as? [String: String] == ["status": "not_required"])
-        #expect((response["error"] as? [String: String])?["code"] == "unsupported")
+        #expect(response["error"] as? String == "unsupported")
+        #expect(response["result"] is NSNull)
     }
 
     private func decode(_ request: String) throws -> [String: Any] {

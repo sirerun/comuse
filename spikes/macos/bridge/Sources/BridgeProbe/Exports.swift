@@ -14,6 +14,18 @@ public func comuse_spike_request_start(
     startRequest(bytes, length, token, callback, outHandle)
 }
 
+@_cdecl("comuse_spike_input_request_start")
+public func comuse_spike_input_request_start(
+    _ runtime: UInt64,
+    _ bytes: UnsafePointer<UInt8>?,
+    _ length: Int,
+    _ token: UInt64,
+    _ callback: (@convention(c) (UInt64, UnsafePointer<UInt8>?, Int, UInt64) -> Void)?,
+    _ outHandle: UnsafeMutablePointer<UInt64>?
+) -> Int32 {
+    startRequest(bytes, length, token, callback, outHandle, expectedRuntimeID: runtime, hostInputOnly: true)
+}
+
 @_cdecl("comuse_spike_request_cancel")
 public func comuse_spike_request_cancel(_ handle: UInt64) -> Int32 {
     cancelRequest(handle)

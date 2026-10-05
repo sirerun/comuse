@@ -111,6 +111,22 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return c.callValidated(ctx, requestJSON, request.RequestID, HostInputRequest{}, false)
+}
+
+// InputCall is an additive trusted-host transport. It accepts typed fields only; public readonly Call cannot route input operations.
+func (c *Client) InputCall(ctx context.Context, request HostInputRequest) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("InputCall requires a context")
+	}
+	requestJSON, err := marshalHostInputRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	return c.callValidated(ctx, requestJSON, request.RequestID, request, true)
+}
+
+func (c *Client) callValidated(ctx context.Context, requestJSON []byte, requestID string, input HostInputRequest, hostInput bool) ([]byte, error) {
 	if C.bridge_is_main_thread() != 0 {
 		return nil, ErrCallOnMainThread
 	}
@@ -125,13 +141,12 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	state := newPending(c)
 	state.token = cgo.NewHandle(state)
 	var nativeHandle C.uint64_t
-	status := int32(C.bridge_request_start(
-		c.library,
-		(*C.uint8_t)(unsafe.Pointer(&requestJSON[0])),
-		C.size_t(len(requestJSON)),
-		C.uint64_t(state.token),
-		&nativeHandle,
-	))
+	var status int32
+	if hostInput {
+		status = int32(C.bridge_input_request_start(c.library, C.uint64_t(c.runtimeID), (*C.uint8_t)(unsafe.Pointer(&requestJSON[0])), C.size_t(len(requestJSON)), C.uint64_t(state.token), &nativeHandle))
+	} else {
+		status = int32(C.bridge_request_start(c.library, (*C.uint8_t)(unsafe.Pointer(&requestJSON[0])), C.size_t(len(requestJSON)), C.uint64_t(state.token), &nativeHandle))
+	}
 	if status != 0 {
 		state.token.Delete()
 		c.mu.Unlock()
@@ -170,7 +185,14 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if completed.err != nil {
 		return nil, completed.err
 	}
-	response, err := validateResponse(completed.bytes, request.RequestID)
+	if hostInput {
+		_, validateErr := validateHostInputResponse(completed.bytes, input)
+		if validateErr != nil {
+			return completed.bytes, validateErr
+		}
+		return completed.bytes, nil
+	}
+	response, err := validateResponse(completed.bytes, requestID)
 	if err != nil {
 		return completed.bytes, err
 	}

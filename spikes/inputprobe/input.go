@@ -15,6 +15,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/sirerun/comuse/spikes/bridgeclient"
 	"github.com/sirerun/comuse/spikes/policyprobe"
 )
 
@@ -55,7 +56,19 @@ type durableJournal interface {
 // nativeBackend is private so callers cannot expose an arbitrary mutation Call.
 // Its implementation is owned by the integrated coordinator, not bridgeclient.
 type nativeBackend interface {
-	Call(context.Context, []byte) ([]byte, error)
+	Inspect(context.Context, NativeTargetRequest) (NativeClassification, error)
+	InputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error)
+}
+
+type NativeTargetRequest struct {
+	PID                                                                             int32
+	BundleID, FixtureNonce, ProcessStartRef, WindowRef, ElementRef, ExpectedStateID string
+}
+
+type NativeClassification struct {
+	Complete                                        bool
+	StateID, ProcessStartRef, WindowRef, ElementRef string
+	Role, Identifier, InputClass, ValueStatus       string
 }
 
 type JournalRecord struct {
@@ -117,16 +130,33 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 	if err != nil {
 		return refusal(request.ActionID, "unsupported", "not_applied"), err
 	}
-	if err := validateRequest(request, operation); err != nil {
-		return refusal(request.ActionID, "validation_error", "not_applied"), err
-	}
-	commitment, err := executor.commitment(request)
-	if err != nil {
+	if err := validateRequestShape(request, operation); err != nil {
 		return refusal(request.ActionID, "validation_error", "not_applied"), err
 	}
 	lease, err := executor.writer.Acquire(ctx)
 	if err != nil {
 		return refusal(request.ActionID, "desktop_busy", "not_applied"), err
+	}
+	nativeScope := NativeTargetRequest{PID: request.Scope.Process.PID, BundleID: request.Scope.Process.BundleID, FixtureNonce: request.Scope.FixtureNonce, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef, ExpectedStateID: request.Scope.StateID}
+	classification, err := executor.backend.Inspect(ctx, nativeScope)
+	if err != nil {
+		_ = lease.Release(context.Background())
+		return refusal(request.ActionID, "classification_unavailable", "not_applied"), err
+	}
+	target, err := classifyNativeTarget(request, operation, classification)
+	if err != nil {
+		_ = lease.Release(context.Background())
+		return refusal(request.ActionID, "protected_or_unsupported_target", "not_applied"), err
+	}
+	request.Action.Target = target
+	if err := validateRequest(request, operation); err != nil {
+		_ = lease.Release(context.Background())
+		return refusal(request.ActionID, "validation_error", "not_applied"), err
+	}
+	commitment, err := executor.commitment(request)
+	if err != nil {
+		_ = lease.Release(context.Background())
+		return refusal(request.ActionID, "validation_error", "not_applied"), err
 	}
 	prior, found, err := executor.journal.Lookup(ctx, request.ActionID)
 	if err != nil {
@@ -183,20 +213,10 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 		return response, errors.Join(err, finishErr)
 	}
 
-	payload, err := makeNativeRequest(request, operation)
-	if err != nil {
-		response := refusal(request.ActionID, "validation_error", "not_applied")
-		finishErr := executor.finish(context.Background(), lease, record, "not_applied", response)
-		return response, errors.Join(err, finishErr)
-	}
-	if len(payload) > maxNativeRequest {
-		response := refusal(request.ActionID, "validation_error", "not_applied")
-		finishErr := executor.finish(context.Background(), lease, record, "not_applied", response)
-		return response, errors.Join(errors.New("native request exceeds size limit"), finishErr)
-	}
+	payload := makeHostRequest(request, operation)
 
 	// Exactly one private backend call. Any error after dispatch is unknown; no retry.
-	response, callErr := executor.backend.Call(ctx, payload)
+	response, callErr := executor.backend.InputCall(ctx, payload)
 	if callErr != nil {
 		unknownResponse := unknown(request.ActionID, "backend_unavailable")
 		if err := executor.finishUnknown(context.Background(), lease, record, unknownResponse); err != nil {
@@ -270,20 +290,33 @@ func setTerminalMetadata(record *JournalRecord, native nativeEnvelope) {
 	record.StateStatus = native.StateStatus
 	record.Cleanup = native.Cleanup.Status
 	if native.Error != nil {
-		var code string
-		if json.Unmarshal(native.Error, &code) == nil && safeErrorCode(code) { record.ErrorCode = code } else { record.ErrorCode = "native_error" }
+		if safeErrorCode(*native.Error) {
+			record.ErrorCode = *native.Error
+		} else {
+			record.ErrorCode = "native_error"
+		}
 	}
 }
 
 func replaySummary(record JournalRecord) []byte {
-	if record.Execution == "pending" || record.Execution == "" { record.Execution, record.ErrorCode = "unknown", "outcome_unknown" }
-	if record.Execution == "unknown" && record.ErrorCode == "" { record.ErrorCode = "outcome_unknown" }
+	if record.Execution == "pending" || record.Execution == "" {
+		record.Execution, record.ErrorCode = "unknown", "outcome_unknown"
+	}
+	if record.Execution == "unknown" && record.ErrorCode == "" {
+		record.ErrorCode = "outcome_unknown"
+	}
 	return marshalReplay(record)
 }
 
 func safeErrorCode(code string) bool {
-	if len(code) == 0 || len(code) > 64 { return false }
-	for _, r := range code { if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') { return false } }
+	if len(code) == 0 || len(code) > 64 {
+		return false
+	}
+	for _, r := range code {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+			return false
+		}
+	}
 	return true
 }
 
@@ -303,46 +336,17 @@ func (executor *Executor) commitment(request Request) ([32]byte, error) {
 	return commitment, nil
 }
 
-type wireScope struct {
-	PID             int32  `json:"pid"`
-	BundleID        string `json:"bundle_id"`
-	FixtureNonce    string `json:"fixture_nonce"`
-	ProcessStartRef string `json:"process_start_ref"`
-	WindowRef       string `json:"window_ref"`
-	ElementRef      string `json:"element_ref"`
-	ExpectedStateID string `json:"expected_state_id"`
-}
-
-type wireRequest struct {
-	SchemaVersion int       `json:"schema_version"`
-	RequestID     string    `json:"request_id"`
-	ActionID      string    `json:"action_id"`
-	Operation     string    `json:"op"`
-	Scope         wireScope `json:"scope"`
-	Text          string    `json:"text,omitempty"`
-}
-
-func makeNativeRequest(request Request, operation string) ([]byte, error) {
-	value := wireRequest{
-		SchemaVersion: 1,
-		RequestID:     request.ActionID,
-		ActionID:      request.ActionID,
-		Operation:     operation,
-		Scope: wireScope{
-			PID:             request.Scope.Process.PID,
-			BundleID:        request.Scope.Process.BundleID,
-			FixtureNonce:    request.Scope.FixtureNonce,
-			ProcessStartRef: request.Scope.Process.LaunchGeneration,
-			WindowRef:       request.Scope.WindowRef,
-			ElementRef:      request.Scope.ElementRef,
-			ExpectedStateID: request.Scope.StateID,
-		},
-		Text: request.Action.Text,
+func makeHostRequest(request Request, operation string) bridgeclient.HostInputRequest {
+	return bridgeclient.HostInputRequest{
+		RequestID: request.ActionID, ActionID: request.ActionID, Operation: operation,
+		PID: request.Scope.Process.PID, BundleID: request.Scope.Process.BundleID,
+		FixtureNonce: request.Scope.FixtureNonce, ProcessStartRef: request.Scope.Process.LaunchGeneration,
+		WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef,
+		ExpectedStateID: request.Scope.StateID, Text: request.Action.Text,
 	}
-	return json.Marshal(value)
 }
 
-func validateRequest(request Request, operation string) error {
+func validateRequestShape(request Request, operation string) error {
 	if request.ActionID == "" || len(request.ActionID) > 128 || request.Scope.StateID == "" ||
 		request.Scope.Process.PID <= 0 || request.Scope.Process.BundleID != "com.sirerun.comuse.fixture" ||
 		request.Scope.Process.LaunchGeneration == "" || request.Scope.FixtureNonce == "" ||
@@ -362,18 +366,44 @@ func validateRequest(request Request, operation string) error {
 		return ErrInvalidInput
 	}
 	switch operation {
-	case "read_value", "replace":
-		if request.Action.Target != policyprobe.TargetTextField {
-			return ErrInvalidInput
-		}
-	case "press":
-		if request.Action.Target != policyprobe.TargetButton {
-			return ErrInvalidInput
-		}
+	case "read_value", "replace", "press":
 	default:
 		return ErrInvalidInput
 	}
 	return nil
+}
+
+func validateRequest(request Request, operation string) error {
+	if err := validateRequestShape(request, operation); err != nil {
+		return err
+	}
+	if operation == "press" && request.Action.Target != policyprobe.TargetButton {
+		return ErrInvalidInput
+	}
+	if (operation == "read_value" || operation == "replace") && request.Action.Target != policyprobe.TargetTextField {
+		return ErrInvalidInput
+	}
+	return nil
+}
+
+func classifyNativeTarget(request Request, operation string, target NativeClassification) (policyprobe.TargetKind, error) {
+	if !target.Complete || target.StateID != request.Scope.StateID || target.ProcessStartRef != request.Scope.Process.LaunchGeneration || target.WindowRef != request.Scope.WindowRef || target.ElementRef != request.Scope.ElementRef {
+		return 0, errors.New("fresh complete native observation does not match approved state and scope")
+	}
+	switch operation {
+	case "read_value", "replace":
+		if target.InputClass != "fixture_normal_text_field" || target.Role != "AXTextField" || target.Identifier != "textfield" || target.ValueStatus != "included_synthetic_normal" {
+			return 0, errors.New("native target is protected, uncertain, or unsupported")
+		}
+		return policyprobe.TargetTextField, nil
+	case "press":
+		if target.InputClass != "fixture_button" || target.Role != "AXButton" || target.Identifier != "buttoncounter" {
+			return 0, errors.New("native button target is uncertain or unsupported")
+		}
+		return policyprobe.TargetButton, nil
+	default:
+		return 0, errors.New("native operation is unsupported")
+	}
 }
 
 func operationFor(kind policyprobe.ActionKind) (string, error) {
@@ -492,8 +522,10 @@ func marshalEnvelope(actionID, execution, verification, state, cleanup, code str
 
 func marshalReplay(record JournalRecord) []byte {
 	var replayError any
-	if record.ErrorCode != "" { replayError = record.ErrorCode }
-	ok := record.Execution == "applied" || record.Execution == "partial"
+	if record.ErrorCode != "" {
+		replayError = record.ErrorCode
+	}
+	ok := (record.Execution == "applied" || record.Execution == "partial") && record.ErrorCode == ""
 	payload, _ := json.Marshal(map[string]any{
 		"schema_version": "fixture.v0", "ok": ok, "request_id": record.ActionID,
 		"action_id": record.ActionID, "action": record.Action, "execution": record.Execution,
