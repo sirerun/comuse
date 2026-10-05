@@ -7,7 +7,8 @@ installed-app acceptance.
 ## Environment
 
 The runner script writes the exact commit, OS/tool versions, selector, and
-artifact locations to `environment.txt`.
+artifact locations to `environment.txt`. It requires a clean source worktree
+and rejects exact-head evidence if the source or HEAD changes during checks.
 
 ## Checks
 

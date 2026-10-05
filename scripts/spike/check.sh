@@ -38,13 +38,21 @@ artifact_root="$(cd "$artifact_root" && pwd -P)" || exit 73
 [[ -w "$artifact_root" ]] || { echo "artifact root is not writable" >&2; exit 73; }
 case "$selector" in go|swift|fixture|native|cli|mcp) ;; *) usage; exit 64 ;; esac
 
+repo_root="$(cd "$(dirname "$0")/../.." && pwd -P)" || exit 73
+cd "$repo_root" || exit 73
+head_sha="$(git rev-parse HEAD)" || exit 73
+source_status="$(git status --porcelain --untracked-files=normal)" || exit 73
+if [[ -n "$source_status" ]]; then
+  echo "exact-head checks require a clean source worktree" >&2
+  exit 75
+fi
+
 probe="$(mktemp "$artifact_root/.comuse-write-check.XXXXXX")" || {
   echo "artifact root failed exclusive write probe" >&2
   exit 73
 }
 rm -- "$probe"
 
-repo_root="$(cd "$(dirname "$0")/../.." && pwd -P)" || exit 73
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 evidence_dir="$artifact_root/comuse-spike-$run_id"
 mkdir "$evidence_dir" 2>/dev/null || {
@@ -61,7 +69,6 @@ mkdir -p "$SWIFTPM_MODULECACHE"
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 cd "$repo_root" || exit 73
-head_sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 status_file="$evidence_dir/status.tsv"
 log_file="$evidence_dir/commands.log"
 tool_file="$evidence_dir/environment.txt"
@@ -176,6 +183,12 @@ case "$selector" in
     ;;
 esac
 
+final_head="$(git rev-parse HEAD)" || final_head=unknown
+final_status="$(git status --porcelain --untracked-files=normal)" || final_status=unknown
+if [[ "$final_head" != "$head_sha" || -n "$final_status" ]]; then
+  record fail "source changed during checks; exact-head evidence invalid"
+  result=1
+fi
 append_evidence
 printf 'EVIDENCE_DIR=%s\n' "$evidence_dir"
 cat "$status_file"
