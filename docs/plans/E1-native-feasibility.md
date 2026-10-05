@@ -127,3 +127,14 @@ T1.32/T1.33 receive the first two partition receipts; T1.43 receives the third. 
 - [ ] T1.43 Third non-author exact-head partition review Owner: runtime author reviewing only other authors' partitions kind: agent stage: review lane: agent blocked-by: [T1.31] acc: [Exact-head receipt covers the third matrix partition, excludes authored implementation/hunks, resolves all blockers, and completes two non-author reviews for every implementation task.]
 
 T1.31 additionally depends on T1.42. T1.34 additionally depends on T1.43. These rows do not imply source feasibility or acceptance of a live input path; T1.41 source preparation is explicitly speculative within this candidate.
+
+## 2026-10-05 resumed delivery authority and remediation
+
+The owner now authorizes local verification as the delivery gate for subsequent candidates while hosted Actions cannot start because of account billing. This supersedes the earlier seam-only scope for that specific constraint. Required local checks, independent exact-head review, repository protections, and runtime acceptance gates remain binding. No hosted CI success is claimed.
+
+Fresh non-author review capacity is available again. The fresh reviewer covers the full assembled candidate; the native author reviews other authors' policy, semantic, MCP, desktop, fixture and tooling changes, and the MCP author reviews native, input, CLI, host, desktop, fixture and tooling changes. Each receipt excludes authored changes. These receipts replace the historical scheduling matrix above and must provide two non-author reviews per implementation task.
+
+- [ ] T1.44 Resolve resumed source review findings Owner: lane authors and coordinator kind: agent stage: implement lane: agent blocked-by: [T1.30] acc: [Replay is serialized and create-only; retained outcomes omit sensitive values; execution terminals match the contract; uncertain protected classification fails closed; trusted config uses a bounded no-follow descriptor; cleanup preserves dirty state and omits panic payloads; semantic error and expiry checks follow the frozen contract.]
+- [ ] T1.45 Verify resumed remediation Owner: coordinator kind: agent stage: verify lane: agent blocked-by: [T1.44] acc: [Relevant Go, disabled-cgo, race, lint and Swift checks run against the exact assembled source under host load and lease limits; runtime and fixture evidence remain separately recorded.]
+
+T1.31 additionally depends on T1.45. T1.43 is assigned to the fresh non-author full-candidate reviewer. All final receipts cover these fixes and coordinator integration at the exact final head. The first assembled gated Go run failed on a duplicate desktop test and input/semantic assertions; passing individual packages do not constitute a candidate pass. Source fixes are integrated, with rerun pending the shared host load gate.
