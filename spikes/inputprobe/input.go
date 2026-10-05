@@ -521,6 +521,12 @@ func marshalEnvelope(actionID, execution, verification, state, cleanup, code str
 }
 
 func marshalReplay(record JournalRecord) []byte {
+	if record.Execution == "pending" || record.Execution == "" {
+		record.Execution = "unknown"
+		if record.ErrorCode == "" {
+			record.ErrorCode = "outcome_unknown"
+		}
+	}
 	var replayError any
 	if record.ErrorCode != "" {
 		replayError = record.ErrorCode
