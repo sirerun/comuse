@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import CryptoKit
 
 private let accessibilityRequestLimit = 32 * 1024
 private let accessibilityResponseLimit = 64 * 1024
@@ -10,6 +11,8 @@ private let maximumAXDepth = 16
 private let maximumAXNodes = 256
 private let maximumAXTextBytes = 16 * 1024
 private let maximumAXDuration: TimeInterval = 0.25
+private let maximumRetainedReferences = 1024
+private let referenceLifetime: Duration = .seconds(60)
 
 private struct ProbeRequest {
     let requestID: String
@@ -31,6 +34,24 @@ private struct ProcessIdentity {
     let launchDate: Date
 }
 
+enum AccessibilityResolution {
+    case resolved(AXUIElement)
+    case expired
+    case stale
+    case scopeMismatch
+    case unavailable
+
+    var responseCode: String? {
+        switch self {
+        case .resolved: return nil
+        case .expired: return "reference_expired"
+        case .stale: return "reference_stale"
+        case .scopeMismatch: return "scope_mismatch"
+        case .unavailable: return "reference_unavailable"
+        }
+    }
+}
+
 @MainActor
 private final class AXReferenceStore {
     struct WindowEntry {
@@ -38,19 +59,118 @@ private final class AXReferenceStore {
         let identity: ProcessIdentity
         let nonce: String
         let window: AXUIElement
+        var expiresAt: ContinuousClock.Instant
     }
 
     struct ElementEntry {
         let reference: String
         let identity: ProcessIdentity
         let nonce: String
+        let windowReference: String
         let window: AXUIElement
         let element: AXUIElement
         let parent: AXUIElement
+        let parentReference: String?
+        let role: String
+        let identifier: String?
+        var childReferences: [String]
+        var expiresAt: ContinuousClock.Instant
+    }
+
+    struct ProcessEntry {
+        let identity: ProcessIdentity
+        let reference: String
     }
 
     var windows: [String: WindowEntry] = [:]
     var elements: [String: ElementEntry] = [:]
+    var processes: [pid_t: ProcessEntry] = [:]
+    var expiredReferences: [String: ContinuousClock.Instant] = [:]
+
+    func purgeExpired() {
+        let now = ContinuousClock().now
+        for (ref, entry) in windows where entry.expiresAt <= now { expiredReferences[ref] = now.advanced(by: referenceLifetime) }
+        for (ref, entry) in elements where entry.expiresAt <= now { expiredReferences[ref] = now.advanced(by: referenceLifetime) }
+        windows = windows.filter { $0.value.expiresAt > now }
+        elements = elements.filter { $0.value.expiresAt > now }
+        expiredReferences = expiredReferences.filter { $0.value > now }
+        if expiredReferences.count > maximumRetainedReferences {
+            for ref in expiredReferences.sorted(by: { $0.value < $1.value }).prefix(expiredReferences.count - maximumRetainedReferences) {
+                expiredReferences.removeValue(forKey: ref.key)
+            }
+        }
+    }
+
+    func prepareScope(_ identity: ProcessIdentity, nonce: String) {
+        purgeExpired()
+        processes = processes.filter { $0.key == identity.pid }
+        windows = windows.filter { $0.value.identity.pid != identity.pid || ($0.value.nonce == nonce && sameProcessIdentity($0.value.identity, identity)) }
+        elements = elements.filter { $0.value.identity.pid != identity.pid || ($0.value.nonce == nonce && sameProcessIdentity($0.value.identity, identity)) }
+        if let current = processes[identity.pid], !sameProcessIdentity(current.identity, identity) {
+            processes.removeValue(forKey: identity.pid)
+        }
+        if processes[identity.pid] == nil {
+            processes[identity.pid] = ProcessEntry(identity: identity, reference: UUID().uuidString)
+        }
+    }
+
+    func processReference(_ identity: ProcessIdentity) -> String {
+        if let existing = processes[identity.pid], sameProcessIdentity(existing.identity, identity) {
+            return existing.reference
+        }
+        let entry = ProcessEntry(identity: identity, reference: UUID().uuidString)
+        processes[identity.pid] = entry
+        return entry.reference
+    }
+
+    func windowReference(_ window: AXUIElement, identity: ProcessIdentity, nonce: String) -> String? {
+        purgeExpired()
+        if let key = windows.first(where: {
+            $0.value.nonce == nonce && sameProcessIdentity($0.value.identity, identity) && CFEqual($0.value.window, window)
+        })?.key {
+            windows[key]?.expiresAt = ContinuousClock().now.advanced(by: referenceLifetime)
+            expiredReferences.removeValue(forKey: key)
+            return key
+        }
+        guard windows.count + elements.count < maximumRetainedReferences else { return nil }
+        let reference = UUID().uuidString
+        windows[reference] = WindowEntry(reference: reference, identity: identity, nonce: nonce, window: window, expiresAt: ContinuousClock().now.advanced(by: referenceLifetime))
+        expiredReferences.removeValue(forKey: reference)
+        return reference
+    }
+
+    func elementReference(_ element: AXUIElement, parent: AXUIElement, parentReference: String?, window: AXUIElement, windowReference: String, identity: ProcessIdentity, nonce: String, role: String, identifier: String?) -> String? {
+        purgeExpired()
+        if let key = elements.first(where: {
+            $0.value.nonce == nonce && sameProcessIdentity($0.value.identity, identity) &&
+            $0.value.windowReference == windowReference && CFEqual($0.value.window, window) &&
+            CFEqual($0.value.element, element) && CFEqual($0.value.parent, parent) && $0.value.parentReference == parentReference
+        })?.key {
+            elements[key]?.expiresAt = ContinuousClock().now.advanced(by: referenceLifetime)
+            expiredReferences.removeValue(forKey: key)
+            return key
+        }
+        guard windows.count + elements.count < maximumRetainedReferences else { return nil }
+        let reference = UUID().uuidString
+        elements[reference] = ElementEntry(reference: reference, identity: identity, nonce: nonce, windowReference: windowReference, window: window, element: element, parent: parent, parentReference: parentReference, role: role, identifier: identifier, childReferences: [], expiresAt: ContinuousClock().now.advanced(by: referenceLifetime))
+        expiredReferences.removeValue(forKey: reference)
+        return reference
+    }
+
+    func removeUnobservedElements(identity: ProcessIdentity, nonce: String, windowReference: String, observed: Set<String>) {
+        elements = elements.filter { key, value in
+            !(value.windowReference == windowReference && value.nonce == nonce && sameProcessIdentity(value.identity, identity) && !observed.contains(key))
+        }
+    }
+
+    func removeUnobservedWindows(identity: ProcessIdentity, nonce: String, observed: Set<String>) {
+        let removedWindows = Set(windows.keys.filter { key in
+            guard let entry = windows[key] else { return false }
+            return entry.nonce == nonce && sameProcessIdentity(entry.identity, identity) && !observed.contains(key)
+        })
+        windows = windows.filter { !removedWindows.contains($0.key) }
+        elements = elements.filter { !removedWindows.contains($0.value.windowReference) }
+    }
 }
 
 @MainActor
@@ -92,14 +212,25 @@ func handleAccessibilityProbe(_ requestData: Data) -> Data {
 
 @MainActor
 func resolveAccessibilityElement(_ ref: String, pid: Int32) -> AXUIElement? {
-    guard let entry = axReferences.elements[ref], entry.identity.pid == pid,
-          let currentIdentity = processIdentity(pid: pid), sameProcessIdentity(currentIdentity, entry.identity),
-          AXIsProcessTrusted(), fixtureWindowStillMatches(entry.window, identity: entry.identity, nonce: entry.nonce),
-          sameAXElement(entry.element, parent: entry.parent) else {
-        axReferences.elements.removeValue(forKey: ref)
-        return nil
+    guard case let .resolved(element) = resolveAccessibilityElementResult(ref, pid: pid) else { return nil }
+    return element
+}
+
+@MainActor
+func resolveAccessibilityElementResult(_ ref: String, pid: Int32) -> AccessibilityResolution {
+    axReferences.purgeExpired()
+    guard let entry = axReferences.elements[ref] else {
+        return axReferences.expiredReferences[ref] == nil ? .unavailable : .expired
     }
-    return entry.element
+    guard entry.identity.pid == pid else { return .scopeMismatch }
+    guard let currentIdentity = processIdentity(pid: pid), sameProcessIdentity(currentIdentity, entry.identity) else {
+        return .stale
+    }
+    guard AXIsProcessTrusted() else { return .unavailable }
+    guard fixtureWindowStillMatches(entry.window, identity: entry.identity, nonce: entry.nonce),
+          sameAXElement(entry.element, parent: entry.parent),
+          currentAXClassificationMatches(entry) else { return .stale }
+    return .resolved(entry.element)
 }
 
 @MainActor
@@ -129,6 +260,8 @@ private func listFixtureWindows(scope: ProbeScope, requestID: String) -> Data {
           let identity = validateProcess(scope), AXIsProcessTrusted() else {
         return probeResponse(requestID: requestID, status: "error", error: "scope_or_permission_denied")
     }
+    axReferences.prepareScope(identity, nonce: scope.nonce)
+    let processStartReference = axReferences.processReference(identity)
     let appElement = AXUIElementCreateApplication(scope.pid)
     AXUIElementSetMessagingTimeout(appElement, 0.05)
     let deadline = Date().addingTimeInterval(maximumAXDuration)
@@ -136,8 +269,8 @@ private func listFixtureWindows(scope: ProbeScope, requestID: String) -> Data {
         return probeResponse(requestID: requestID, status: "error", error: "windows_unavailable")
     }
 
-    resetAllReferences()
     var rows: [[String: Any]] = []
+    var observed = Set<String>()
     var timedOut = false
     for window in rawWindows.prefix(maximumAXNodes) {
         AXUIElementSetMessagingTimeout(window, 0.05)
@@ -147,19 +280,46 @@ private func listFixtureWindows(scope: ProbeScope, requestID: String) -> Data {
             continue
         }
         guard title == "Comuse Fixture \(scope.nonce)" else { continue }
-        let reference = UUID().uuidString
-        axReferences.windows[reference] = .init(reference: reference, identity: identity, nonce: scope.nonce, window: window)
+        guard let reference = axReferences.windowReference(window, identity: identity, nonce: scope.nonce) else {
+            return probeResponse(requestID: requestID, status: "error", error: "reference_limit_exceeded")
+        }
+        observed.insert(reference)
         rows.append(["ref": reference, "role": "window"])
     }
     let capped = rawWindows.count > maximumAXNodes
-    let partial = timedOut || capped
+    let complete = !timedOut && !capped
     guard !rows.isEmpty else {
         return probeResponse(requestID: requestID, status: "error", error: "fixture_window_unavailable")
     }
-    return probeResponse(requestID: requestID, status: partial ? "partial" : "completed", result: [
+    let stillSame = currentProcessMatches(identity) && rows.allSatisfy { row in
+        guard let reference = row["ref"] as? String, let entry = axReferences.windows[reference] else { return false }
+        return fixtureWindowStillMatches(entry.window, identity: identity, nonce: scope.nonce)
+    }
+    if complete && stillSame {
+        axReferences.removeUnobservedWindows(identity: identity, nonce: scope.nonce, observed: observed)
+    }
+    let partial = !complete || !stillSame
+    let windowCoverageReason: Any = stillSame ? NSNull() : "concurrent_change"
+    let result: [String: Any] = [
+        "process_start_ref": processStartReference,
         "windows": rows,
-        "coverage": ["status": partial ? "partial" : "complete", "window_limit": maximumAXNodes, "window_count": rows.count, "deadline_ms": Int(maximumAXDuration * 1000), "timed_out": timedOut, "truncated": capped],
-    ])
+        "coverage": ["status": partial ? "partial" : "complete", "window_limit": maximumAXNodes, "window_count": rows.count, "deadline_ms": Int(maximumAXDuration * 1000), "timed_out": timedOut, "truncated": capped, "reason": windowCoverageReason],
+    ]
+    return probeResponse(requestID: requestID, status: partial ? "partial" : "completed", result: result)
+}
+
+@MainActor
+private struct ObservedNode {
+    let element: AXUIElement
+    let parent: AXUIElement
+    let parentIndex: Int?
+    let depth: Int
+    var role: String = "unknown"
+    var identifier: String?
+    var value: String?
+    var valueStatus = "omitted"
+    var childIndices: [Int] = []
+    var visited = false
 }
 
 @MainActor
@@ -168,6 +328,8 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
           let identity = validateProcess(scope), AXIsProcessTrusted() else {
         return probeResponse(requestID: requestID, status: "error", error: "scope_or_permission_denied")
     }
+    axReferences.prepareScope(identity, nonce: scope.nonce)
+    let processStartReference = axReferences.processReference(identity)
     let appElement = AXUIElementCreateApplication(scope.pid)
     AXUIElementSetMessagingTimeout(appElement, 0.05)
     let windowDeadline = Date().addingTimeInterval(maximumAXDuration)
@@ -187,84 +349,131 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
     guard let window = matchedWindow else {
         return probeResponse(requestID: requestID, status: "error", error: "fixture_window_unavailable")
     }
+    guard let windowReference = axReferences.windowReference(window, identity: identity, nonce: scope.nonce) else {
+        return probeResponse(requestID: requestID, status: "error", error: "reference_limit_exceeded")
+    }
 
-    resetAllReferences()
     let deadline = Date().addingTimeInterval(maximumAXDuration)
-    var rows: [[String: Any]] = []
+    var nodes = [ObservedNode(element: window, parent: appElement, parentIndex: nil, depth: 0)]
+    var stack = [0]
     var visited = 0
     var textBytes = 0
     var truncated = false
-    var stack: [(AXUIElement, AXUIElement, Int)] = [(window, appElement, 0)]
-    while let (element, parent, depth) = stack.popLast() {
+    while let index = stack.popLast() {
         if Date() >= deadline || visited >= maximumAXNodes || textBytes >= maximumAXTextBytes {
             truncated = true
             break
         }
         visited += 1
-        AXUIElementSetMessagingTimeout(element, 0.05)
-        let role = (copyAXAttribute(element, kAXRoleAttribute, deadline: deadline) as? String) ?? "unknown"
-        let identifier = copyAXAttribute(element, kAXIdentifierAttribute, deadline: deadline) as? String
-        var row: [String: Any] = ["role": role]
-        if let identifier, identifier.utf8.count <= 256 {
+        AXUIElementSetMessagingTimeout(nodes[index].element, 0.05)
+        nodes[index].visited = true
+        nodes[index].role = (copyAXAttribute(nodes[index].element, kAXRoleAttribute, deadline: deadline) as? String) ?? "unknown"
+        nodes[index].identifier = copyAXAttribute(nodes[index].element, kAXIdentifierAttribute, deadline: deadline) as? String
+        if nodes[index].role == "unknown" { truncated = true }
+        if let identifier = nodes[index].identifier, identifier.utf8.count <= 256 {
             let cost = identifier.utf8.count
-            if textBytes + cost <= maximumAXTextBytes {
-                row["identifier"] = identifier
-                textBytes += cost
-            } else {
-                truncated = true
-            }
+            if textBytes + cost <= maximumAXTextBytes { textBytes += cost } else { truncated = true }
         }
-        if includeValues, identifier == "textfield", role == (kAXTextFieldRole as String) {
-            let subrole = copyAXAttribute(element, kAXSubroleAttribute, deadline: deadline) as? String
+        if includeValues, nodes[index].identifier == "textfield", nodes[index].role == (kAXTextFieldRole as String) {
+            let subrole = copyAXAttribute(nodes[index].element, kAXSubroleAttribute, deadline: deadline) as? String
             if subrole != (kAXSecureTextFieldSubrole as String),
-               let value = copyAXAttribute(element, kAXValueAttribute, deadline: deadline) as? String {
+               let value = copyAXAttribute(nodes[index].element, kAXValueAttribute, deadline: deadline) as? String {
                 let cost = value.utf8.count
                 if textBytes + cost <= maximumAXTextBytes {
-                    row["value"] = value
-                    row["value_status"] = "included_synthetic_normal"
+                    nodes[index].value = value
+                    nodes[index].valueStatus = "included_synthetic_normal"
                     textBytes += cost
                 } else {
-                    row["value_status"] = "omitted_limit"
+                    nodes[index].valueStatus = "omitted_limit"
                     truncated = true
                 }
             } else {
-                row["value_status"] = "omitted_protected_or_unavailable"
+                nodes[index].valueStatus = "omitted_protected_or_unavailable"
             }
-        } else {
-            row["value_status"] = "omitted"
         }
-        let reference = UUID().uuidString
-        axReferences.elements[reference] = .init(reference: reference, identity: identity, nonce: scope.nonce, window: window, element: element, parent: parent)
-        row["ref"] = reference
-        rows.append(row)
-
-        guard depth < maximumAXDepth else {
+        guard let children = copyAXAttribute(nodes[index].element, kAXChildrenAttribute, deadline: deadline) as? [AXUIElement] else {
             truncated = true
             continue
         }
-        guard let children = copyAXAttribute(element, kAXChildrenAttribute, deadline: deadline) as? [AXUIElement] else {
-            truncated = true
+        if nodes[index].depth >= maximumAXDepth {
+            if !children.isEmpty { truncated = true }
             continue
         }
-        let available = max(0, maximumAXNodes - visited)
+        let available = max(0, maximumAXNodes - visited - stack.count)
         if children.count > available { truncated = true }
-        for child in children.prefix(available).reversed() {
-            stack.append((child, element, depth + 1))
+        let selectedChildren = Array(children.prefix(available))
+        var childIndices: [Int] = []
+        for child in selectedChildren {
+            childIndices.append(nodes.count)
+            nodes.append(ObservedNode(element: child, parent: nodes[index].element, parentIndex: index, depth: nodes[index].depth + 1))
         }
+        nodes[index].childIndices = childIndices
+        stack.append(contentsOf: childIndices.reversed())
     }
-    return probeResponse(requestID: requestID, status: truncated ? "partial" : "completed", result: [
+
+    let observationID = UUID().uuidString
+    let windowStillMatches = fixtureWindowStillMatches(window, identity: identity, nonce: scope.nonce)
+    let processStillMatches = currentProcessMatches(identity)
+    let concurrentChange = !windowStillMatches || !processStillMatches
+    if concurrentChange { truncated = true }
+
+    var references: [Int: String] = [:]
+    var observedReferences = Set<String>()
+    for index in nodes.indices where nodes[index].visited {
+        let parentReference = nodes[index].parentIndex.flatMap { references[$0] }
+        guard let reference = axReferences.elementReference(nodes[index].element, parent: nodes[index].parent, parentReference: parentReference, window: window, windowReference: windowReference, identity: identity, nonce: scope.nonce, role: nodes[index].role, identifier: nodes[index].identifier) else {
+            return probeResponse(requestID: requestID, status: "error", error: "reference_limit_exceeded")
+        }
+        references[index] = reference
+        observedReferences.insert(reference)
+    }
+    var rows: [[String: Any]] = []
+    for index in nodes.indices where nodes[index].visited {
+        guard let reference = references[index] else { continue }
+        let childReferences = nodes[index].childIndices.compactMap { references[$0] }
+        let entry = axReferences.elements[reference]
+        if var updated = entry {
+            updated.childReferences = childReferences
+            axReferences.elements[reference] = updated
+        }
+        var row: [String: Any] = [
+            "ref": reference,
+            "role": nodes[index].role,
+            "value_status": nodes[index].valueStatus,
+            "child_refs": childReferences,
+        ]
+        if let parentReference = nodes[index].parentIndex.flatMap({ references[$0] }) { row["parent_ref"] = parentReference }
+        if index == 0 { row["parent_ref"] = NSNull() }
+        if let identifier = nodes[index].identifier, identifier.utf8.count <= 256 { row["identifier"] = identifier }
+        if let value = nodes[index].value { row["value"] = value }
+        rows.append(row)
+    }
+    let rootReferences = nodes[0].visited ? [references[0]].compactMap { $0 } : []
+    let canonicalRows: [[String: Any]] = nodes.indices.filter { nodes[$0].visited }.map { index in
+        var canonical: [String: Any] = ["role": nodes[index].role]
+        if let identifier = nodes[index].identifier, identifier.utf8.count <= 256 { canonical["identifier"] = identifier }
+        if let value = nodes[index].value { canonical["value"] = value }
+        canonical["parent_index"] = nodes[index].parentIndex.map { $0 as Any } ?? NSNull()
+        canonical["child_indices"] = nodes[index].childIndices.filter { nodes[$0].visited }
+        return canonical
+    }
+    let canonicalData = (try? JSONSerialization.data(withJSONObject: canonicalRows, options: [.sortedKeys])) ?? Data()
+    let stateID = SHA256.hash(data: canonicalData).map { String(format: "%02x", $0) }.joined()
+    let complete = !truncated && !concurrentChange && nodes.allSatisfy(\.visited)
+    if complete {
+        axReferences.removeUnobservedElements(identity: identity, nonce: scope.nonce, windowReference: windowReference, observed: observedReferences)
+    }
+    let coverageReason: Any = concurrentChange ? "concurrent_change" : (truncated ? "bounded_or_ax_uncertainty" : NSNull())
+    let result: [String: Any] = [
+        "observation_id": observationID,
+        "state_id": stateID,
+        "process_start_ref": processStartReference,
+        "window_ref": windowReference,
+        "root_refs": rootReferences,
         "elements": rows,
-        "coverage": [
-            "status": truncated ? "truncated" : "complete",
-            "depth_limit": maximumAXDepth,
-            "node_limit": maximumAXNodes,
-            "text_byte_limit": maximumAXTextBytes,
-            "deadline_ms": Int(maximumAXDuration * 1000),
-            "visited": visited,
-            "text_bytes": textBytes,
-            "truncated": truncated,
-        ],
-    ])
+        "coverage": ["status": complete ? "complete" : "truncated", "reason": coverageReason, "depth_limit": maximumAXDepth, "node_limit": maximumAXNodes, "text_byte_limit": maximumAXTextBytes, "deadline_ms": Int(maximumAXDuration * 1000), "visited": visited, "text_bytes": textBytes, "truncated": truncated],
+    ]
+    return probeResponse(requestID: requestID, status: complete ? "completed" : "partial", result: result)
 }
 
 @MainActor
@@ -292,6 +501,12 @@ private func sameProcessIdentity(_ current: ProcessIdentity, _ expected: Process
 }
 
 @MainActor
+private func currentProcessMatches(_ expected: ProcessIdentity) -> Bool {
+    guard let current = processIdentity(pid: expected.pid) else { return false }
+    return sameProcessIdentity(current, expected)
+}
+
+@MainActor
 private func fixtureWindowStillMatches(_ window: AXUIElement, identity: ProcessIdentity, nonce: String) -> Bool {
     guard let currentIdentity = processIdentity(pid: identity.pid), sameProcessIdentity(currentIdentity, identity) else { return false }
     let deadline = Date().addingTimeInterval(maximumAXDuration)
@@ -316,6 +531,19 @@ private func sameAXElement(_ element: AXUIElement, parent: AXUIElement) -> Bool 
 }
 
 @MainActor
+private func currentAXClassificationMatches(_ entry: AXReferenceStore.ElementEntry) -> Bool {
+    guard let role = copyAXAttribute(entry.element, kAXRoleAttribute) as? String,
+          role == entry.role,
+          (copyAXAttribute(entry.element, kAXIdentifierAttribute) as? String) == entry.identifier else { return false }
+    if role == (kAXTextFieldRole as String),
+       let subrole = copyAXAttribute(entry.element, kAXSubroleAttribute) as? String,
+       subrole == (kAXSecureTextFieldSubrole as String) {
+        return false
+    }
+    return true
+}
+
+@MainActor
 private func copyAXAttribute(_ element: AXUIElement, _ attribute: String, deadline: Date? = nil) -> CFTypeRef? {
     if let deadline {
         let remaining = deadline.timeIntervalSinceNow
@@ -325,12 +553,6 @@ private func copyAXAttribute(_ element: AXUIElement, _ attribute: String, deadli
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
     return value
-}
-
-@MainActor
-private func resetAllReferences() {
-    axReferences.windows.removeAll(keepingCapacity: true)
-    axReferences.elements.removeAll(keepingCapacity: true)
 }
 
 private func probeResponse(requestID: String, status: String, error: String? = nil, result: [String: Any]? = nil) -> Data {
