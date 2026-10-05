@@ -155,7 +155,7 @@ func (backend *NativeBackend) Accessibility(ctx context.Context, scope Scope, pr
 		var nativeErr *bridgeclient.NativeError
 		if errors.As(callErr, &nativeErr) && nativeErr.Status == string(bridgeclient.StatusError) {
 			_, normalizeErr := semanticprobe.NormalizeEnvelope(response, semanticprobe.ExpectedScope{
-				RequestID: requestID, PID: scope.FixturePID, BundleID: scope.FixtureBundleID,
+				RequestID: requestID, PID: int32(scope.FixturePID), BundleID: scope.FixtureBundleID,
 				FixtureNonce: scope.FixtureNonce, ProcessLaunchGeneration: scope.ProcessLaunchGeneration,
 				ProcessStartRef: processStartRef, WindowRef: windowRef,
 			}, semanticprobe.Options{IncludeSyntheticNormalValue: includeValues})
@@ -166,7 +166,7 @@ func (backend *NativeBackend) Accessibility(ctx context.Context, scope Scope, pr
 		return semanticprobe.Snapshot{}, callErr
 	}
 	snapshot, err := semanticprobe.NormalizeEnvelope(response, semanticprobe.ExpectedScope{
-		RequestID: requestID, PID: scope.FixturePID, BundleID: scope.FixtureBundleID,
+		RequestID: requestID, PID: int32(scope.FixturePID), BundleID: scope.FixtureBundleID,
 		FixtureNonce: scope.FixtureNonce, ProcessLaunchGeneration: scope.ProcessLaunchGeneration,
 		ProcessStartRef: processStartRef, WindowRef: windowRef,
 	}, semanticprobe.Options{IncludeSyntheticNormalValue: includeValues})
@@ -237,7 +237,7 @@ func available(value bool) string {
 func nativeCancelled(err error) bool {
 	var nativeErr *bridgeclient.NativeError
 	if errors.As(err, &nativeErr) {
-		return nativeErr.Status == bridgeclient.StatusCancelled || safeNativeCode(nativeErr.Detail) == "cancelled"
+		return nativeErr.Status == string(bridgeclient.StatusCancelled) || safeNativeCode(nativeErr.Detail) == "cancelled"
 	}
 	var adapterErr nativeError
 	return errors.As(err, &adapterErr) && (adapterErr.status == string(bridgeclient.StatusCancelled) || adapterErr.code == "cancelled")
