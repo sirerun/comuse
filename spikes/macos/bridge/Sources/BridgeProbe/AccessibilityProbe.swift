@@ -264,7 +264,7 @@ func accessibilityTargetMetadata(_ ref: String, pid: Int32) -> AccessibilityTarg
           (copyAXAttribute(entry.element, kAXIdentifierAttribute) as? String) == entry.identifier,
           let processStartReference = axReferences.processes[pid]?.reference else { return nil }
     let subrole = copyAXAttribute(entry.element, kAXSubroleAttribute) as? String
-    let isProtected = role == (kAXTextFieldRole as String) && subrole == (kAXSecureTextFieldSubrole as String)
+    let isProtected = isProtectedOrUncertainTextField(role: role, subrole: subrole, identifier: entry.identifier)
     return AccessibilityTargetMetadata(nonce: entry.nonce, processStartReference: processStartReference, windowReference: entry.windowReference, reference: entry.reference, stateID: entry.stateID, stateComplete: entry.stateComplete, role: role, identifier: entry.identifier, isProtected: isProtected)
 }
 
@@ -445,14 +445,11 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
             if textBytes + cost <= maximumAXTextBytes { textBytes += cost } else { truncated = true }
         }
         let allowedValueTarget =
-            (nodes[index].identifier == "textfield" && nodes[index].role == (kAXTextFieldRole as String)) ||
+            (nodes[index].identifier == "textfield" && nodes[index].role == (kAXTextFieldRole as String) &&
+             isKnownNonsecureTextField(role: nodes[index].role, subrole: copyAXAttribute(nodes[index].element, kAXSubroleAttribute, deadline: deadline) as? String, identifier: nodes[index].identifier)) ||
             (nodes[index].identifier == "counter-value" && nodes[index].role == (kAXStaticTextRole as String))
         if includeValues, allowedValueTarget {
-            let subrole = nodes[index].role == (kAXTextFieldRole as String)
-                ? copyAXAttribute(nodes[index].element, kAXSubroleAttribute, deadline: deadline) as? String
-                : nil
-            if subrole != (kAXSecureTextFieldSubrole as String),
-               let value = copyAXAttribute(nodes[index].element, kAXValueAttribute, deadline: deadline) as? String {
+            if let value = copyAXAttribute(nodes[index].element, kAXValueAttribute, deadline: deadline) as? String {
                 let cost = value.utf8.count
                 if textBytes + cost <= maximumAXTextBytes {
                     nodes[index].value = value
@@ -619,12 +616,20 @@ private func currentAXClassificationMatches(_ entry: AXReferenceStore.ElementEnt
     guard let role = copyAXAttribute(entry.element, kAXRoleAttribute) as? String,
           role == entry.role,
           (copyAXAttribute(entry.element, kAXIdentifierAttribute) as? String) == entry.identifier else { return false }
-    if role == (kAXTextFieldRole as String),
-       let subrole = copyAXAttribute(entry.element, kAXSubroleAttribute) as? String,
-       subrole == (kAXSecureTextFieldSubrole as String) {
-        return false
+    if role == (kAXTextFieldRole as String) {
+        guard let subrole = copyAXAttribute(entry.element, kAXSubroleAttribute) as? String,
+              isKnownNonsecureTextField(role: role, subrole: subrole, identifier: entry.identifier) else { return false }
     }
     return true
+}
+
+func isProtectedOrUncertainTextField(role: String, subrole: String?, identifier: String?) -> Bool {
+    role == (kAXTextFieldRole as String) && !isKnownNonsecureTextField(role: role, subrole: subrole, identifier: identifier)
+}
+
+func isKnownNonsecureTextField(role: String, subrole: String?, identifier: String?) -> Bool {
+    role == (kAXTextFieldRole as String) && identifier == "textfield" &&
+        subrole != nil && subrole != (kAXSecureTextFieldSubrole as String)
 }
 
 @MainActor
