@@ -49,6 +49,17 @@ const (
 	OutcomeUnknown    Outcome = "unknown"
 )
 
+// SafeActionMetadata is a compact, value-free replay summary. Its fields are
+// closed enums so callers cannot persist native response text or secrets.
+type SafeActionMetadata struct {
+	Action       string `json:"action,omitempty"`
+	Execution    string `json:"execution,omitempty"`
+	Verification string `json:"verification,omitempty"`
+	StateStatus  string `json:"state_status,omitempty"`
+	Cleanup      string `json:"cleanup,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+}
+
 type HeldStatus string
 
 const (
@@ -58,16 +69,18 @@ const (
 )
 
 type PriorOutcome struct {
-	ActionID  string    `json:"action_id"`
-	Outcome   Outcome   `json:"outcome"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ActionID  string             `json:"action_id"`
+	Outcome   Outcome            `json:"outcome"`
+	UpdatedAt time.Time          `json:"updated_at"`
+	Metadata  SafeActionMetadata `json:"metadata,omitempty"`
 }
 
 type actionRecord struct {
-	Binding string    `json:"binding_commitment"`
-	Outcome Outcome   `json:"outcome"`
-	Started time.Time `json:"started_at"`
-	Updated time.Time `json:"updated_at"`
+	Binding  string             `json:"binding_commitment"`
+	Outcome  Outcome            `json:"outcome"`
+	Started  time.Time          `json:"started_at"`
+	Updated  time.Time          `json:"updated_at"`
+	Metadata SafeActionMetadata `json:"metadata,omitempty"`
 }
 
 type heldRecord struct {
@@ -76,9 +89,10 @@ type heldRecord struct {
 }
 
 type actionTombstone struct {
-	Binding string    `json:"binding_commitment"`
-	Outcome Outcome   `json:"outcome"`
-	Updated time.Time `json:"updated_at"`
+	Binding  string             `json:"binding_commitment"`
+	Outcome  Outcome            `json:"outcome"`
+	Updated  time.Time          `json:"updated_at"`
+	Metadata SafeActionMetadata `json:"metadata,omitempty"`
 }
 
 type ReconcileFunc func(context.Context, []HeldStatusRecord) error
@@ -269,14 +283,14 @@ func (l *Lease) Begin(actionID string, bindingCommitment [32]byte) (*Ticket, *Pr
 		if outcome == "inflight" {
 			outcome = OutcomeUnknown
 		}
-		prior := &PriorOutcome{ActionID: actionID, Outcome: outcome, UpdatedAt: existing.Updated}
+		prior := &PriorOutcome{ActionID: actionID, Outcome: outcome, UpdatedAt: existing.Updated, Metadata: existing.Metadata}
 		return nil, prior, nil
 	}
 	if existing, ok := l.state.Tombstones[actionID]; ok {
 		if existing.Binding != binding {
 			return nil, nil, ErrBindingMismatch
 		}
-		prior := &PriorOutcome{ActionID: actionID, Outcome: existing.Outcome, UpdatedAt: existing.Updated}
+		prior := &PriorOutcome{ActionID: actionID, Outcome: existing.Outcome, UpdatedAt: existing.Updated, Metadata: existing.Metadata}
 		return nil, prior, nil
 	}
 	if l.state.Dirty {
@@ -301,11 +315,20 @@ func (l *Lease) Begin(actionID string, bindingCommitment [32]byte) (*Ticket, *Pr
 
 // Finish consumes a ticket after recording a terminal outcome durably.
 func (l *Lease) Finish(ticket *Ticket, outcome Outcome) error {
+	return l.FinishWithMetadata(ticket, outcome, SafeActionMetadata{})
+}
+
+// FinishWithMetadata durably records only closed-enum summary fields alongside
+// the terminal action outcome. Unknown metadata is rejected before persistence.
+func (l *Lease) FinishWithMetadata(ticket *Ticket, outcome Outcome, metadata SafeActionMetadata) error {
 	if ticket == nil || ticket.lease != l {
 		return errors.New("ticket does not belong to this lease")
 	}
 	if !validOutcome(outcome) {
 		return fmt.Errorf("invalid action outcome %q", outcome)
+	}
+	if !validSafeActionMetadata(metadata) {
+		return errors.New("invalid safe action metadata")
 	}
 	ticket.mu.Lock()
 	defer ticket.mu.Unlock()
@@ -323,14 +346,31 @@ func (l *Lease) Finish(ticket *Ticket, outcome Outcome) error {
 	}
 	record.Outcome = outcome
 	record.Updated = time.Now().UTC()
+	record.Metadata = metadata
 	l.state.Actions[ticket.actionID] = record
 	if err := l.saveLocked(); err != nil {
 		record.Outcome = "inflight"
+		record.Metadata = SafeActionMetadata{}
 		l.state.Actions[ticket.actionID] = record
 		return err
 	}
 	ticket.consumed = true
 	return nil
+}
+
+// Quarantine persists a dirty marker while retaining the process-wide writer
+// lock. The trusted owner must close/drain the native client before Close.
+func (l *Lease) Quarantine(reason string) error {
+	if reason != "native_outcome_unknown" && reason != "native_drain_incomplete" && reason != "journal_persistence_failed" {
+		return errors.New("unsupported quarantine reason")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed || l.closing {
+		return ErrClosed
+	}
+	l.markDirtyLocked(reason)
+	return l.saveLocked()
 }
 
 // ReconcileDirty clears the persistent dirty gate only after the trusted host
@@ -602,7 +642,7 @@ func (l *Lease) pruneExpired(now time.Time) error {
 			if len(l.state.Tombstones) >= maxTombstones {
 				return errors.New("replay tombstone capacity exhausted; refusing to forget action IDs")
 			}
-			l.state.Tombstones[id] = actionTombstone{Binding: record.Binding, Outcome: record.Outcome, Updated: record.Updated}
+			l.state.Tombstones[id] = actionTombstone{Binding: record.Binding, Outcome: record.Outcome, Updated: record.Updated, Metadata: record.Metadata}
 			delete(l.state.Actions, id)
 		}
 	}
@@ -623,7 +663,7 @@ func (l *Lease) saveLocked() error {
 	return atomicWrite(filepath.Join(l.root, "replay-v1.json"), data)
 }
 
-func loadState(root string) (diskState, error) {
+func loadState(root string) (loaded diskState, resultErr error) {
 	path := filepath.Join(root, "replay-v1.json")
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
@@ -639,7 +679,11 @@ func loadState(root string) (diskState, error) {
 	if err != nil {
 		return diskState{}, fmt.Errorf("open replay ledger: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close replay ledger: %w", closeErr))
+		}
+	}()
 	fileInfo, err := file.Stat()
 	if err != nil {
 		return diskState{}, fmt.Errorf("inspect replay ledger: %w", err)
@@ -668,12 +712,12 @@ func loadState(root string) (diskState, error) {
 		return diskState{}, errors.New("replay ledger exceeds record limits")
 	}
 	for id, record := range state.Actions {
-		if validateActionID(id) != nil || record.Binding == "" || !validRecordedOutcome(record.Outcome) {
+		if validateActionID(id) != nil || record.Binding == "" || !validRecordedOutcome(record.Outcome) || !validSafeActionMetadata(record.Metadata) {
 			return diskState{}, fmt.Errorf("invalid replay record %q", id)
 		}
 	}
 	for id, record := range state.Tombstones {
-		if validateActionID(id) != nil || record.Binding == "" || !validOutcome(record.Outcome) {
+		if validateActionID(id) != nil || record.Binding == "" || !validOutcome(record.Outcome) || !validSafeActionMetadata(record.Metadata) {
 			return diskState{}, fmt.Errorf("invalid replay tombstone %q", id)
 		}
 	}
@@ -685,25 +729,30 @@ func loadState(root string) (diskState, error) {
 	return state, nil
 }
 
-func atomicWrite(path string, data []byte) error {
+func atomicWrite(path string, data []byte) (resultErr error) {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".replay-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create replay temp file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	renamed := false
+	defer func() {
+		if renamed {
+			return
+		}
+		if removeErr := os.Remove(tmpName); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove replay temp file: %w", removeErr))
+		}
+	}()
 	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
+		return errors.Join(err, tmp.Close())
 	}
 	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write replay temp file: %w", err)
+		return errors.Join(fmt.Errorf("write replay temp file: %w", err), tmp.Close())
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync replay temp file: %w", err)
+		return errors.Join(fmt.Errorf("sync replay temp file: %w", err), tmp.Close())
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close replay temp file: %w", err)
@@ -711,15 +760,26 @@ func atomicWrite(path string, data []byte) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace replay ledger: %w", err)
 	}
+	renamed = true
 	directory, err := os.Open(dir)
 	if err != nil {
 		return fmt.Errorf("open replay directory: %w", err)
 	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync replay directory: %w", err)
+	return errors.Join(wrapSyncError(directory.Sync()), wrapCloseError(directory.Close()))
+}
+
+func wrapSyncError(err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("sync replay directory: %w", err)
+}
+
+func wrapCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("close replay directory: %w", err)
 }
 
 func validateActionID(id string) error {
@@ -740,6 +800,51 @@ func validOutcome(outcome Outcome) bool {
 
 func validRecordedOutcome(outcome Outcome) bool {
 	return validOutcome(outcome) || outcome == "inflight"
+}
+
+func validSafeActionMetadata(value SafeActionMetadata) bool {
+	if value == (SafeActionMetadata{}) {
+		return true
+	}
+	switch value.Action {
+	case "", "read_value", "replace", "press":
+	default:
+		return false
+	}
+	switch value.Execution {
+	case "not_applied", "applied", "partial", "unknown":
+	default:
+		return false
+	}
+	switch value.Verification {
+	case "verified", "failed", "unavailable":
+	default:
+		return false
+	}
+	switch value.StateStatus {
+	case "available", "partial", "unavailable":
+	default:
+		return false
+	}
+	switch value.Cleanup {
+	case "released", "not_required", "failed", "unknown":
+	default:
+		return false
+	}
+	if value.ErrorCode == "" {
+		return true
+	}
+	switch value.ErrorCode {
+	case "backend_unavailable", "backend_outcome_invalid", "cancelled_before_dispatch",
+		"classification_unavailable", "desktop_busy", "dispatch_unknown", "element_stale",
+		"native_error", "outcome_unknown", "policy_refused", "postcondition_failed",
+		"postcondition_unavailable", "protected_or_unsupported_target", "protected_target",
+		"scope_mismatch", "selection_unavailable", "state_expired", "unsupported",
+		"validation_error", "value_unavailable", "verification_unavailable":
+		return true
+	default:
+		return false
+	}
 }
 
 // BindingCommitment hashes a caller-keyed opaque commitment into a fixed-size

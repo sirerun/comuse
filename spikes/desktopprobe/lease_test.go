@@ -38,6 +38,16 @@ func testLease(t *testing.T) (*Lease, string) {
 	return lease, root
 }
 
+func closeTestLease(t *testing.T, lease *Lease) {
+	t.Helper()
+	t.Cleanup(func() {
+		err := lease.Close(context.Background())
+		if err != nil && !errors.Is(err, ErrDirty) {
+			t.Errorf("closing test lease: %v", err)
+		}
+	})
+}
+
 func TestBeginFinishReplayAndBinding(t *testing.T) {
 	lease, root := testLease(t)
 	var binding [32]byte
@@ -66,10 +76,60 @@ func TestBeginFinishReplayAndBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close(context.Background())
+	closeTestLease(t, reopened)
 	binding[0] = 1
 	if ticket, prior, err := reopened.Begin("action-1", binding); err != nil || ticket != nil || prior == nil || prior.Outcome != OutcomeApplied {
 		t.Fatalf("restart replay = (%v, %v, %v), want prior applied", ticket, prior, err)
+	}
+}
+
+func TestSafeActionMetadataSurvivesReplayWithoutText(t *testing.T) {
+	lease, root := testLease(t)
+	var binding [32]byte
+	ticket, _, err := lease.Begin("metadata-action", binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := SafeActionMetadata{Action: "replace", Execution: "partial", Verification: "failed", StateStatus: "partial", Cleanup: "released", ErrorCode: "postcondition_failed"}
+	if err := lease.FinishWithMetadata(ticket, OutcomePartial, metadata); err != nil {
+		t.Fatal(err)
+	}
+	_, prior, err := lease.Begin("metadata-action", binding)
+	if err != nil || prior == nil || prior.Metadata != metadata {
+		t.Fatalf("replay metadata = (%+v, %v), want %+v", prior, err, metadata)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "replay-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("synthetic text")) || bytes.Contains(data, []byte("private_text")) {
+		t.Fatalf("metadata ledger persisted value text: %s", data)
+	}
+	if err := lease.FinishWithMetadata(ticket, OutcomePartial, SafeActionMetadata{ErrorCode: "private_text_canary"}); err == nil {
+		t.Fatal("accepted non-enum metadata")
+	}
+}
+
+func TestQuarantineRetainsWriterUntilOwnerClose(t *testing.T) {
+	lease, root := testLease(t)
+	if err := lease.Quarantine("native_drain_incomplete"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	if _, err := Acquire(ctx, root); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Acquire during quarantine = %v, want lock timeout", err)
+	}
+	if err := lease.Close(context.Background()); !errors.Is(err, ErrDirty) {
+		t.Fatalf("owner Close = %v, want ErrDirty after releasing lock", err)
+	}
+	reopened, err := Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeTestLease(t, reopened)
+	if _, _, err := reopened.Begin("blocked-after-quarantine", [32]byte{}); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Begin after quarantine = %v, want ErrDirty", err)
 	}
 }
 
@@ -94,7 +154,7 @@ func TestInflightBecomesUnknownAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close(context.Background())
+	closeTestLease(t, restarted)
 	ticket, prior, err := restarted.Begin("crash-action", binding)
 	if err != nil || ticket != nil || prior == nil || prior.Outcome != OutcomeUnknown {
 		t.Fatalf("restart Begin = (%v, %v, %v), want prior unknown", ticket, prior, err)
@@ -150,7 +210,7 @@ func TestRestartWithUnresolvedHeldInputStaysDirtyUntilVerified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close(context.Background())
+	closeTestLease(t, restarted)
 	var binding [32]byte
 	if _, _, err := restarted.Begin("blocked-action", binding); !errors.Is(err, ErrDirty) {
 		t.Fatalf("Begin after unresolved held marker = %v, want ErrDirty", err)
