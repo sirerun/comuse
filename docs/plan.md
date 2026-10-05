@@ -55,7 +55,7 @@ Workers own named distinct files/directories and never modify common seam files 
 
 ## 5. Checkable Work Breakdown
 
-### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (9/51)
+### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (9/53)
 ### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (0/1)
 ### E3 -- Phase 1 semantic diffs and recovery -> docs/plans/E3-phase1-diffs-recovery.md (0/1)
 ### E4 -- Phase 2 authorized application opening -> docs/plans/E4-phase2-app-opening.md (0/1)

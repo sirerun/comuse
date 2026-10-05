@@ -158,3 +158,8 @@ The native doctor observed both Accessibility and event-posting permission avail
 - [ ] T1.53 Verify concrete composition and crash recovery Owner: coordinator kind: agent stage: verify lane: agent blocked-by: [T1.52] acc: [Real storage restart, cross-process contention, replay/binding, redaction, malformed outcomes, key mismatch, unknown/quarantine, reconciliation and close ordering pass at exact source; negative/mock checks are kept separate from live fixture acceptance.]
 
 T1.31 additionally depends on T1.51 and T1.53. T1.42 additionally depends on T1.48 and T1.49. The existing interfaces and test doubles alone do not satisfy concrete composition or runtime acceptance. Same-candidate dependency preparation remains source-only until the corresponding verification and independent exact-head review complete.
+
+- [ ] T1.54 Repair local lint findings Owner: native/input and MCP lanes kind: agent stage: implement lane: agent blocked-by: [T1.52] acc: [Unchecked close and output results are handled deliberately, durable cleanup errors remain visible, and source predicates satisfy the configured linters without blanket suppression.]
+- [ ] T1.55 Verify local lint repairs Owner: coordinator kind: agent stage: verify lane: agent blocked-by: [T1.54] acc: [Configured golangci-lint passes at the final exact source under the shared build lease and host load gate; relevant behavior checks and independent review remain required.]
+
+T1.31 additionally depends on T1.55. Lint repairs may proceed alongside concrete composition; final verification uses the assembled candidate.
