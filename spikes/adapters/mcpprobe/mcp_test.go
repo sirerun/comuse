@@ -234,9 +234,9 @@ func TestResultLimitAndIOFrameLimitAreExplicit(t *testing.T) {
 	if ioTransport.MaxLineLength != MaxFrameBytes {
 		t.Fatalf("stdio max line length = %d, want %d", ioTransport.MaxLineLength, MaxFrameBytes)
 	}
-	ioTransport := &mcp.IOTransport{MaxLineLength: MaxFrameBytes}
-	if ioTransport.MaxLineLength != MaxFrameBytes {
-		t.Fatalf("test IO transport cap = %d, want %d", ioTransport.MaxLineLength, MaxFrameBytes)
+	testTransport := &mcp.IOTransport{MaxLineLength: MaxFrameBytes}
+	if testTransport.MaxLineLength != MaxFrameBytes {
+		t.Fatalf("test IO transport cap = %d, want %d", testTransport.MaxLineLength, MaxFrameBytes)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(resultText(result)), &decoded); err != nil || decoded["code"] != "result_limit" {
