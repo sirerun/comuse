@@ -57,7 +57,7 @@ type durableJournal interface {
 // Its implementation is owned by the integrated coordinator, not bridgeclient.
 type nativeBackend interface {
 	Inspect(context.Context, NativeTargetRequest) (NativeClassification, error)
-	InputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error)
+	inputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error)
 }
 
 type NativeTargetRequest struct {
@@ -216,7 +216,7 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 	payload := makeHostRequest(request, operation)
 
 	// Exactly one private backend call. Any error after dispatch is unknown; no retry.
-	response, callErr := executor.backend.InputCall(ctx, payload)
+	response, callErr := executor.backend.inputCall(ctx, payload)
 	if callErr != nil {
 		unknownResponse := unknown(request.ActionID, "backend_unavailable")
 		if err := executor.finishUnknown(context.Background(), lease, record, unknownResponse); err != nil {
@@ -521,12 +521,6 @@ func marshalEnvelope(actionID, execution, verification, state, cleanup, code str
 }
 
 func marshalReplay(record JournalRecord) []byte {
-	if record.Execution == "pending" || record.Execution == "" {
-		record.Execution = "unknown"
-		if record.ErrorCode == "" {
-			record.ErrorCode = "outcome_unknown"
-		}
-	}
 	var replayError any
 	if record.ErrorCode != "" {
 		replayError = record.ErrorCode

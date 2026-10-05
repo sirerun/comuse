@@ -1,10 +1,20 @@
 package bridgeclient
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/sirerun/comuse/spikes/internal/hostcap"
 )
+
+func TestInputCallRejectsUnmintedCapabilityBeforeNativeDispatch(t *testing.T) {
+	client := &Client{}
+	if _, err := client.InputCall(context.Background(), HostInputRequest{}, hostcap.Capability{}); err != ErrUntrustedInputCaller {
+		t.Fatalf("zero capability err=%v", err)
+	}
+}
 
 func validHostInput() HostInputRequest {
 	return HostInputRequest{RequestID: "r1", ActionID: "a1", Operation: "replace", PID: 123, BundleID: "com.sirerun.comuse.fixture", FixtureNonce: "fixture-1", ProcessStartRef: "p1", WindowRef: "w1", ElementRef: "e1", ExpectedStateID: strings.Repeat("a", 64), Text: "synthetic replacement"}

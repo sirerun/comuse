@@ -72,7 +72,7 @@ func (backend *testBackend) Inspect(_ context.Context, request NativeTargetReque
 	return classification, nil
 }
 
-func (backend *testBackend) InputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error) {
+func (backend *testBackend) inputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error) {
 	backend.calls++
 	return backend.response, backend.err
 }
@@ -236,7 +236,7 @@ func TestReplayPreservesSafeOutcomeClassification(t *testing.T) {
 		{"partial failure stays failure", "partial", "postcondition_failed", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			data := marshalReplay(JournalRecord{ActionID: "a", Execution: test.execution, ErrorCode: test.code})
+			data := replaySummary(JournalRecord{ActionID: "a", Execution: test.execution, ErrorCode: test.code})
 			var response map[string]any
 			if err := json.Unmarshal(data, &response); err != nil {
 				t.Fatal(err)

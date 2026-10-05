@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/sirerun/comuse/spikes/internal/hostcap"
 )
 
 const maxPumpDuration = 250 * time.Millisecond
@@ -114,10 +116,16 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	return c.callValidated(ctx, requestJSON, request.RequestID, HostInputRequest{}, false)
 }
 
-// InputCall is an additive trusted-host transport. It accepts typed fields only; public readonly Call cannot route input operations.
-func (c *Client) InputCall(ctx context.Context, request HostInputRequest) ([]byte, error) {
+// InputCall is an additive typed transport guarded by an opaque capability from
+// the import-restricted spikes/internal/hostcap package. This is an in-process
+// Go package boundary, not an operating-system sandbox or native authority.
+// Public readonly Call cannot route input operations.
+func (c *Client) InputCall(ctx context.Context, request HostInputRequest, capability hostcap.Capability) ([]byte, error) {
 	if ctx == nil {
 		return nil, errors.New("InputCall requires a context")
+	}
+	if !hostcap.Valid(capability) {
+		return nil, ErrUntrustedInputCaller
 	}
 	requestJSON, err := marshalHostInputRequest(request)
 	if err != nil {
