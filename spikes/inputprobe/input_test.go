@@ -89,6 +89,7 @@ func TestFreshNativeClassificationRejectsProtectedBeforeAdmissionAndDispatch(t *
 
 func TestFinishUnknownPersistsOnlyAllowlistedMetadata(t *testing.T) {
 	executor, _, journal, lease, _, _ := fixtureInput(t)
+	journal.records = make(map[string]JournalRecord)
 	const canary = "private_text_canary"
 	response := []byte(`{"schema_version":"fixture.v0","request_id":"action-1","action_id":"action-1","action":"secret_action_canary","execution":"unknown","verification":{"status":"secret_verification_canary"},"state_status":"secret_state_canary","cleanup":{"status":"secret_cleanup_canary"},"error":"private_text_canary","result":null}`)
 	record := JournalRecord{ActionID: "action-1", Execution: "pending"}
