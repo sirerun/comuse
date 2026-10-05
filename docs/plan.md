@@ -3,7 +3,7 @@
 **Status:** E1 seam landed through PR #6 using explicitly authorized local checks; runtime, AX and fixture source is assembled; guarded input, policy, writer/replay and semantic lanes are rolling through three Luna worker slots. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
-**Updated:** 2026-10-04 UTC.
+**Updated:** 2026-10-05 UTC.
 **Change summary:** New split plan and use-case catalog; executable feasibility horizon, ten worker lanes, coordinator-owned seams, and gated later Phase 1/Phase 2/qualification outlines.
 
 ## 1. Context
