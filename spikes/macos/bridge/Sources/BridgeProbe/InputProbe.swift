@@ -9,6 +9,8 @@ private let normalFieldIdentifier = "textfield"
 private let counterIdentifier = "counter-value"
 private let buttonIdentifier = "buttoncounter"
 // Runtime routing stays closed until the coordinator integrates admission and writer ownership.
+// Source feasibility only. Keep disabled until the trusted host admission,
+// durable journal, writer lease, and independent runtime review are integrated.
 private let nativeInputActionsEnabled = false
 
 private struct InputScope {

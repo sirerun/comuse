@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/sirerun/comuse/spikes/internal/hostcap"
 )
 
 func TestUnsupportedPlatformNeverFabricatesBridgeSuccess(t *testing.T) {
@@ -18,7 +20,7 @@ func TestUnsupportedPlatformNeverFabricatesBridgeSuccess(t *testing.T) {
 	if _, err := client.Call(context.Background(), []byte(`{"schema_version":1,"request_id":"r","op":"hello"}`)); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("Call err=%v", err)
 	}
-	if _, err := client.InputCall(context.Background(), HostInputRequest{}); !errors.Is(err, ErrUnsupported) {
+	if _, err := client.InputCall(context.Background(), HostInputRequest{}, hostcap.Capability{}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("InputCall err=%v", err)
 	}
 	if err := client.Pump(time.Millisecond); !errors.Is(err, ErrUnsupported) {

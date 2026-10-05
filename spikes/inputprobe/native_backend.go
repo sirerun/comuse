@@ -8,21 +8,25 @@ import (
 	"errors"
 
 	"github.com/sirerun/comuse/spikes/bridgeclient"
+	"github.com/sirerun/comuse/spikes/internal/hostcap"
 )
 
 type nativeBridgeClient interface {
 	Call(context.Context, []byte) ([]byte, error)
-	InputCall(context.Context, bridgeclient.HostInputRequest) ([]byte, error)
+	InputCall(context.Context, bridgeclient.HostInputRequest, hostcap.Capability) ([]byte, error)
 }
 
 // BridgeBackend binds a same-runtime readonly AX preflight to the typed host input transport.
-type BridgeBackend struct{ client nativeBridgeClient }
+type BridgeBackend struct {
+	client     nativeBridgeClient
+	capability hostcap.Capability
+}
 
 func NewBridgeBackend(client nativeBridgeClient) (*BridgeBackend, error) {
 	if client == nil {
 		return nil, errors.New("native bridge client is required")
 	}
-	return &BridgeBackend{client: client}, nil
+	return &BridgeBackend{client: client, capability: hostcap.New()}, nil
 }
 
 func (backend *BridgeBackend) Inspect(ctx context.Context, scope NativeTargetRequest) (NativeClassification, error) {
@@ -88,9 +92,9 @@ func (backend *BridgeBackend) Inspect(ctx context.Context, scope NativeTargetReq
 	return classification, errors.New("native preflight did not observe the exact requested element")
 }
 
-func (backend *BridgeBackend) InputCall(ctx context.Context, request bridgeclient.HostInputRequest) ([]byte, error) {
+func (backend *BridgeBackend) inputCall(ctx context.Context, request bridgeclient.HostInputRequest) ([]byte, error) {
 	if backend == nil || backend.client == nil {
 		return nil, errors.New("native bridge client is unavailable")
 	}
-	return backend.client.InputCall(ctx, request)
+	return backend.client.InputCall(ctx, request, backend.capability)
 }

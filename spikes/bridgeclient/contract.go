@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	ErrUnsupported      = errors.New("native Swift bridge requires macOS with cgo enabled")
-	ErrNotMainThread    = errors.New("bridgeclient Open, Pump, and Close require the actual process main thread")
-	ErrCallOnMainThread = errors.New("Call cannot wait on the process main thread; run it from a worker while the owner pumps")
-	ErrClosed           = errors.New("bridgeclient is closing or closed")
+	ErrUnsupported          = errors.New("native Swift bridge requires macOS with cgo enabled")
+	ErrNotMainThread        = errors.New("bridgeclient Open, Pump, and Close require the actual process main thread")
+	ErrCallOnMainThread     = errors.New("Call cannot wait on the process main thread; run it from a worker while the owner pumps")
+	ErrClosed               = errors.New("bridgeclient is closing or closed")
+	ErrUntrustedInputCaller = errors.New("trusted host input capability is required")
 )
 
 const (
