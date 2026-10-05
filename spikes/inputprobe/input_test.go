@@ -1,6 +1,7 @@
 package inputprobe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,16 +30,19 @@ func (journal *testJournal) Lookup(_ context.Context, id string) (JournalRecord,
 	record, ok := journal.records[id]
 	return record, ok, nil
 }
-func (journal *testJournal) Begin(_ context.Context, record JournalRecord) error {
+func (journal *testJournal) Begin(_ context.Context, record JournalRecord) (bool, error) {
 	journal.begins++
 	if journal.beginErr != nil {
-		return journal.beginErr
+		return false, journal.beginErr
 	}
 	if journal.records == nil {
 		journal.records = make(map[string]JournalRecord)
 	}
+	if _, exists := journal.records[record.ActionID]; exists {
+		return false, nil
+	}
 	journal.records[record.ActionID] = record
-	return nil
+	return true, nil
 }
 func (journal *testJournal) Finish(_ context.Context, record JournalRecord) error {
 	journal.finishes++
@@ -99,9 +103,16 @@ func approved(t *testing.T, host *policyprobe.HostAuthority, request Request) po
 
 func TestDeniedApprovalNeverCallsBackend(t *testing.T) {
 	executor, request, journal, lease, backend, _ := fixtureInput(t)
-	_, err := executor.execute(context.Background(), request)
-	if err == nil {
-		t.Fatal("expected denial")
+	response, err := executor.execute(context.Background(), request)
+	if err != nil {
+		t.Fatalf("denial should be a terminal response: %v", err)
+	}
+	var envelope nativeEnvelope
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Execution != "not_applied" || envelope.Error == nil || *envelope.Error != "policy_refused" {
+		t.Fatalf("denial response=%s", response)
 	}
 	if backend.calls != 0 || journal.begins != 1 || lease.releases != 1 {
 		t.Fatalf("calls=%d begins=%d releases=%d", backend.calls, journal.begins, lease.releases)
@@ -156,10 +167,11 @@ func TestActionIDCommitmentMismatchNeverDispatches(t *testing.T) {
 	}
 }
 
-func TestTerminalNativeResponseIsPersistedThenReplayedWithoutApproval(t *testing.T) {
+func TestTerminalResponsePersistsOnlyRedactedMetadataAndReplaysWithoutPlaintext(t *testing.T) {
 	executor, request, journal, lease, backend, host := fixtureInput(t)
 	request.Approval = approved(t, host, request)
-	backend.response = []byte(`{"schema_version":"fixture.v0","ok":true,"request_id":"action-1","action_id":"action-1","action":"read_value","execution":"applied","verification":{"status":"verified"},"state_status":"available","cleanup":{"status":"not_required"}}`)
+	const canary = "PRIVATE-CANARY-TEXT-DO-NOT-PERSIST"
+	backend.response = []byte(`{"schema_version":"fixture.v0","ok":true,"request_id":"action-1","action_id":"action-1","action":"read_value","execution":"applied","verification":{"status":"verified"},"state_status":"available","cleanup":{"status":"not_required"},"error":null,"result":{"value":"PRIVATE-CANARY-TEXT-DO-NOT-PERSIST"}}`)
 	response, err := executor.execute(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -168,12 +180,23 @@ func TestTerminalNativeResponseIsPersistedThenReplayedWithoutApproval(t *testing
 	if err := json.Unmarshal(response, &envelope); err != nil || envelope.Execution != "applied" {
 		t.Fatalf("response=%s err=%v", response, err)
 	}
+	stored, err := json.Marshal(journal.records[request.ActionID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stored, []byte(canary)) {
+		t.Fatalf("plaintext persisted in journal: %s", stored)
+	}
 	request.Approval = policyprobe.Approval{}
 	replayed, err := executor.execute(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(replayed) != string(response) || backend.calls != 1 || lease.releases != 1 || journal.finishes != 1 {
+	var replay nativeEnvelope
+	if err := json.Unmarshal(replayed, &replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.Execution != "applied" || string(replay.Result) != "null" || !bytes.Contains(replayed, []byte(`"replayed":true`)) || bytes.Contains(replayed, []byte(canary)) || backend.calls != 1 || lease.releases != 1 || journal.finishes != 1 {
 		t.Fatalf("replayed=%s calls=%d releases=%d finishes=%d", replayed, backend.calls, lease.releases, journal.finishes)
 	}
 }
@@ -181,7 +204,7 @@ func TestTerminalNativeResponseIsPersistedThenReplayedWithoutApproval(t *testing
 func TestUncertainCleanupQuarantinesWriterAndDoesNotRetry(t *testing.T) {
 	executor, request, journal, lease, backend, host := fixtureInput(t)
 	request.Approval = approved(t, host, request)
-	backend.response = []byte(`{"schema_version":"fixture.v0","ok":true,"request_id":"action-1","action_id":"action-1","action":"read_value","execution":"applied","verification":{"status":"verified"},"state_status":"available","cleanup":{"status":"unknown"}}`)
+	backend.response = []byte(`{"schema_version":"fixture.v0","ok":true,"request_id":"action-1","action_id":"action-1","action":"read_value","execution":"applied","verification":{"status":"verified"},"state_status":"available","cleanup":{"status":"unknown"},"error":null,"result":{}}`)
 	response, err := executor.execute(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)

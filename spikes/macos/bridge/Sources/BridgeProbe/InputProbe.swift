@@ -246,11 +246,11 @@ private func inputResponse(requestID: String, actionID: String? = nil, action: S
         "verification": ["status": verification],
         "state_status": stateStatus,
         "cleanup": ["status": cleanup],
-        "result": result,
+        "result": error == nil ? result : NSNull(),
+        "error": error as Any? ?? NSNull(),
     ]
-    if let error { envelope["error"] = ["code": error] }
     guard let data = try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]), data.count <= inputResponseLimit else {
-        return Data(#"{"schema_version":"fixture.v0","ok":false,"execution":"not_applied","verification":{"status":"unavailable"},"state_status":"unavailable","cleanup":{"status":"not_required"},"error":{"code":"response_limit_exceeded"}}"#.utf8)
+        return Data(#"{"schema_version":"fixture.v0","ok":false,"execution":"not_applied","verification":{"status":"unavailable"},"state_status":"unavailable","cleanup":{"status":"not_required"},"error":"response_limit_exceeded","result":null}"#.utf8)
     }
     return data
 }
