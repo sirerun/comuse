@@ -179,12 +179,12 @@ func RunFixtureAcceptance(ctx context.Context, capability hostcap.Capability, co
 		return report, errors.New("fixed fixture scenario approval could not be prepared")
 	}
 
-	execution := runWorkerAndPump(ctx, client, func(callCtx context.Context) ([]byte, error) {
+	executionData, executionErr := runWorkerAndPump(ctx, client, func(callCtx context.Context) ([]byte, error) {
 		return host.execute(callCtx, request)
 	})
-	if len(execution.data) != 0 {
+	if len(executionData) != 0 {
 		var envelope nativeEnvelope
-		if json.Unmarshal(execution.data, &envelope) == nil && envelope.RequestID == request.ActionID {
+		if json.Unmarshal(executionData, &envelope) == nil && envelope.RequestID == request.ActionID {
 			report.Execution = envelope.Execution
 			report.Verification = envelope.Verification.Status
 			report.StateStatus = envelope.StateStatus
@@ -202,7 +202,7 @@ func RunFixtureAcceptance(ctx context.Context, capability hostcap.Capability, co
 			}
 		}
 	}
-	if execution.err != nil && report.ErrorCode == "" {
+	if executionErr != nil && report.ErrorCode == "" {
 		report.ErrorCode = "native_input_unavailable"
 	}
 	if report.Status == "held" && report.ErrorCode == "" {

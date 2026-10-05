@@ -14,6 +14,7 @@ import (
 type nativeBridgeClient interface {
 	Call(context.Context, []byte) ([]byte, error)
 	InputCall(context.Context, bridgeclient.HostInputRequest, hostcap.Capability) ([]byte, error)
+	Close(context.Context) error
 }
 
 // BridgeBackend binds a same-runtime readonly AX preflight to the typed host input transport.
