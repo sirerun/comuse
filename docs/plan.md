@@ -1,6 +1,6 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** E1 seam landed through PR #6 using explicitly authorized local checks; native runtime, AX observation and fixture Luna lanes are active. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
+**Status:** E1 seam landed through PR #6 using explicitly authorized local checks; runtime, AX and fixture source is assembled; guarded input, policy, writer/replay and semantic lanes are rolling through three Luna worker slots. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
 **Updated:** 2026-10-04 UTC.
@@ -169,3 +169,9 @@ A new executor needs the RFC, vision, use cases, ADR, local execution bindings, 
 The user authorized ship implementation, independent review, ordinary GitHub merge and landed verification with GPT-6-Luna workers. This four-slot session uses the documented three-worker batching fallback. Coordinator retains seam integration and plan ownership; T1.1 seam source is delegated to Luna, while two Luna lanes prepare native and safety contracts. These preparation lanes do not start T1.10-T1.19 before T1.5. New worktrees and caches use the verified external volume. Existing checkouts remain preserved.
 
 Preflight: clean main at `590fb6e`, public GitHub repository, no open PRs, no active repository claim refs observed before this run. Go 1.27.1 and Swift 6.4 are available; minimum macOS 14 remains unqualified. Shared host load exceeded 10, so heavy local builds are held. Source and read-only work proceed; T1.2 validation and downstream seam landing cannot claim pass until the applicable checks run. Native input and TCC setup remain gated on T1.6. No production deployment or publication is in scope.
+
+## Rolling source batch update
+
+PR #6 landed at `2973799` after explicit operator authorization to use its recorded local checks despite the GitHub billing lock. The assembled feasibility candidate now contains fixture packaging, native runtime, AX identity/topology, partial terminal handling and state-bound approvals. Those later sources are not yet verified or independently reviewed. The current three Luna workers own L03 input, L06 writer/replay and L07 semantic projection; L05 policy source has completed its coding handoff. This is the documented four-slot fallback with rolling refill, not ten simultaneous workers.
+
+The shared host remains above the build-load ceiling, so new builds/tests are held. No fixture launch, Accessibility grant, native mutation acceptance or later CI exception is inferred from source handoff. The PR #6 local-check authorization applies to that seam only.

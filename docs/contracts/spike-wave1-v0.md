@@ -17,3 +17,13 @@ Fixture bundle ID is `com.sirerun.comuse.fixture`; launch requires `--fixture-no
 Requests carry `schema_version: 1`, `request_id`, `op` and explicit scope for content reads. Responses preserve the request ID and return status plus structured result or typed error. Default semantic output omits geometry and field values; optional synthetic normal-field reads require an explicit include-values request, and secure values are always omitted before retention/output. Bounds are fixed or tightened by the fixture probe: at most 256 nodes, depth 16, a 250 ms traversal budget, and the ABI's 64 KiB response ceiling. Coverage reports complete/truncated/unavailable, reasons and counts. Complete AX traversal does not prove complete visual or participant events.
 
 The fixture has deterministic labels/identifiers and synthetic postconditions for button count, normal/secure text, scroll sentinels, delayed state, removable child and focus/edit interference. It uses a SwiftUI app shell and AppKit-backed controlled AX elements. Source/build evidence is separate from launch, AX grant/deny/revoke, event-post access, actual input, signing and minimum-OS runtime acceptance. No screenshot or live-stream content is involved.
+
+## Rolling source batch amendments
+
+All three worker slots remain occupied through rolling lane refill. Native input owns `InputProbe.swift` and `spikes/inputprobe/`; writer/replay owns `spikes/desktopprobe/`; semantic normalization owns `spikes/semanticprobe/`. These consume the assembled candidate without implying later lane verification or landing.
+
+Native terminal `partial` responses preserve a non-null result. Cancellation and drain account for queued work returning as well as callback return, retaining native/library ownership on timeout. AX references retain stable identity within an exact process generation/window/nonce scope, with bounded retention and typed expiry/staleness. Partial coverage never establishes absence.
+
+Approval binding includes the complete native state identifier. Semantic canonical state identifiers are separate from the native identifier used for mutation preconditions. Protected values are removed before semantic canonicalization; explicit synthetic value projection permits only the normal `textfield` and exact fixture static text `counter-value`. Other values remain excluded.
+
+Desktop writer exclusion uses an OS process lock and a persistent bounded replay ledger. In-flight or unknown actions never receive a redispatch ticket. Expiration cannot silently make an action ID reusable; capacity fails closed. Crash-held input makes the state dirty; trusted reconciliation must verify cleanup before clearing it. No event posting is enabled by this source batch.
