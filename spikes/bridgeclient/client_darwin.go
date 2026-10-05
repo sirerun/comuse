@@ -69,6 +69,8 @@ func (p *pendingRequest) completion() completion {
 }
 
 type Client struct {
+	nativeMu  sync.Mutex // serializes every C call against library retirement
+	closeMu   sync.Mutex
 	mu        sync.Mutex
 	library   *C.comuse_bridge_library
 	runtimeID uint64
@@ -79,6 +81,8 @@ type Client struct {
 
 // Open must be called by a goroutine already running on the process main OS thread.
 // It pins that goroutine, and the native runtime verifies pthread_main_np itself.
+// Only one activated Swift image is permitted per process; restart the host to
+// upgrade or load a different image.
 func Open(path string) (*Client, error) {
 	if path == "" {
 		return nil, errors.New("native bridge library path is required")
@@ -117,9 +121,11 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 		return nil, ErrCallOnMainThread
 	}
 
+	c.nativeMu.Lock()
 	c.mu.Lock()
 	if c.closing || c.closed || c.library == nil {
 		c.mu.Unlock()
+		c.nativeMu.Unlock()
 		return nil, ErrClosed
 	}
 	state := newPending(c)
@@ -135,19 +141,21 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if status != 0 {
 		state.token.Delete()
 		c.mu.Unlock()
+		c.nativeMu.Unlock()
 		return nil, nativeStatusError("starting native request", status)
 	}
 	state.nativeHandle = uint64(nativeHandle)
 	c.pending[state.nativeHandle] = state
 	c.mu.Unlock()
+	c.nativeMu.Unlock()
 
 	contextErr := error(nil)
 	select {
 	case <-state.terminal:
 	case <-ctx.Done():
 		contextErr = ctx.Err()
-		if status := int32(C.bridge_request_cancel(c.library, C.uint64_t(state.nativeHandle))); status != 0 {
-			return nil, nativeStatusError("cancelling native request", status)
+		if err := c.cancelNative(state); err != nil {
+			return nil, err
 		}
 		select {
 		case <-state.terminal:
@@ -195,6 +203,8 @@ func (c *Client) Pump(duration time.Duration) error {
 	if duration <= 0 || duration > maxPumpDuration {
 		return fmt.Errorf("Pump duration must be in (0, %s]", maxPumpDuration)
 	}
+	c.nativeMu.Lock()
+	defer c.nativeMu.Unlock()
 	c.mu.Lock()
 	if c.closed || c.library == nil {
 		c.mu.Unlock()
@@ -210,8 +220,10 @@ func (c *Client) Pump(duration time.Duration) error {
 	return nil
 }
 
-// Close stops admission, cancels active requests, and drains callbacks before unloading the dylib.
-// On deadline or native not-drainable status it leaves all reachable state alive for a retry.
+// Close stops admission, cancels active requests, and drains callbacks before
+// retiring the runtime. It releases the C wrapper but keeps the activated Swift
+// image mapped until process exit. On deadline or not-drainable status it keeps
+// the wrapper and all reachable state alive for a retry.
 func (c *Client) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("Close requires a context")
@@ -219,6 +231,8 @@ func (c *Client) Close(ctx context.Context) error {
 	if C.bridge_is_main_thread() == 0 {
 		return ErrNotMainThread
 	}
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -229,12 +243,12 @@ func (c *Client) Close(ctx context.Context) error {
 	for _, state := range c.pending {
 		states = append(states, state)
 	}
-	library, runtimeID := c.library, c.runtimeID
+	runtimeID := c.runtimeID
 	c.mu.Unlock()
 
 	for _, state := range states {
-		if status := int32(C.bridge_request_cancel(library, C.uint64_t(state.nativeHandle))); status != 0 && status != 5 {
-			return nativeStatusError("cancelling request during close", status)
+		if err := c.cancelNative(state); err != nil {
+			return err
 		}
 	}
 	for _, state := range states {
@@ -268,6 +282,14 @@ func (c *Client) Close(ctx context.Context) error {
 			}
 			continue
 		}
+		c.nativeMu.Lock()
+		c.mu.Lock()
+		library := c.library
+		c.mu.Unlock()
+		if library == nil {
+			c.nativeMu.Unlock()
+			return ErrClosed
+		}
 		status := int32(C.bridge_runtime_close(library, C.uint64_t(runtimeID)))
 		if status == 0 {
 			c.mu.Lock()
@@ -277,9 +299,11 @@ func (c *Client) Close(ctx context.Context) error {
 			}
 			c.closed = true
 			c.mu.Unlock()
+			c.nativeMu.Unlock()
 			runtime.UnlockOSThread()
 			return nil
 		}
+		c.nativeMu.Unlock()
 		if status != 6 {
 			return nativeStatusError("closing native runtime", status)
 		}
@@ -304,6 +328,8 @@ func (c *Client) drainOnce(state *pendingRequest) error {
 		return nil
 	default:
 	}
+	c.nativeMu.Lock()
+	defer c.nativeMu.Unlock()
 	c.mu.Lock()
 	library := c.library
 	c.mu.Unlock()
@@ -327,10 +353,40 @@ func (c *Client) drainOnce(state *pendingRequest) error {
 	return nil
 }
 
+// cancelNative serializes request cancellation against drain and dlclose. A
+// request already drained by Close has necessarily published its completion,
+// so the terminal result wins over the caller's context cancellation.
+func (c *Client) cancelNative(state *pendingRequest) error {
+	select {
+	case <-state.terminal:
+		return nil
+	default:
+	}
+	c.nativeMu.Lock()
+	defer c.nativeMu.Unlock()
+	c.mu.Lock()
+	library := c.library
+	pending := c.pending[state.nativeHandle]
+	c.mu.Unlock()
+	if library == nil || pending != state {
+		return nil
+	}
+	status := int32(C.bridge_request_cancel(library, C.uint64_t(state.nativeHandle)))
+	if status != 0 && status != 5 {
+		select {
+		case <-state.terminal:
+			return nil
+		default:
+		}
+		return nativeStatusError("cancelling native request", status)
+	}
+	return nil
+}
+
 //export goBridgeCompletion
 func goBridgeCompletion(handle C.uint64_t, bytes *C.uint8_t, length C.size_t, token C.uint64_t) {
 	state := cgo.Handle(token).Value().(*pendingRequest)
-	if uint64(length) > 64*1024 || (length > 0 && bytes == nil) {
+	if uint64(length) > maxResponseBytes || (length > 0 && bytes == nil) {
 		state.publish(completion{handle: uint64(handle), err: errors.New("native response exceeds 65536 bytes or has a null pointer")})
 		return
 	}

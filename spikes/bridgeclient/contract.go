@@ -7,6 +7,11 @@ import (
 	"fmt"
 )
 
+const (
+	maxRequestBytes  = 32 * 1024
+	maxResponseBytes = 64 * 1024
+)
+
 type requestEnvelope struct {
 	SchemaVersion int    `json:"schema_version"`
 	RequestID     string `json:"request_id"`
@@ -32,7 +37,7 @@ const (
 )
 
 func validateRequest(data []byte) (requestEnvelope, error) {
-	if len(data) == 0 || len(data) > 32*1024 {
+	if len(data) == 0 || len(data) > maxRequestBytes {
 		return requestEnvelope{}, errors.New("request must contain at most 32768 bytes")
 	}
 	var request requestEnvelope
@@ -51,7 +56,7 @@ func validateRequest(data []byte) (requestEnvelope, error) {
 }
 
 func validateResponse(data []byte, requestID string) (responseEnvelope, error) {
-	if len(data) == 0 || len(data) > 64*1024 {
+	if len(data) == 0 || len(data) > maxResponseBytes {
 		return responseEnvelope{}, errors.New("native response must contain at most 65536 bytes")
 	}
 	var response responseEnvelope
