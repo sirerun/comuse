@@ -34,3 +34,18 @@ func TestValidateResponsePreservesTerminalOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func TestValidatePartialResponseRequiresAndPreservesResult(t *testing.T) {
+	partial := []byte(`{"schema_version":1,"request_id":"r1","status":"partial","error":null,"result":{"coverage":{"status":"partial"}}}`)
+	response, err := validateResponse(partial, "r1")
+	if err != nil {
+		t.Fatalf("valid partial response: %v", err)
+	}
+	if response.Status != StatusPartial || string(response.Result) != `{"coverage":{"status":"partial"}}` {
+		t.Fatalf("partial outcome was not preserved: status=%q result=%s", response.Status, response.Result)
+	}
+	missingResult := []byte(`{"schema_version":1,"request_id":"r1","status":"partial","error":null,"result":null}`)
+	if _, err := validateResponse(missingResult, "r1"); err == nil {
+		t.Fatal("partial response without a result was accepted")
+	}
+}

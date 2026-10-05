@@ -173,15 +173,15 @@ func (c *Client) Call(ctx context.Context, requestJSON []byte) ([]byte, error) {
 		return completed.bytes, err
 	}
 	switch response.Status {
-	case "completed":
+	case StatusCompleted, StatusPartial:
 		return completed.bytes, nil
-	case "cancelled":
+	case StatusCancelled:
 		if contextErr != nil {
 			return completed.bytes, fmt.Errorf("native request status cancelled: %w", contextErr)
 		}
-		return completed.bytes, &NativeError{Status: response.Status, Detail: string(response.Error)}
-	case "error":
-		return completed.bytes, &NativeError{Status: response.Status, Detail: string(response.Error)}
+		return completed.bytes, &NativeError{Status: string(response.Status), Detail: string(response.Error)}
+	case StatusError:
+		return completed.bytes, &NativeError{Status: string(response.Status), Detail: string(response.Error)}
 	default:
 		return completed.bytes, fmt.Errorf("unexpected native response status %q", response.Status)
 	}

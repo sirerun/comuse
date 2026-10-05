@@ -16,10 +16,20 @@ type requestEnvelope struct {
 type responseEnvelope struct {
 	SchemaVersion int             `json:"schema_version"`
 	RequestID     string          `json:"request_id"`
-	Status        string          `json:"status"`
+	Status        TerminalStatus  `json:"status"`
 	Result        json.RawMessage `json:"result"`
 	Error         json.RawMessage `json:"error"`
 }
+
+// TerminalStatus identifies the outcome carried by a native response envelope.
+type TerminalStatus string
+
+const (
+	StatusCompleted TerminalStatus = "completed"
+	StatusPartial   TerminalStatus = "partial"
+	StatusCancelled TerminalStatus = "cancelled"
+	StatusError     TerminalStatus = "error"
+)
 
 func validateRequest(data []byte) (requestEnvelope, error) {
 	if len(data) == 0 || len(data) > 32*1024 {
@@ -52,11 +62,11 @@ func validateResponse(data []byte, requestID string) (responseEnvelope, error) {
 		return responseEnvelope{}, fmt.Errorf("native response identity mismatch: schema_version=%d request_id=%q", response.SchemaVersion, response.RequestID)
 	}
 	switch response.Status {
-	case "completed":
+	case StatusCompleted, StatusPartial:
 		if len(response.Result) == 0 || string(response.Result) == "null" {
-			return responseEnvelope{}, errors.New("completed native response has no result")
+			return responseEnvelope{}, fmt.Errorf("%s native response has no result", response.Status)
 		}
-	case "cancelled", "error":
+	case StatusCancelled, StatusError:
 		if len(response.Error) == 0 || string(response.Error) == "null" {
 			return responseEnvelope{}, fmt.Errorf("native %s response has no error", response.Status)
 		}
