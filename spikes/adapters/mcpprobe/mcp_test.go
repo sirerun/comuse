@@ -1,6 +1,7 @@
 package mcpprobe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,15 +11,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sirerun/comuse/spikes/semanticprobe"
 )
 
 type fakeBackend struct {
-	windowRef string
-	started   chan struct{}
-	cancelled chan struct{}
-	a11yCalls atomic.Int32
+	windowRef     string
+	nativeStateID string
+	started       chan struct{}
+	cancelled     chan struct{}
+	a11yCalls     atomic.Int32
 }
 
 func (backend *fakeBackend) Hello(_ context.Context, scope Scope) (HelloResult, error) {
@@ -29,7 +32,10 @@ func (backend *fakeBackend) Hello(_ context.Context, scope Scope) (HelloResult, 
 }
 
 func (*fakeBackend) Doctor(context.Context, Scope) (DoctorResult, error) {
-	return DoctorResult{Status: "complete", Checks: []Check{{Name: "accessibility", Status: "unavailable", Prompted: false}}}, nil
+	return DoctorResult{Status: "complete", Checks: []Check{
+		{Name: "accessibility", Status: "unavailable"},
+		{Name: "event_posting", Status: "unavailable"},
+	}}, nil
 }
 
 func (backend *fakeBackend) Windows(_ context.Context, _ Scope) (WindowObservation, error) {
@@ -58,9 +64,26 @@ func (backend *fakeBackend) Accessibility(ctx context.Context, _ Scope, processR
 	return semanticprobe.Snapshot{
 		RequestID: "request-1", ObservationID: "observation-1", Status: semanticprobe.SnapshotComplete,
 		BundleID: FixtureBundleID, FixtureNonce: "fixture-1", ProcessStartRef: processRef,
-		WindowRef: windowRef, RootRefs: []string{}, Elements: []semanticprobe.Element{},
+		WindowRef: windowRef, RootRefs: []string{}, Elements: []semanticprobe.Element{}, NativeStateID: backend.nativeStateID,
 		Coverage: semanticprobe.Coverage{Status: "complete"}, CanonicalStateID: "canonical-1",
 	}, nil
+}
+
+func TestCompleteA11yProjectionDoesNotRequireOrExposeNativeStateID(t *testing.T) {
+	const nativeID = "private-native-precondition-canary"
+	backend := &fakeBackend{windowRef: "window-ref-1", nativeStateID: nativeID}
+	session, _ := startPair(t, backend, ProtocolVersion)
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "windows"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "a11y", Arguments: map[string]any{"window_ref": "window-ref-1"}})
+	if err != nil || result.IsError {
+		t.Fatalf("complete read-only projection rejected: result=%v err=%v", result, err)
+	}
+	text := resultText(result)
+	if !strings.Contains(text, `"canonical_state_id":"canonical-1"`) || strings.Contains(text, nativeID) {
+		t.Fatalf("canonical projection missing or native precondition leaked: %s", text)
+	}
 }
 
 func testConfig() Config {
@@ -318,4 +341,85 @@ func resultText(result *mcp.CallToolResult) string {
 		return ""
 	}
 	return text.Text
+}
+
+func TestDoctorRequiresExactUnpromptedCheckPair(t *testing.T) {
+	valid := DoctorResult{Status: "complete", Checks: []Check{
+		{Name: "accessibility", Status: "available"},
+		{Name: "event_posting", Status: "unavailable"},
+	}}
+	if err := validateDoctorResult(valid); err != nil {
+		t.Fatalf("valid doctor result rejected: %v", err)
+	}
+	invalid := []DoctorResult{
+		{Status: "complete", Checks: []Check{{Name: "accessibility", Status: "available"}}},
+		{Status: "complete", Checks: []Check{{Name: "accessibility", Status: "available"}, {Name: "accessibility", Status: "unavailable"}}},
+		{Status: "complete", Checks: []Check{{Name: "accessibility", Status: "available"}, {Name: "event_posting", Status: "available", Prompted: true}}},
+	}
+	for index, result := range invalid {
+		if err := validateDoctorResult(result); !errors.Is(err, ErrNativeContract) {
+			t.Errorf("invalid doctor result %d = %v, want ErrNativeContract", index, err)
+		}
+	}
+}
+
+func TestBoundedFrameWriterCapsCompleteResponseWithNearLimitID(t *testing.T) {
+	writerBuffer := &bytes.Buffer{}
+	writer := &boundedFrameWriter{writer: writerBuffer, maxFrameBytes: MaxFrameBytes}
+	response := &jsonrpc.Response{
+		ID:     jsonrpc.StringID(strings.Repeat("r", MaxFrameBytes-200)),
+		Result: map[string]any{"payload": strings.Repeat("private-response-canary", 32)},
+	}
+	frame, err := jsonrpc.EncodeMessage(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame = append(frame, '\n')
+	if len(frame) <= MaxFrameBytes {
+		t.Fatalf("fixture response frame length = %d, want over %d", len(frame), MaxFrameBytes)
+	}
+	if _, err := writer.Write(frame); err != nil {
+		t.Fatalf("bounded frame write: %v", err)
+	}
+	if writerBuffer.Len() > MaxFrameBytes {
+		t.Fatalf("outbound frame length = %d, over %d", writerBuffer.Len(), MaxFrameBytes)
+	}
+	message, err := jsonrpc.DecodeMessage(bytes.TrimSpace(writerBuffer.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, ok := message.(*jsonrpc.Response)
+	if !ok || fallback.Error == nil {
+		t.Fatalf("oversized response was not replaced by a correlated error: %#v", message)
+	}
+	requestID, ok := fallback.ID.Raw().(string)
+	if !ok || len(requestID) != MaxFrameBytes-200 {
+		t.Fatalf("fallback response ID did not preserve request correlation")
+	}
+	if strings.Contains(writerBuffer.String(), "private-response-canary") || fallback.Error.Error() == "" {
+		t.Fatal("oversized response content leaked or explicit error missing")
+	}
+}
+
+func TestBoundedFrameWriterFailsClosedWhenErrorCannotEchoID(t *testing.T) {
+	writerBuffer := &bytes.Buffer{}
+	writer := &boundedFrameWriter{writer: writerBuffer, maxFrameBytes: MaxFrameBytes}
+	response := &jsonrpc.Response{
+		ID:     jsonrpc.StringID(strings.Repeat("i", MaxFrameBytes-32)),
+		Result: "nonempty-result",
+	}
+	frame, err := jsonrpc.EncodeMessage(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame = append(frame, '\n')
+	if len(frame) <= MaxFrameBytes {
+		t.Fatalf("fixture response frame length = %d, want over %d", len(frame), MaxFrameBytes)
+	}
+	if _, err := writer.Write(frame); !errors.Is(err, ErrOutboundFrame) {
+		t.Fatalf("unfittable response error = %v, want ErrOutboundFrame", err)
+	}
+	if writerBuffer.Len() != 0 {
+		t.Fatal("oversized or uncorrelated response bytes were emitted")
+	}
 }
