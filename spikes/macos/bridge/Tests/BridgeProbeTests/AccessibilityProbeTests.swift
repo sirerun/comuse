@@ -25,12 +25,14 @@ struct AccessibilityProbeTests {
     func fixtureOperationsRequireScopeAndRejectOtherBundleBeforeAX() throws {
         let missingScope = try decode(#"{"schema_version":1,"request_id":"windows-1","op":"windows"}"#)
         #expect(missingScope["status"] as? String == "error")
-        #expect((missingScope["error"] as? [String: String])?["code"] == "scope_required")
+        #expect(missingScope["error"] as? String == "scope_required")
+        #expect(missingScope["result"] is NSNull)
 
         let foreignScope = #"{"schema_version":1,"request_id":"windows-2","op":"windows","scope":{"pid":1,"bundle_id":"com.apple.finder","fixture_nonce":"n"}}"#
         let denied = try decode(foreignScope)
         #expect(denied["status"] as? String == "error")
-        #expect((denied["error"] as? [String: String])?["code"] == "scope_or_permission_denied")
+        #expect(denied["error"] as? String == "scope_or_permission_denied")
+        #expect(denied["result"] is NSNull)
     }
 
     @Test
@@ -38,19 +40,22 @@ struct AccessibilityProbeTests {
         let request = #"{"schema_version":1,"request_id":"a11y-1","op":"a11y","scope":{"pid":123,"bundle_id":"com.sirerun.comuse.fixture","fixture_nonce":"nonce-1"}}"#
         let response = try decode(request)
         #expect(response["status"] as? String == "error")
-        #expect((response["error"] as? [String: String])?["code"] == "invalid_request")
+        #expect(response["error"] as? String == "invalid_request")
+        #expect(response["result"] is NSNull)
     }
 
     @Test
     func malformedAndOversizedPayloadsAreBounded() throws {
         let malformed = try decode("{}")
         #expect(malformed["status"] as? String == "error")
-        #expect((malformed["error"] as? [String: String])?["code"] == "invalid_request")
+        #expect(malformed["error"] as? String == "invalid_request")
+        #expect(malformed["result"] is NSNull)
 
         let oversized = handleAccessibilityProbe(Data(repeating: 0x20, count: 32 * 1024 + 1))
         let object = try #require(JSONSerialization.jsonObject(with: oversized) as? [String: Any])
         #expect(object["status"] as? String == "error")
-        #expect((object["error"] as? [String: String])?["code"] == "request_limit_exceeded")
+        #expect(object["error"] as? String == "request_limit_exceeded")
+        #expect(object["result"] is NSNull)
     }
 
     private func decode(_ request: String) throws -> [String: Any] {
