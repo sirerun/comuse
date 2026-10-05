@@ -110,6 +110,27 @@ func TestFinishUnknownPersistsOnlyAllowlistedMetadata(t *testing.T) {
 	}
 }
 
+func TestFinishUnknownPreservesValidatedPartialFailureForReplay(t *testing.T) {
+	executor, _, journal, lease, _, _ := fixtureInput(t)
+	response := []byte(`{"schema_version":"fixture.v0","request_id":"action-1","action_id":"action-1","action":"replace","execution":"partial","verification":{"status":"failed"},"state_status":"partial","cleanup":{"status":"not_required"},"error":"postcondition_failed","result":{"expected_value":"private_text_canary"}}`)
+	record := JournalRecord{ActionID: "action-1", Execution: "pending"}
+	if err := executor.finishUnknown(context.Background(), lease, record, response); err != nil {
+		t.Fatal(err)
+	}
+	persisted := journal.records[record.ActionID]
+	if persisted.Execution != "partial" || persisted.ErrorCode != "postcondition_failed" || persisted.Verification != "failed" {
+		t.Fatalf("persisted terminal summary = %+v", persisted)
+	}
+	replayed := replaySummary(persisted)
+	var envelope map[string]any
+	if err := json.Unmarshal(replayed, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope["execution"] != "partial" || envelope["ok"] != false || bytes.Contains(replayed, []byte("private_text_canary")) {
+		t.Fatalf("partial replay was not truthful/redacted: %s", replayed)
+	}
+}
+
 func fixtureInput(t *testing.T) (*Executor, Request, *testJournal, *testLease, *testBackend, *policyprobe.HostAuthority) {
 	t.Helper()
 	now := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)

@@ -137,6 +137,7 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 	if err != nil {
 		return refusal(request.ActionID, "desktop_busy", "not_applied"), err
 	}
+	journalCtx := context.WithValue(ctx, writerLeaseContextKey{}, lease)
 	nativeScope := NativeTargetRequest{PID: request.Scope.Process.PID, BundleID: request.Scope.Process.BundleID, FixtureNonce: request.Scope.FixtureNonce, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef}
 	classification, err := executor.backend.Inspect(ctx, nativeScope)
 	if err != nil {
@@ -158,7 +159,7 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 		_ = lease.Release(context.Background())
 		return refusal(request.ActionID, "validation_error", "not_applied"), err
 	}
-	prior, found, err := executor.journal.Lookup(ctx, request.ActionID)
+	prior, found, err := executor.journal.Lookup(journalCtx, request.ActionID)
 	if err != nil {
 		_ = lease.Release(context.Background())
 		return refusal(request.ActionID, "backend_unavailable", "not_applied"), err
@@ -175,13 +176,13 @@ func (executor *Executor) execute(ctx context.Context, request Request) ([]byte,
 		return response, nil
 	}
 	record := JournalRecord{ActionID: request.ActionID, Commitment: commitment, StateID: request.Scope.StateID, Execution: "pending", UpdatedAt: executor.clock()}
-	created, err := executor.journal.Begin(ctx, record)
+	created, err := executor.journal.Begin(journalCtx, record)
 	if err != nil {
 		_ = lease.Quarantine(context.Background(), err)
 		return refusal(request.ActionID, "backend_unavailable", "not_applied"), err
 	}
 	if !created {
-		prior, found, lookupErr := executor.journal.Lookup(ctx, request.ActionID)
+		prior, found, lookupErr := executor.journal.Lookup(journalCtx, request.ActionID)
 		if lookupErr != nil || !found {
 			cause := errors.Join(errors.New("action begin conflicted without a readable prior"), lookupErr)
 			_ = lease.Quarantine(context.Background(), cause)
@@ -256,7 +257,8 @@ func (executor *Executor) finish(ctx context.Context, lease writerLease, record 
 		record.Execution = execution
 	}
 	record.UpdatedAt = executor.clock()
-	if err := executor.journal.Finish(ctx, record); err != nil {
+	journalCtx := context.WithValue(ctx, writerLeaseContextKey{}, lease)
+	if err := executor.journal.Finish(journalCtx, record); err != nil {
 		_ = lease.Quarantine(context.Background(), err)
 		return err
 	}
@@ -272,9 +274,18 @@ func (executor *Executor) finishUnknown(ctx context.Context, lease writerLease, 
 	if json.Unmarshal(response, &native) == nil {
 		setTerminalMetadata(&record, native)
 	}
-	record.Execution = "unknown"
+	if record.Execution == "" || record.Execution == "pending" {
+		record.Execution = "unknown"
+	}
+	if record.Execution == "unknown" && record.ErrorCode == "" {
+		record.ErrorCode = "outcome_unknown"
+	}
+	if (record.Cleanup == "failed" || record.Cleanup == "unknown") && record.ErrorCode == "" {
+		record.ErrorCode = "outcome_unknown"
+	}
 	record.UpdatedAt = executor.clock()
-	journalErr := executor.journal.Finish(ctx, record)
+	journalCtx := context.WithValue(ctx, writerLeaseContextKey{}, lease)
+	journalErr := executor.journal.Finish(journalCtx, record)
 	quarantineCause := journalErr
 	if quarantineCause == nil {
 		quarantineCause = errors.New("native execution outcome requires quarantine")
@@ -544,6 +555,8 @@ func marshalReplay(record JournalRecord) []byte {
 		replayError = record.ErrorCode
 	}
 	ok := (record.Execution == "applied" || record.Execution == "partial") && record.ErrorCode == ""
+	ok = ok || record.Action == "read_value" && record.Execution == "not_applied" && record.Verification == "verified" && record.ErrorCode == ""
+	ok = ok && record.Cleanup != "failed" && record.Cleanup != "unknown"
 	payload, _ := json.Marshal(map[string]any{
 		"schema_version": "fixture.v0", "ok": ok, "request_id": record.ActionID,
 		"action_id": record.ActionID, "action": record.Action, "execution": record.Execution,
