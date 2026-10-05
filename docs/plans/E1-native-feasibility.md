@@ -138,3 +138,10 @@ Fresh non-author review capacity is available again. The fresh reviewer covers t
 - [ ] T1.45 Verify resumed remediation Owner: coordinator kind: agent stage: verify lane: agent blocked-by: [T1.44] acc: [Relevant Go, disabled-cgo, race, lint and Swift checks run against the exact assembled source under host load and lease limits; runtime and fixture evidence remain separately recorded.]
 
 T1.31 additionally depends on T1.45. T1.43 is assigned to the fresh non-author full-candidate reviewer. All final receipts cover these fixes and coordinator integration at the exact final head. The first assembled gated Go run failed on a duplicate desktop test and input/semantic assertions; passing individual packages do not constitute a candidate pass. Source fixes are integrated, with rerun pending the shared host load gate.
+
+## Restricted host transport acceptance
+
+- [ ] T1.46 Restrict ordinary Go consumers to admitted host transport Owner: native/input lane kind: agent stage: implement lane: agent blocked-by: [T1.41] acc: [Typed input transport requires an opaque import-restricted host capability; invalid or zero capability fails before native dispatch; ordinary external consumers cannot mint it; readonly adapters have no route or model admission fields. The native mutation guard remains disabled pending integrated acceptance.]
+- [ ] T1.47 Verify restricted host transport Owner: coordinator kind: agent stage: verify lane: agent blocked-by: [T1.46] acc: [External consumer restriction, invalid-capability refusal, readonly adapter closure, older ABI1 optional-symbol compatibility and lifecycle tests pass at exact head; independent review covers admission, replay, classification and cleanup.]
+
+T1.42 additionally depends on T1.47. This is a library API boundary, not a sandbox for arbitrary native code already running with host authority. The optional C ABI symbol is low level and must remain compile-closed until the integrated host admission and controlled fixture gates are met. Typed JSON alone is not approval or writer authority.
