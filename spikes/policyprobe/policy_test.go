@@ -46,6 +46,7 @@ func validScope(now time.Time) Scope {
 			PID: 4312, BundleID: "com.sirerun.comuse.fixture", LaunchGeneration: "launch-7",
 		},
 		FixtureNonce:  "run-test-7",
+		StateID:       "state-fixture-test-7",
 		WindowRef:     "window-ref-7",
 		WindowTitle:   "Comuse Fixture run-test-7",
 		ElementRef:    "element-ref-counter",
@@ -100,6 +101,11 @@ func TestApprovalBindsProcessLaunchWindowElementAndActionPayload(t *testing.T) {
 	wrong.Process.LaunchGeneration = "launch-8"
 	if got := gate.Admit(wrong, action, approval); got.Code != DecisionDeniedBindingMismatch {
 		t.Fatalf("wrong launch generation decision = %q", got.Code)
+	}
+	wrongState := scope
+	wrongState.StateID = "state-after-observation-change"
+	if got := gate.Admit(wrongState, action, approval); got.Code != DecisionDeniedBindingMismatch {
+		t.Fatalf("wrong state ID decision = %q", got.Code)
 	}
 	changed := action
 	changed.Text = "different text"
