@@ -27,3 +27,5 @@ Native terminal `partial` responses preserve a non-null result. Cancellation and
 Approval binding includes the complete native state identifier. Semantic canonical state identifiers are separate from the native identifier used for mutation preconditions. Protected values are removed before semantic canonicalization; explicit synthetic value projection permits only the normal `textfield` and exact fixture static text `counter-value`. Other values remain excluded.
 
 Desktop writer exclusion uses an OS process lock and a persistent bounded replay ledger. In-flight or unknown actions never receive a redispatch ticket. Expiration cannot silently make an action ID reusable; capacity fails closed. Crash-held input makes the state dirty; trusted reconciliation must verify cleanup before clearing it. No event posting is enabled by this source batch.
+
+Runtime lifetime amendment: activating a Swift image pins it for the process lifetime. Logical Close drains callback/runtime ownership; it must not advertise physical image unloading. The host restarts for native upgrades, and activation retention is bounded. Cancellation must serialize against library close.
