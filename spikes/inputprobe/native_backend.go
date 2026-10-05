@@ -38,7 +38,7 @@ func (backend *BridgeBackend) Inspect(ctx context.Context, scope NativeTargetReq
 	hash := sha256.Sum256(identity)
 	requestID := "input-preflight-" + hex.EncodeToString(hash[:8])
 	wire := map[string]any{
-		"schema_version": 1, "request_id": requestID, "op": "a11y", "include_values": true,
+		"schema_version": 1, "request_id": requestID, "op": "a11y", "include_values": false,
 		"scope": map[string]any{
 			"pid": scope.PID, "bundle_id": scope.BundleID,
 			"fixture_nonce": scope.FixtureNonce, "window_ref": scope.WindowRef,
@@ -58,7 +58,6 @@ func (backend *BridgeBackend) Inspect(ctx context.Context, scope NativeTargetReq
 		Status        string          `json:"status"`
 		Error         json.RawMessage `json:"error"`
 		Result        struct {
-			StateID         string `json:"state_id"`
 			ProcessStartRef string `json:"process_start_ref"`
 			WindowRef       string `json:"window_ref"`
 			Coverage        struct {
@@ -66,11 +65,10 @@ func (backend *BridgeBackend) Inspect(ctx context.Context, scope NativeTargetReq
 				Truncated bool   `json:"truncated"`
 			} `json:"coverage"`
 			Elements []struct {
-				Ref         string `json:"ref"`
-				Role        string `json:"role"`
-				Identifier  string `json:"identifier"`
-				InputClass  string `json:"input_classification"`
-				ValueStatus string `json:"value_status"`
+				Ref        string `json:"ref"`
+				Role       string `json:"role"`
+				Identifier string `json:"identifier"`
+				InputClass string `json:"input_classification"`
 			} `json:"elements"`
 		} `json:"result"`
 	}
@@ -85,7 +83,7 @@ func (backend *BridgeBackend) Inspect(ctx context.Context, scope NativeTargetReq
 	}
 	for _, element := range response.Result.Elements {
 		if element.Ref == scope.ElementRef {
-			classification = NativeClassification{Complete: true, StateID: response.Result.StateID, ProcessStartRef: response.Result.ProcessStartRef, WindowRef: response.Result.WindowRef, ElementRef: element.Ref, Role: element.Role, Identifier: element.Identifier, InputClass: element.InputClass, ValueStatus: element.ValueStatus}
+			classification = NativeClassification{Complete: true, ProcessStartRef: response.Result.ProcessStartRef, WindowRef: response.Result.WindowRef, ElementRef: element.Ref, Role: element.Role, Identifier: element.Identifier, InputClass: element.InputClass}
 			return classification, nil
 		}
 	}

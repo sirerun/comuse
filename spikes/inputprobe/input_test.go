@@ -67,8 +67,8 @@ func (backend *testBackend) Inspect(_ context.Context, request NativeTargetReque
 	if backend.classification != nil {
 		return *backend.classification, nil
 	}
-	classification := NativeClassification{Complete: true, StateID: request.ExpectedStateID, ProcessStartRef: request.ProcessStartRef, WindowRef: request.WindowRef, ElementRef: request.ElementRef}
-	classification.Role, classification.Identifier, classification.InputClass, classification.ValueStatus = "AXTextField", "textfield", "fixture_normal_text_field", "included_synthetic_normal"
+	classification := NativeClassification{Complete: true, ProcessStartRef: request.ProcessStartRef, WindowRef: request.WindowRef, ElementRef: request.ElementRef}
+	classification.Role, classification.Identifier, classification.InputClass = "AXTextField", "textfield", "fixture_normal_text_field"
 	return classification, nil
 }
 
@@ -79,11 +79,33 @@ func (backend *testBackend) inputCall(context.Context, bridgeclient.HostInputReq
 
 func TestFreshNativeClassificationRejectsProtectedBeforeAdmissionAndDispatch(t *testing.T) {
 	executor, request, journal, lease, backend, host := fixtureInput(t)
-	backend.classification = &NativeClassification{Complete: true, StateID: request.Scope.StateID, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef, Role: "AXTextField", Identifier: "securefield", InputClass: "protected_or_uncertain_text_field", ValueStatus: "omitted_protected_or_unavailable"}
+	backend.classification = &NativeClassification{Complete: true, ProcessStartRef: request.Scope.Process.LaunchGeneration, WindowRef: request.Scope.WindowRef, ElementRef: request.Scope.ElementRef, Role: "AXTextField", Identifier: "securefield", InputClass: "protected_or_uncertain_text_field"}
 	request.Approval = approved(t, host, request)
 	response, err := executor.execute(context.Background(), request)
 	if err == nil || backend.inspects != 1 || backend.calls != 0 || journal.begins != 0 || lease.releases != 1 {
 		t.Fatalf("response=%s err=%v backend=%+v journal=%+v lease=%+v", response, err, backend, journal, lease)
+	}
+}
+
+func TestFinishUnknownPersistsOnlyAllowlistedMetadata(t *testing.T) {
+	executor, _, journal, lease, _, _ := fixtureInput(t)
+	const canary = "private_text_canary"
+	response := []byte(`{"schema_version":"fixture.v0","request_id":"action-1","action_id":"action-1","action":"secret_action_canary","execution":"unknown","verification":{"status":"secret_verification_canary"},"state_status":"secret_state_canary","cleanup":{"status":"secret_cleanup_canary"},"error":"private_text_canary","result":null}`)
+	record := JournalRecord{ActionID: "action-1", Execution: "pending"}
+	if err := executor.finishUnknown(context.Background(), lease, record, response); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := json.Marshal(journal.records[record.ActionID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stored, []byte(canary)) || bytes.Contains(stored, []byte("secret_")) {
+		t.Fatalf("unsafe terminal metadata persisted: %s", stored)
+	}
+	persisted := journal.records[record.ActionID]
+	if persisted.Execution != "unknown" || persisted.ErrorCode != "native_error" ||
+		persisted.Verification != "unavailable" || persisted.StateStatus != "unavailable" || persisted.Cleanup != "unknown" || persisted.Action != "" {
+		t.Fatalf("unexpected sanitized record: %+v", persisted)
 	}
 }
 
