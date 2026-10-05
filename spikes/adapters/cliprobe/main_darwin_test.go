@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,11 +16,14 @@ import (
 )
 
 type fakeClient struct {
-	mu        sync.Mutex
-	requests  []map[string]any
-	responses [][]byte
-	closed    bool
-	pumps     int
+	mu          sync.Mutex
+	requests    []map[string]any
+	responses   [][]byte
+	callErr     error
+	callDelay   time.Duration
+	closed      bool
+	pumps       int
+	closeBudget time.Duration
 }
 
 func (client *fakeClient) Call(_ context.Context, payload []byte) ([]byte, error) {
@@ -28,14 +32,19 @@ func (client *fakeClient) Call(_ context.Context, payload []byte) ([]byte, error
 		return nil, err
 	}
 	client.mu.Lock()
-	defer client.mu.Unlock()
 	client.requests = append(client.requests, request)
 	if len(client.responses) == 0 {
+		client.mu.Unlock()
 		return nil, io.EOF
 	}
 	response := client.responses[0]
 	client.responses = client.responses[1:]
-	return response, nil
+	callErr, callDelay := client.callErr, client.callDelay
+	client.mu.Unlock()
+	if callDelay > 0 {
+		time.Sleep(callDelay)
+	}
+	return response, callErr
 }
 func (client *fakeClient) Pump(time.Duration) error {
 	client.mu.Lock()
@@ -43,9 +52,12 @@ func (client *fakeClient) Pump(time.Duration) error {
 	client.mu.Unlock()
 	return nil
 }
-func (client *fakeClient) Close(context.Context) error {
+func (client *fakeClient) Close(ctx context.Context) error {
 	client.mu.Lock()
 	client.closed = true
+	if deadline, ok := ctx.Deadline(); ok {
+		client.closeBudget = time.Until(deadline)
+	}
 	client.mu.Unlock()
 	return nil
 }
@@ -98,5 +110,40 @@ func TestCommandCannotOverrideFixedFixtureScope(t *testing.T) {
 	status := run([]string{"--config", writeConfig(t), "--pid", "999", "windows"}, &stdout, &stderr, func(string) (nativeClient, error) { opened = true; return nil, nil })
 	if status != exitUsage || opened || stdout.Len() != 0 {
 		t.Fatalf("status=%d opened=%v stdout=%q stderr=%q", status, opened, stdout.String(), stderr.String())
+	}
+}
+
+func TestMalformedNativeBytesWithErrorAreNotAccepted(t *testing.T) {
+	for _, response := range [][]byte{
+		[]byte(`{"schema_version":1,"request_id":"wrong-id","status":"completed","result":{}}`),
+		[]byte(`{"schema_version":1,"request_id":"cliprobe-1","status":"completed","result":`),
+	} {
+		client := &fakeClient{responses: [][]byte{response}, callErr: errors.New("native validation failure")}
+		var stdout, stderr strings.Builder
+		status := run([]string{"--config", writeConfig(t), "hello"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
+		if status != exitNative || stdout.Len() != 0 {
+			t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestCloseGetsFreshBudgetAfterSlowOperation(t *testing.T) {
+	client := &fakeClient{
+		responses: [][]byte{[]byte(`{"schema_version":1,"request_id":"cliprobe-1","status":"completed","result":{}}`)},
+		callDelay: 2100 * time.Millisecond,
+	}
+	var stdout, stderr strings.Builder
+	status := run([]string{"--config", writeConfig(t), "hello"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
+	if status != exitOK || client.closeBudget < time.Second {
+		t.Fatalf("status=%d close_budget=%s stderr=%q", status, client.closeBudget, stderr.String())
+	}
+}
+
+func TestMultipleFixtureWindowsAreRejectedAsAmbiguous(t *testing.T) {
+	client := &fakeClient{responses: [][]byte{[]byte(`{"schema_version":1,"request_id":"cliprobe-windows","status":"completed","result":{"process_start_ref":"process-ref","windows":[{"ref":"first"},{"ref":"second"}]}}`)}}
+	var stdout, stderr strings.Builder
+	status := run([]string{"--config", writeConfig(t), "--window-index", "0", "a11y"}, &stdout, &stderr, func(string) (nativeClient, error) { return client, nil })
+	if status != exitNative || len(client.requests) != 1 || stdout.Len() != 0 {
+		t.Fatalf("status=%d requests=%d stdout=%q stderr=%q", status, len(client.requests), stdout.String(), stderr.String())
 	}
 }
