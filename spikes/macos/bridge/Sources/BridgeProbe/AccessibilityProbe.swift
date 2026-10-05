@@ -360,7 +360,18 @@ private func listFixtureWindows(scope: ProbeScope, requestID: String) -> Data {
         axReferences.removeUnobservedWindows(identity: identity, nonce: scope.nonce, observed: observed)
     }
     let partial = !complete || !stillSame || validationTimedOut
-    let windowCoverageReason: Any = timedOut || validationTimedOut ? "deadline" : (capped ? "window_limit" : (windowUncertain ? "bounded_or_ax_uncertainty" : (!stillSame ? "concurrent_change" : NSNull())))
+    let windowCoverageReason: Any
+    if timedOut || validationTimedOut {
+        windowCoverageReason = "deadline"
+    } else if capped {
+        windowCoverageReason = "window_limit"
+    } else if windowUncertain {
+        windowCoverageReason = "bounded_or_ax_uncertainty"
+    } else if !stillSame {
+        windowCoverageReason = "concurrent_change"
+    } else {
+        windowCoverageReason = NSNull()
+    }
     let result: [String: Any] = [
         "process_start_ref": processStartReference,
         "windows": rows,
@@ -553,7 +564,14 @@ private func observeFixtureAccessibility(scope: ProbeScope, requestID: String, i
     if complete {
         axReferences.removeUnobservedElements(identity: identity, nonce: scope.nonce, windowReference: windowReference, observed: observedReferences)
     }
-    let coverageReason: Any = concurrentChange ? "concurrent_change" : (truncated ? "bounded_or_ax_uncertainty" : NSNull())
+    let coverageReason: Any
+    if concurrentChange {
+        coverageReason = "concurrent_change"
+    } else if truncated {
+        coverageReason = "bounded_or_ax_uncertainty"
+    } else {
+        coverageReason = NSNull()
+    }
     let result: [String: Any] = [
         "observation_id": observationID,
         "state_id": stateID,
@@ -614,8 +632,10 @@ private func fixtureWindowStillMatches(_ window: AXUIElement, identity: ProcessI
 private func sameAXElement(_ element: AXUIElement, parent: AXUIElement) -> Bool {
     AXUIElementSetMessagingTimeout(element, 0.05)
     AXUIElementSetMessagingTimeout(parent, 0.05)
-    guard let currentParent = copyAXAttribute(element, kAXParentAttribute) as? AXUIElement,
-          CFEqual(currentParent, parent),
+    guard let parentValue = copyAXAttribute(element, kAXParentAttribute),
+          CFGetTypeID(parentValue) == AXUIElementGetTypeID() else { return false }
+    let currentParent = unsafeBitCast(parentValue, to: AXUIElement.self)
+    guard CFEqual(currentParent, parent),
           let children = copyAXAttribute(parent, kAXChildrenAttribute) as? [AXUIElement] else { return false }
     return children.contains(where: { CFEqual($0, element) })
 }
