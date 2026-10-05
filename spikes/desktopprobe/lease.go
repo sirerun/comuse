@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +37,7 @@ var (
 	ErrNoTicket        = errors.New("action is already recorded and cannot be dispatched again")
 	ErrTicketUsed      = errors.New("dispatch ticket has already been consumed")
 	ErrClosed          = errors.New("desktopprobe lease is closed")
+	ErrCleanupPanic    = errors.New("desktopprobe cleanup callback panicked")
 )
 
 type Outcome string
@@ -510,7 +510,7 @@ func (l *Lease) releaseHeld(ctx context.Context, id string) error {
 func invokeCleanup(ctx context.Context, cleanup CleanupFunc) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("held-input cleanup panicked: %v\n%s", recovered, debug.Stack())
+			err = ErrCleanupPanic
 		}
 	}()
 	return cleanup(ctx)
@@ -526,7 +526,11 @@ func (l *Lease) Close(ctx context.Context) error {
 	defer l.closeMu.Unlock()
 	l.mu.Lock()
 	if l.closed {
+		dirty := l.state.Dirty
 		l.mu.Unlock()
+		if dirty {
+			return ErrDirty
+		}
 		return nil
 	}
 	l.closing = true
@@ -565,6 +569,9 @@ func (l *Lease) Close(ctx context.Context) error {
 		}
 	}
 	cleanupErr = errors.Join(cleanupErr, l.saveLocked())
+	if l.state.Dirty {
+		cleanupErr = errors.Join(cleanupErr, ErrDirty)
+	}
 	l.closed = true
 	lockFile := l.lockFile
 	l.lockFile = nil
