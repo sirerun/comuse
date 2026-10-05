@@ -1,6 +1,6 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** Bounded E1 seam candidate is locally verified in PR #6. Final review is being closed; merge is blocked because GitHub CI cannot start under the account billing lock. Later native/runtime acceptance gates remain open.
+**Status:** E1 seam landed through PR #6 using explicitly authorized local checks; native runtime, AX observation and fixture Luna lanes are active. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
 **Updated:** 2026-10-04 UTC.
