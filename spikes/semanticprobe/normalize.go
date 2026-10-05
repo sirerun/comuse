@@ -30,6 +30,7 @@ var (
 	ErrScopeMismatch     = errors.New("native result does not match trusted fixture scope")
 	ErrExpiredReference  = errors.New("native reference expired")
 	ErrStaleReference    = errors.New("native reference is stale")
+	ErrPermissionDenied  = errors.New("native operation was denied")
 	ErrNativeOperation   = errors.New("native operation failed")
 	ErrTopology          = errors.New("native element topology is invalid")
 	ErrCoverage          = errors.New("native coverage report is invalid")
@@ -192,9 +193,10 @@ func NormalizeEnvelope(raw []byte, expected ExpectedScope, options Options) (Sna
 	if response.RequestID != expected.RequestID {
 		return Snapshot{}, ErrRequestMismatch
 	}
+	hasResult := len(response.Result) > 0 && !bytes.Equal(bytes.TrimSpace(response.Result), []byte("null"))
 	switch response.Status {
 	case "error":
-		if len(response.Result) != 0 || response.Error == "" {
+		if hasResult || response.Error == "" {
 			return Snapshot{}, ErrMalformedEnvelope
 		}
 		switch response.Error {
@@ -202,11 +204,13 @@ func NormalizeEnvelope(raw []byte, expected ExpectedScope, options Options) (Sna
 			return Snapshot{}, ErrExpiredReference
 		case "reference_stale":
 			return Snapshot{}, ErrStaleReference
+		case "permission_denied", "scope_or_permission_denied":
+			return Snapshot{}, ErrPermissionDenied
 		default:
 			return Snapshot{}, ErrNativeOperation
 		}
 	case "completed", "partial":
-		if len(response.Result) == 0 || response.Error != "" {
+		if !hasResult || response.Error != "" {
 			return Snapshot{}, ErrMalformedEnvelope
 		}
 	default:
@@ -228,9 +232,11 @@ func NormalizeEnvelope(raw []byte, expected ExpectedScope, options Options) (Sna
 		return Snapshot{}, err
 	}
 	if len(result.Elements) == 0 || len(result.Elements) > MaxElements ||
-		len(result.RootRefs) == 0 || len(result.RootRefs) > MaxElements ||
-		coverage.Visited < len(result.Elements) || coverage.Visited > MaxElements {
+		len(result.RootRefs) == 0 || len(result.RootRefs) > MaxElements || coverage.Visited > MaxElements {
 		return Snapshot{}, ErrLimitExceeded
+	}
+	if coverage.Visited < len(result.Elements) {
+		return Snapshot{}, ErrCoverage
 	}
 
 	nodes := make(map[string]Element, len(result.Elements))

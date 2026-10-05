@@ -433,7 +433,14 @@ func (gate *Gate) Admit(scope Scope, action Action, approval Approval) Decision 
 
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	// Refresh expiry after action normalization and immediately before token
+	// consumption. The initial checks above may have happened before work that
+	// crosses the trusted scope or approval deadline.
+	now = gate.clock().UTC()
 	gate.cleanupLocked(now)
+	if !now.Before(scope.ExpiresAt) {
+		return gate.recordDecisionLocked(DecisionDeniedExpired, action.Kind, identity.PolicyVersion, now)
+	}
 	record, exists = gate.approvals[approval.token]
 	if !exists {
 		if _, replayed := gate.consumed[approval.token]; replayed {

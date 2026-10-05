@@ -295,6 +295,43 @@ func TestReadValueNeedsExplicitHostApproval(t *testing.T) {
 	}
 }
 
+func TestAdmitRechecksTokenExpiryImmediatelyBeforeConsume(t *testing.T) {
+	gate, host, clock := newTestGate(t)
+	base := clock.Now()
+	scope := validScope(base)
+	scope.ExpiresAt = base.Add(2 * time.Minute)
+	action := Action{Kind: ActionPress, Target: TargetButton, ElementRef: scope.ElementRef}
+	challenge, err := host.Issue(scope, action, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := host.ApproveHost(challenge.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Admit's preliminary check sees a live token. Its final locked check sees
+	// the same injected clock after the token deadline has passed, while scope
+	// itself remains live.
+	reads := 0
+	gate.clock = func() time.Time {
+		reads++
+		if reads == 1 {
+			return base
+		}
+		return base.Add(90 * time.Second)
+	}
+	if got := gate.Admit(scope, action, approval); got.Code != DecisionDeniedExpired {
+		t.Fatalf("admission after token expiry = %q, want %q", got.Code, DecisionDeniedExpired)
+	}
+	if reads != 2 {
+		t.Fatalf("clock reads = %d, want preliminary and final-lock reads", reads)
+	}
+	if _, consumed := gate.consumed[approval.token]; consumed {
+		t.Fatal("expired scope consumed its approval")
+	}
+}
+
 func TestDecisionChallengeAndAuditAreRedacted(t *testing.T) {
 	gate, host, clock := newTestGate(t)
 	scope := validScope(clock.Now())

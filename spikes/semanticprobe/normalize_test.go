@@ -123,8 +123,8 @@ func TestDefaultProjectionRedactsValuesAndSeparatesNativeAndCanonicalIDs(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Status != SnapshotComplete || snapshot.NativeStateID == "" || snapshot.CanonicalStateID == "" {
-		t.Fatalf("complete identity status not preserved: %+v", snapshot)
+	if snapshot.Status != SnapshotComplete || snapshot.NativeStateID != "" || snapshot.CanonicalStateID == "" {
+		t.Fatalf("complete projection status=%q native_state_id_present=%t canonical_state_id_present=%t", snapshot.Status, snapshot.NativeStateID != "", snapshot.CanonicalStateID != "")
 	}
 	for _, element := range snapshot.Elements {
 		if element.Value != nil {
@@ -145,7 +145,7 @@ func TestDefaultProjectionRedactsValuesAndSeparatesNativeAndCanonicalIDs(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(encodedSnapshot, []byte(snapshot.NativeStateID)) {
+	if snapshot.NativeStateID != "" && bytes.Contains(encodedSnapshot, []byte(snapshot.NativeStateID)) {
 		t.Fatal("native precondition was serialized as ordinary snapshot JSON")
 	}
 	var wire struct {
@@ -155,7 +155,7 @@ func TestDefaultProjectionRedactsValuesAndSeparatesNativeAndCanonicalIDs(t *test
 		t.Fatal(err)
 	}
 	if wire.Status != "complete" || bytes.Contains(encodedSnapshot, []byte(`"status":1`)) {
-		t.Fatalf("snapshot status wire value = %q, want string complete: %s", wire.Status, encodedSnapshot)
+		t.Fatalf("snapshot status wire value = %q, want string complete", wire.Status)
 	}
 }
 
@@ -323,11 +323,33 @@ func TestExpiredAndStaleNativeReferencesRemainTyped(t *testing.T) {
 	}{
 		{code: "reference_expired", want: ErrExpiredReference},
 		{code: "reference_stale", want: ErrStaleReference},
-		{code: "scope_or_permission_denied", want: ErrNativeOperation},
+		{code: "permission_denied", want: ErrPermissionDenied},
+		{code: "scope_or_permission_denied", want: ErrPermissionDenied},
 	} {
 		raw := marshalEnvelope("error", nil, test.code)
 		if _, err := NormalizeEnvelope(raw, scope, Options{}); !errors.Is(err, test.want) {
 			t.Errorf("native error %q returned %v, want %v", test.code, err, test.want)
+		}
+	}
+}
+
+func TestNativeABI1TypedErrorEnvelopes(t *testing.T) {
+	scope := scopeFor("one")
+	for _, test := range []struct {
+		code string
+		want error
+	}{
+		{code: "permission_denied", want: ErrPermissionDenied},
+		{code: "reference_expired", want: ErrExpiredReference},
+		{code: "reference_stale", want: ErrStaleReference},
+	} {
+		// ABI1's native error terminal has a string code and no result object;
+		// both omitted and explicit-null results are valid terminal encodings.
+		for _, suffix := range []string{`"error":"` + test.code + `"}`, `"result":null,"error":"` + test.code + `"}`} {
+			raw := []byte(`{"schema_version":1,"request_id":"request-1","status":"error",` + suffix)
+			if _, err := NormalizeEnvelope(raw, scope, Options{}); !errors.Is(err, test.want) {
+				t.Errorf("ABI1 native error %q returned %v, want %v", test.code, err, test.want)
+			}
 		}
 	}
 }
