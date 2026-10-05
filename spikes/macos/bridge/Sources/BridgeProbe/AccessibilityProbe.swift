@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import CoreFoundation
 import Foundation
 import CryptoKit
 
@@ -273,15 +274,29 @@ private func decodeProbeRequest(_ data: Data) -> ProbeRequest? {
     var scope: ProbeScope?
     if let rawScope = object["scope"] as? [String: Any] {
         guard let pidNumber = rawScope["pid"] as? NSNumber,
-              pidNumber.int64Value > 0, pidNumber.int64Value <= Int32.max,
+              let pid = strictFixturePID(pidNumber),
               let bundleID = rawScope["bundle_id"] as? String,
               let nonce = rawScope["fixture_nonce"] as? String,
-              !nonce.isEmpty, nonce.utf8.count <= 128 else { return nil }
-        scope = ProbeScope(pid: pid_t(pidNumber.int32Value), bundleID: bundleID, nonce: nonce)
+              validFixtureNonce(nonce) else { return nil }
+        scope = ProbeScope(pid: pid_t(pid), bundleID: bundleID, nonce: nonce)
     } else if operation != "doctor" {
         return nil
     }
     return ProbeRequest(requestID: requestID, operation: operation, scope: scope, includeValues: object["include_values"] as? Bool == true)
+}
+
+func strictFixturePID(_ number: NSNumber) -> Int32? {
+    guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    let value = number.doubleValue
+    guard value.isFinite, value.rounded(.towardZero) == value, value > 0, value <= Double(Int32.max) else { return nil }
+    return Int32(value)
+}
+
+func validFixtureNonce(_ nonce: String) -> Bool {
+    let bytes = Array(nonce.utf8)
+    return (1...64).contains(bytes.count) && bytes.allSatisfy {
+        (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 95].contains($0)
+    }
 }
 
 @MainActor
