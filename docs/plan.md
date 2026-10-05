@@ -1,6 +1,6 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** E1 seam landed through PR #6 using explicitly authorized local checks; runtime, AX and fixture source is assembled; guarded input, policy, writer/replay and semantic lanes are rolling through three Luna worker slots. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
+**Status:** E1 seam landed through PR #6 using explicitly authorized local checks; runtime, AX and fixture source is assembled; guarded input, policy, writer/replay and semantic source has passed local Go/race/vet and Swift checks, with three Luna lanes providing independent partition review. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
 **Updated:** 2026-10-05 UTC.
@@ -138,7 +138,7 @@ Outstanding spike choices: exact ABI and threading initialization, retained nati
 
 ## 9. Operating procedure
 
-Planning has not started implementation. Execution uses ordinary Git task claims and a task-local coordination ledger, never an invented controller. The lead assigns each worker its stable task ID, model, source base, frozen contract version, exclusive paths, acceptance and stop condition. One coordinator edits shared plan/design/ADR records; worker reports carry facts for that owner to integrate.
+At the design baseline, planning had not started implementation. The resumed delivery now has an assembled feasibility candidate. Execution uses ordinary Git task claims and a task-local coordination ledger, never an invented controller. The lead assigns each worker its stable task ID, model, source base, frozen contract version, exclusive paths, acceptance and stop condition. One coordinator edits shared plan/design/ADR records; worker reports carry facts for that owner to integrate.
 
 Each task/reviewer gets a unique external-SSD worktree and task-specific caches/temp/artifact directories. The local binding identifies the required volume root; verify mount, writable space and sufficient capacity before creating workers. If unavailable, stop dependent work rather than use internal disk. Preserve existing worktrees/branches and never perform destructive operations in the shared main checkout.
 
