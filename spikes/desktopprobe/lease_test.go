@@ -27,7 +27,11 @@ func testLease(t *testing.T) (*Lease, string) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := lease.Close(ctx); err != nil && !(errors.Is(err, ErrDirty) && lease.Dirty()) {
+		err := lease.Close(ctx)
+		lease.mu.Lock()
+		dirty := lease.state.Dirty
+		lease.mu.Unlock()
+		if err != nil && !(errors.Is(err, ErrDirty) && dirty) {
 			t.Errorf("closing test lease: %v", err)
 		}
 	})
