@@ -93,12 +93,41 @@ type Action struct {
 	Kind       string `json:"kind"`
 	Text       string `json:"text,omitempty"`
 }
+
+// Closed result vocabulary follows RFC 0001 section 5.3.
+type ExecutionStatus string
+type VerificationStatus string
+type StateStatus string
+type CleanupStatus string
+
+const (
+	ExecutionNotApplied       ExecutionStatus    = "not_applied"
+	ExecutionApplied          ExecutionStatus    = "applied"
+	ExecutionPartiallyApplied ExecutionStatus    = "partially_applied"
+	ExecutionUnknown          ExecutionStatus    = "unknown"
+	VerificationVerified      VerificationStatus = "verified"
+	VerificationFailed        VerificationStatus = "failed"
+	VerificationUnavailable   VerificationStatus = "unavailable"
+	StateAvailable            StateStatus        = "available"
+	StateUnavailable          StateStatus        = "unavailable"
+	CleanupComplete           CleanupStatus      = "complete"
+	CleanupDirty              CleanupStatus      = "dirty"
+	CleanupUnknown            CleanupStatus      = "unknown"
+	ActionPress                                  = "press"
+	ActionReplace                                = "replace"
+	ActionInsert                                 = "insert"
+)
+
+type Verification struct {
+	Status VerificationStatus `json:"status"`
+	Reason string             `json:"reason,omitempty"`
+}
 type ActionResult struct {
-	ActionID     string `json:"action_id"`
-	Execution    string `json:"execution"`
-	Verification string `json:"verification"`
-	StateStatus  string `json:"state_status"`
-	Cleanup      string `json:"cleanup"`
+	ActionID     string          `json:"action_id"`
+	Execution    ExecutionStatus `json:"execution"`
+	Verification Verification    `json:"verification"`
+	StateStatus  StateStatus     `json:"state_status"`
+	Cleanup      CleanupStatus   `json:"cleanup"`
 }
 
 // Backend must freshly validate scope and references at every native operation.
