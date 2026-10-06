@@ -365,7 +365,7 @@ func (s *Session) window(windowRef string) (Window, bool) {
 
 func normalTarget(snapshot Observation, ref string) bool {
 	for _, element := range snapshot.Elements {
-		if element.Ref == ref && element.Classification == "normal" && element.Enabled != nil && *element.Enabled {
+		if element.Ref == ref && element.Classification == "normal" {
 			return true
 		}
 	}

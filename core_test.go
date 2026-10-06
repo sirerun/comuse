@@ -272,10 +272,11 @@ func TestActionApprovalDurableReplayAndNoTextPersistence(t *testing.T) {
 	if len(backend.executed) != 1 || backend.executed[0].StateID != "native-action" {
 		t.Fatalf("native action was redispatched or had public state ID: %#v", backend.executed)
 	}
+	journalRoot := session.writerDirectory
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := filepath.WalkDir(session.writerDirectory, func(path string, entry os.DirEntry, err error) error {
+	if err := filepath.WalkDir(journalRoot, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
 		}
@@ -289,6 +290,48 @@ func TestActionApprovalDurableReplayAndNoTextPersistence(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadElementAllowsNormalTextWhenControlIsDisabled(t *testing.T) {
+	falseValue := false
+	for _, test := range []struct {
+		name    string
+		enabled *bool
+	}{
+		{name: "nil"},
+		{name: "false", enabled: &falseValue},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			elements := testElements()
+			elements[0].Enabled = test.enabled
+			backend := &fakeBackend{process: testProcess(), nativeState: "native-read", elements: elements, input: true, qualified: true}
+			session := newTestSession(t, backend, true)
+			if _, err := session.Windows(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			state, err := session.Observe(context.Background(), "window-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			content, err := session.ReadElement(context.Background(), "window-1", "normal-1", state.StateID)
+			if err != nil || content.Text != "explicit value" {
+				t.Fatalf("ReadElement on disabled normal target = (%+v, %v)", content, err)
+			}
+			result, err := session.Do(context.Background(), Action{
+				ID: "disabled-control-action", WindowRef: "window-1", ElementRef: "normal-1",
+				StateID: state.StateID, Kind: ActionReplace, Text: "text",
+			})
+			if ErrorCode(err) != "policy_refused" || result.Execution != ExecutionNotApplied {
+				t.Fatalf("Do on disabled normal target = (%+v, %v), want policy_refused/not_applied", result, err)
+			}
+			if len(backend.executed) != 0 {
+				t.Fatalf("disabled control action reached backend: %#v", backend.executed)
+			}
+			if err := session.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
