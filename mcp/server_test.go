@@ -7,10 +7,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sirerun/comuse"
 	"github.com/sirerun/comuse/internal/backend"
@@ -157,7 +159,7 @@ func TestSDKToolsDelegateToSharedSession(t *testing.T) {
 
 func TestSDKCancellationReachesSharedSession(t *testing.T) {
 	ctx := context.Background()
-	backend := &fakeBackend{blockObserve: true, observeStarted: make(chan struct{})}
+	backend := &fakeBackend{blockObserve: true, observeStarted: make(chan struct{}), cancellationObserved: make(chan struct{})}
 	session := newTestSession(t, backend)
 	clientSession := connectClient(t, NewServer(session))
 	defer clientSession.Close()
@@ -185,6 +187,11 @@ func TestSDKCancellationReachesSharedSession(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancelled tool call did not return")
+	}
+	select {
+	case <-backend.cancellationObserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("semantic backend did not finish observing cancellation")
 	}
 	if !backend.cancelSeen() {
 		t.Fatal("session backend did not observe cancellation")
@@ -242,6 +249,24 @@ func TestServeCancellationClosesOwnedStreamOnce(t *testing.T) {
 	}
 }
 
+func TestServeRejectsOversizedFrameAndClosesOwnedStream(t *testing.T) {
+	secret := "private-frame-payload-secret"
+	frame := strings.Repeat(secret, maxFrameBytes/len(secret)+1) + "\n"
+	stream := &finiteStream{Reader: bytes.NewReader([]byte(frame))}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := Serve(ctx, newTestSession(t, &fakeBackend{}), stream)
+	if err == nil {
+		t.Fatal("oversized MCP frame was accepted")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatal("oversized frame payload leaked through Serve error")
+	}
+	if got := stream.closeCount(); got != 1 {
+		t.Fatalf("oversized frame closed underlying stream %d times, want once", got)
+	}
+}
+
 func TestTextResultCarriesSharedEnvelope(t *testing.T) {
 	envelope := envelopeError("invalid_request")
 	result := textResult(envelope)
@@ -282,6 +307,7 @@ func TestErrorsAreSanitizedAtMCPBoundary(t *testing.T) {
 		t.Fatalf("error content length = %d", len(result.Content))
 	}
 	text := result.Content[0].(*sdk.TextContent).Text
+	validateOutputEnvelope(t, clientSession, "computer_state", text)
 	if bytes.Contains([]byte(text), []byte("private-native-payload-secret")) {
 		t.Fatal("backend error payload leaked through MCP")
 	}
@@ -330,10 +356,48 @@ func callTool(t *testing.T, client *sdk.ClientSession, name string, args map[str
 	if err := json.Unmarshal([]byte(text.Text), &envelope); err != nil {
 		t.Fatalf("CallTool(%s) envelope: %v", name, err)
 	}
+	validateOutputEnvelope(t, client, name, text.Text)
 	if envelope.Status != "ok" || envelope.SchemaVersion != comuse.SchemaVersion {
 		t.Fatalf("CallTool(%s) envelope = %#v", name, envelope)
 	}
 	return envelope
+}
+
+func validateOutputEnvelope(t *testing.T, client *sdk.ClientSession, name, encoded string) {
+	t.Helper()
+	listed, err := client.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools for output schema validation: %v", err)
+	}
+	var output any
+	for _, item := range listed.Tools {
+		if item.Name == name {
+			output = item.OutputSchema
+			break
+		}
+	}
+	if output == nil {
+		t.Fatalf("tool %s has no output schema", name)
+	}
+	rawSchema, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal %s output schema: %v", name, err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(rawSchema, &schema); err != nil {
+		t.Fatalf("decode %s output schema: %v", name, err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve %s output schema: %v", name, err)
+	}
+	var instance any
+	if err := json.Unmarshal([]byte(encoded), &instance); err != nil {
+		t.Fatalf("decode %s result: %v", name, err)
+	}
+	if err := resolved.Validate(instance); err != nil {
+		t.Fatalf("%s result violates advertised output schema: %v\n%s", name, err, encoded)
+	}
 }
 
 func newTestSession(t *testing.T, b *fakeBackend) *comuse.Session {
@@ -352,12 +416,13 @@ func newTestSession(t *testing.T, b *fakeBackend) *comuse.Session {
 }
 
 type fakeBackend struct {
-	mu             sync.Mutex
-	calls          []string
-	blockObserve   bool
-	observeStarted chan struct{}
-	cancelled      bool
-	doctorErr      error
+	mu                   sync.Mutex
+	calls                []string
+	blockObserve         bool
+	observeStarted       chan struct{}
+	cancellationObserved chan struct{}
+	cancelled            bool
+	doctorErr            error
 }
 
 type blockingStream struct {
@@ -367,6 +432,25 @@ type blockingStream struct {
 	started     bool
 	closeN      int
 	once        sync.Once
+}
+
+type finiteStream struct {
+	*bytes.Reader
+	mu     sync.Mutex
+	closeN int
+}
+
+func (s *finiteStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s *finiteStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeN++
+	return nil
+}
+func (s *finiteStream) closeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeN
 }
 
 func (s *blockingStream) Read([]byte) (int, error) {
@@ -423,13 +507,17 @@ func (b *fakeBackend) Observe(ctx context.Context, windowRef string, _ backend.B
 		b.mu.Lock()
 		b.cancelled = true
 		b.mu.Unlock()
+		if b.cancellationObserved != nil {
+			close(b.cancellationObserved)
+		}
 		return backend.Snapshot{}, ctx.Err()
 	}
+	enabled := true
 	return backend.Snapshot{
 		WindowRef: windowRef,
 		StateID:   "native-state-1",
 		Elements: []backend.Element{{
-			Ref: "element-1", Role: "textfield", Label: "Fixture field", Classification: "normal",
+			Ref: "element-1", Role: "textfield", Label: "Fixture field", Enabled: &enabled, Classification: "normal",
 		}},
 		Coverage: backend.Coverage{Complete: true},
 	}, nil

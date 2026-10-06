@@ -18,6 +18,7 @@ const (
 	serverName       = "comuse"
 	serverVersion    = "0.1.0-dev"
 	maxArgumentBytes = 16 * 1024
+	maxFrameBytes    = 64 * 1024
 	maxWait          = 30 * time.Second
 )
 
@@ -25,20 +26,20 @@ const (
 // session. Approval and policy remain inside the trusted host session.
 func NewServer(session *comuse.Session) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	server.AddTool(tool("computer_state", "Read current scoped session and permission state.", nil, nil), handler(session, stateTool))
-	server.AddTool(tool("computer_windows", "List scoped windows in the current session.", nil, nil), handler(session, windowsTool))
+	server.AddTool(tool("computer_state", "Read current scoped session and permission state.", nil, nil, doctorResultSchema()), handler(session, stateTool))
+	server.AddTool(tool("computer_windows", "List scoped windows in the current session.", nil, nil, arraySchema(windowSchema())), handler(session, windowsTool))
 	server.AddTool(tool("computer_a11y", "Read a bounded semantic snapshot for a scoped window.", map[string]any{
 		"window_ref": stringProperty(128),
-	}, []string{"window_ref"}), handler(session, a11yTool))
+	}, []string{"window_ref"}, observationSchema()), handler(session, a11yTool))
 	server.AddTool(tool("computer_read_element", "Read text from a scoped element using its current semantic state identifier.", map[string]any{
 		"window_ref":  stringProperty(128),
 		"element_ref": stringProperty(128),
 		"state_id":    stringProperty(128),
-	}, []string{"window_ref", "element_ref", "state_id"}), handler(session, readElementTool))
+	}, []string{"window_ref", "element_ref", "state_id"}, elementContentSchema()), handler(session, readElementTool))
 	server.AddTool(tool("computer_wait", "Wait for a bounded semantic observation update for a scoped window.", map[string]any{
 		"window_ref": stringProperty(128),
 		"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": int(maxWait / time.Millisecond)},
-	}, []string{"window_ref", "timeout_ms"}), handler(session, waitTool))
+	}, []string{"window_ref", "timeout_ms"}, observationSchema()), handler(session, waitTool))
 	return server
 }
 
@@ -55,8 +56,9 @@ func Serve(ctx context.Context, session *comuse.Session, stream io.ReadWriteClos
 	}
 	closeOnce := &streamClose{stream: stream}
 	transport := &mcp.IOTransport{
-		Reader: &ownedStreamReader{stream: stream, close: closeOnce},
-		Writer: ownedStreamWriter{stream: stream},
+		Reader:        &ownedStreamReader{stream: stream, close: closeOnce},
+		Writer:        ownedStreamWriter{stream: stream},
+		MaxLineLength: maxFrameBytes,
 	}
 	return NewServer(session).Run(ctx, transport)
 }
@@ -192,7 +194,7 @@ func decodeArgs(raw json.RawMessage, dst any) error {
 	return nil
 }
 
-func tool(name, description string, properties map[string]any, required []string) *mcp.Tool {
+func tool(name, description string, properties map[string]any, required []string, resultSchema map[string]any) *mcp.Tool {
 	if properties == nil {
 		properties = map[string]any{}
 	}
@@ -208,25 +210,24 @@ func tool(name, description string, properties map[string]any, required []string
 			"required":             required,
 			"additionalProperties": false,
 		},
-		OutputSchema: sourceEnvelopeSchema(),
+		OutputSchema: sourceEnvelopeSchema(resultSchema),
 	}
 }
 
 // sourceEnvelopeSchema describes the current shared source-phase envelope.
 // It intentionally does not claim the RFC release envelope's usage/duration
 // or compact-state fields, which remain unqualified.
-func sourceEnvelopeSchema() map[string]any {
+func sourceEnvelopeSchema(resultSchema map[string]any) map[string]any {
 	versionSchema := map[string]any{"type": "integer", "enum": []int{comuse.SchemaVersion}}
 	errorSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"code":    map[string]any{"type": "string", "enum": errorCodeVocabulary()},
-			"message": map[string]any{"type": "string"},
+			"message": boundedString(128),
 		},
 		"required":             []string{"code", "message"},
 		"additionalProperties": false,
 	}
-	resultSchema := map[string]any{}
 	success := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -249,6 +250,69 @@ func sourceEnvelopeSchema() map[string]any {
 	}
 	return map[string]any{"type": "object", "oneOf": []any{success, failure}}
 }
+
+func objectSchema(properties map[string]any, required ...string) map[string]any {
+	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
+}
+
+func boundedString(max int) map[string]any {
+	return map[string]any{"type": "string", "maxLength": max}
+}
+
+func arraySchema(items map[string]any) map[string]any {
+	return map[string]any{"type": "array", "items": items, "maxItems": 10000}
+}
+
+func doctorResultSchema() map[string]any {
+	capabilities := objectSchema(map[string]any{
+		"accessibility": boolSchema(), "input": boolSchema(), "screen_capture": boolSchema(),
+		"qualified_input": boolSchema(),
+	}, "accessibility", "input", "screen_capture", "qualified_input")
+	permissions := map[string]any{
+		"type":                 "object",
+		"maxProperties":        3,
+		"propertyNames":        map[string]any{"enum": []string{"accessibility", "input", "screen_capture"}},
+		"additionalProperties": map[string]any{"type": "string", "enum": []string{"granted", "denied", "not_determined", "unknown"}},
+	}
+	return objectSchema(map[string]any{"capabilities": capabilities, "permissions": permissions}, "capabilities", "permissions")
+}
+
+func windowSchema() map[string]any {
+	process := objectSchema(map[string]any{
+		"pid":       map[string]any{"type": "integer", "minimum": 1, "maximum": 2147483647},
+		"bundle_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[!-~]+$"},
+		"launch_id": boundedString(128),
+	}, "pid", "bundle_id", "launch_id")
+	return objectSchema(map[string]any{"ref": boundedString(128), "process": process, "title": boundedString(4 * 1024 * 1024)}, "ref", "process", "title")
+}
+
+func observationSchema() map[string]any {
+	element := objectSchema(map[string]any{
+		"ref": boundedString(128), "parent_ref": boundedString(128),
+		"order": map[string]any{"type": "integer", "minimum": 0},
+		"role":  boundedString(4 * 1024 * 1024), "label": boundedString(4 * 1024 * 1024),
+		"value": boundedString(4 * 1024 * 1024), "enabled": boolSchema(),
+		"actions":        map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"press", "replace", "insert"}}, "maxItems": 3},
+		"classification": map[string]any{"type": "string", "enum": []string{"normal"}},
+	}, "ref", "order", "role", "classification")
+	coverage := objectSchema(map[string]any{"complete": boolSchema(), "reason": map[string]any{
+		"type": "string", "enum": []string{"depth_limit", "node_limit", "byte_limit", "deadline", "unsupported", "permission_denied", "partial"},
+	}}, "complete")
+	return objectSchema(map[string]any{
+		"window_ref": boundedString(128), "state_id": boundedString(128),
+		"observed_at": map[string]any{"type": "string", "format": "date-time"},
+		"elements":    map[string]any{"type": "array", "items": element, "maxItems": 10000}, "coverage": coverage,
+	}, "window_ref", "state_id", "observed_at", "elements", "coverage")
+}
+
+func elementContentSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"window_ref": boundedString(128), "element_ref": boundedString(128),
+		"state_id": boundedString(128), "text": boundedString(4 * 1024 * 1024),
+	}, "window_ref", "element_ref", "state_id", "text")
+}
+
+func boolSchema() map[string]any { return map[string]any{"type": "boolean"} }
 
 func errorCodeVocabulary() []string {
 	return []string{
