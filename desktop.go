@@ -145,27 +145,30 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		approvalErr = s.consumeApproval(action.ID)
 	}
 	if approvalErr != nil {
+		approvalCode := approvalErrorCode(approvalErr)
 		result := notApplied(action.ID)
-		if err := finishLease(lease, ticket, action, result, "approval_required"); err != nil {
+		if err := finishLease(lease, ticket, action, result, approvalCode); err != nil {
 			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
 		}
 		if err := s.closeActionLease(lease); err != nil {
 			return result, coreError("backend_unavailable")
 		}
-		if errors.Is(approvalErr, context.Canceled) || errors.Is(approvalErr, context.DeadlineExceeded) {
-			return result, stableCallError(approvalErr)
-		}
-		return result, coreError("approval_required")
+		return result, coreError(approvalCode)
 	}
 	if err := callCtx.Err(); err != nil {
 		result := notApplied(action.ID)
-		if finishErr := finishLease(lease, ticket, action, result, "cancelled"); finishErr != nil {
+		callError := stableCallError(err)
+		code := "cancelled"
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = "budget_exceeded"
+		}
+		if finishErr := finishLease(lease, ticket, action, result, code); finishErr != nil {
 			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", finishErr)
 		}
 		if closeErr := s.closeActionLease(lease); closeErr != nil {
 			return result, coreError("backend_unavailable")
 		}
-		return result, stableCallError(err)
+		return result, callError
 	}
 
 	nativeAction := action
@@ -173,24 +176,15 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
 	if executeErr != nil {
 		unknown := unknownResult(action.ID)
-		if finishErr := finishLease(lease, ticket, action, unknown, "unknown_outcome"); finishErr != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", errors.Join(executeErr, finishErr))
-		}
-		return s.quarantineLease(lease, action.ID, "native_outcome_unknown", executeErr)
+		return s.persistUnknownBeforeTerminal(lease, ticket, action, unknown, "native_outcome_unknown")
 	}
 	if !validResult(action.ID, result) {
 		unknown := unknownResult(action.ID)
-		if finishErr := finishLease(lease, ticket, action, unknown, "unknown_outcome"); finishErr != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", finishErr)
-		}
-		return s.quarantineLease(lease, action.ID, "native_outcome_unknown", invalidResultError())
+		return s.persistUnknownBeforeTerminal(lease, ticket, action, unknown, "native_outcome_unknown")
 	}
 	result.Verification.Reason = safeVerificationReason(result.Verification.Reason)
 	if result.Execution == ExecutionUnknown || result.Cleanup != CleanupComplete {
-		if err := finishLease(lease, ticket, action, result, "unknown_outcome"); err != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
-		}
-		return s.quarantineLeaseResult(lease, action.ID, result, "native_outcome_unknown", coreError("unknown_outcome"))
+		return s.persistUnknownBeforeTerminal(lease, ticket, action, result, "native_outcome_unknown")
 	}
 	if err := finishLease(lease, ticket, action, result, ""); err != nil {
 		return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
@@ -219,6 +213,41 @@ func (s *Session) consumeApproval(actionID string) error {
 	}
 	s.usedApprovals[actionID] = struct{}{}
 	return nil
+}
+
+func approvalErrorCode(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "budget_exceeded"
+	}
+	var safe *Error
+	if errors.As(err, &safe) {
+		if _, ok := safeMessages[safe.Code]; ok {
+			return safe.Code
+		}
+	}
+	return "approval_required"
+}
+
+func (s *Session) persistUnknownBeforeTerminal(lease *writer.Lease, ticket *writer.Ticket, action Action, result ActionResult, reason string) (ActionResult, error) {
+	if err := lease.Quarantine(reason); err != nil {
+		s.retainQuarantinedLease(lease)
+		return unknownResult(action.ID), coreError("unknown_outcome")
+	}
+	if err := finishLease(lease, ticket, action, result, "unknown_outcome"); err != nil {
+		s.retainQuarantinedLease(lease)
+		return unknownResult(action.ID), coreError("unknown_outcome")
+	}
+	s.retainQuarantinedLease(lease)
+	return result, coreError("unknown_outcome")
+}
+
+func (s *Session) retainQuarantinedLease(lease *writer.Lease) {
+	s.mu.Lock()
+	s.quarantined = append(s.quarantined, lease)
+	s.mu.Unlock()
 }
 
 func (s *Session) quarantineLease(lease *writer.Lease, actionID, reason string, cause error) (ActionResult, error) {

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sirerun/comuse/internal/writer"
 )
 
 type fakeBackend struct {
@@ -24,6 +26,7 @@ type fakeBackend struct {
 	readState   string
 	executed    []Action
 	closeErrors []error
+	executeHook func() (ActionResult, error)
 	doctorCalls int
 	closeCalls  int
 }
@@ -62,6 +65,9 @@ func (f *fakeBackend) Execute(_ context.Context, action Action) (ActionResult, e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.executed = append(f.executed, action)
+	if f.executeHook != nil {
+		return f.executeHook()
+	}
 	return ActionResult{ActionID: action.ID, Execution: ExecutionApplied, Verification: Verification{Status: VerificationVerified, Reason: "postcondition_met"}, StateStatus: StateAvailable, Cleanup: CleanupComplete}, nil
 }
 
@@ -119,7 +125,7 @@ func newTestSession(t *testing.T, backend *fakeBackend, mutation bool) *Session 
 	config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{backend.process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget()}
 	if mutation {
 		config.ApprovalProvider = fixedApproval{}
-		config.WriterDirectory = t.TempDir()
+		config.WriterDirectory = filepath.Join(t.TempDir(), "state")
 		config.WriterKey = []byte(strings.Repeat("k", 32))
 		config.MaxActions = 2
 	}
@@ -238,6 +244,57 @@ func TestActionApprovalDurableReplayAndNoTextPersistence(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUnknownActionPersistsDirtyBeforeTerminalAndBlocksReplay(t *testing.T) {
+	process := testProcess()
+	root := filepath.Join(t.TempDir(), "state")
+	backend := &fakeBackend{process: process, nativeState: "native-action", elements: testElements(), input: true, qualified: true}
+	backend.executeHook = func() (ActionResult, error) {
+		if err := os.Chmod(root, 0500); err != nil {
+			return ActionResult{}, err
+		}
+		return ActionResult{}, errors.New("private native failure")
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0700) })
+	config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget(), ApprovalProvider: fixedApproval{}, WriterDirectory: root, WriterKey: []byte(strings.Repeat("k", 32)), MaxActions: 2}
+	session, err := NewSession(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := Action{ID: "action-uncertain", WindowRef: "window-1", ElementRef: "normal-1", StateID: state.StateID, Kind: ActionPress}
+	result, err := session.Do(context.Background(), action)
+	if ErrorCode(err) != "unknown_outcome" || result.Execution != ExecutionUnknown {
+		t.Fatalf("uncertain action = (%+v, %v), want unknown outcome", result, err)
+	}
+	if err := session.Close(context.Background()); err == nil {
+		t.Fatal("close with unwritable dirty journal succeeded")
+	}
+	if got := len(backend.executed); got != 1 {
+		t.Fatalf("native action dispatched %d times", got)
+	}
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("retry Close after restoring journal permissions: %v", err)
+	}
+	lease, err := writer.Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Close(context.Background()) }()
+	var binding [32]byte
+	if _, _, err := lease.Begin("action-after-unknown", binding); !errors.Is(err, writer.ErrDirty) {
+		t.Fatalf("new action after unknown outcome = %v, want ErrDirty", err)
 	}
 }
 
