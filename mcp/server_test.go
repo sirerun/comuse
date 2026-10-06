@@ -52,11 +52,14 @@ func TestSDKListsOnlyReadOnlySemanticTools(t *testing.T) {
 	}
 	defer serverSession.Close()
 	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-test", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer clientSession.Close()
+	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
+		t.Fatalf("negotiated protocol = %q, want 2025-06-18", got)
+	}
 
 	listed, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
@@ -163,10 +166,13 @@ func TestServeUsesOfficialSDKStdioTransport(t *testing.T) {
 	go func() { serveErr <- Serve(context.Background(), session, serverConn) }()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-stdio-test", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(context.Background(), &sdk.IOTransport{Reader: clientConn, Writer: clientConn}, nil)
+	clientSession, err := client.Connect(context.Background(), &sdk.IOTransport{Reader: clientConn, Writer: clientConn}, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
 	if err != nil {
 		_ = clientConn.Close()
 		t.Fatalf("stdio protocol initialize: %v", err)
+	}
+	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
+		t.Fatalf("stdio negotiated protocol = %q, want 2025-06-18", got)
 	}
 	callTool(t, clientSession, "computer_state", nil)
 	_ = clientSession.Close()
@@ -261,9 +267,12 @@ func connectClient(t *testing.T, server *sdk.Server) *sdk.ClientSession {
 	}
 	t.Cleanup(func() { _ = serverSession.Close() })
 	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-test", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
+		t.Fatalf("negotiated protocol = %q, want 2025-06-18", got)
 	}
 	return clientSession
 }
