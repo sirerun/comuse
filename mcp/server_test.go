@@ -94,7 +94,6 @@ func TestSDKListsOnlyReadOnlySemanticTools(t *testing.T) {
 }
 
 func TestSDKToolsDelegateToSharedSession(t *testing.T) {
-	ctx := context.Background()
 	backend := &fakeBackend{}
 	session := newTestSession(t, backend)
 	clientSession := connectClient(t, NewServer(session))
