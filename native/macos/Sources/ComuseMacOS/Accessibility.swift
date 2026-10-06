@@ -125,6 +125,7 @@ extension NativeRuntime {
         var output: [TraversalNode] = []
         var refs = Set<String>()
         var stack: [(AXUIElement, String?, Int, Int)] = [(root.element, nil, 0, 0)]
+        var visitedCount = 0
         var totalOutputBytes = 0
         var complete = true
         var reason = ""
@@ -136,10 +137,11 @@ extension NativeRuntime {
                 reason = failure.code
                 break
             }
-            if output.count >= budget.maxNodes { complete = false; reason = "node_limit"; break }
+            if visitedCount >= budget.maxNodes { complete = false; reason = "node_limit"; break }
+            visitedCount += 1
             if depth >= budget.maxDepth {
-                let childResult = children(of: element)
-                if !childResult.values.isEmpty || childResult.failed {
+                let childResult = children(of: element, limit: 1)
+                if childResult.truncated || !childResult.values.isEmpty || childResult.failed {
                     complete = false
                     if reason.isEmpty { reason = "depth_limit" }
                 }
@@ -186,10 +188,15 @@ extension NativeRuntime {
                     output.append(node)
                     totalOutputBytes += nodeBytes
                     if depth < budget.maxDepth {
-                        let childResult = children(of: element)
+                        let remaining = max(0, budget.maxNodes - visitedCount - stack.count)
+                        let childResult = children(of: element, limit: remaining)
                         if childResult.failed {
                             complete = false
                             if reason.isEmpty { reason = "child_read_unavailable" }
+                        }
+                        if childResult.truncated {
+                            complete = false
+                            if reason.isEmpty { reason = "node_limit" }
                         }
                         for (index, child) in childResult.values.enumerated().reversed() {
                             stack.append((child, ref, index, depth + 1))
@@ -325,12 +332,23 @@ private func allowedValue(_ element: AXUIElement, classification: String, role: 
     return nil
 }
 
-private func children(of element: AXUIElement) -> (values: [AXUIElement], failed: Bool) {
-    var raw: CFTypeRef?
-    let status = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
-    if status == .success { return ((raw as? [AXUIElement]) ?? [], false) }
-    if status == .noValue || status == .attributeUnsupported { return ([], false) }
-    return ([], true)
+func boundedChildCount(_ total: Int, limit: Int) -> (count: Int, truncated: Bool) {
+    let bounded = max(0, min(total, limit))
+    return (bounded, total > bounded)
+}
+
+private func children(of element: AXUIElement, limit: Int) -> (values: [AXUIElement], failed: Bool, truncated: Bool) {
+    var total: CFIndex = 0
+    let attribute = kAXChildrenAttribute as CFString
+    let countStatus = AXUIElementGetAttributeValueCount(element, attribute, &total)
+    if countStatus == .noValue || countStatus == .attributeUnsupported { return ([], false, false) }
+    guard countStatus == .success, total >= 0 else { return ([], true, false) }
+    let bounds = boundedChildCount(Int(total), limit: limit)
+    guard bounds.count > 0 else { return ([], false, bounds.truncated) }
+    var raw: CFArray?
+    let status = AXUIElementCopyAttributeValues(element, attribute, 0, CFIndex(bounds.count), &raw)
+    guard status == .success, let values = raw as? [AXUIElement] else { return ([], true, bounds.truncated) }
+    return (values, false, bounds.truncated)
 }
 
 private func advertisedActions(_ element: AXUIElement, role: String) -> [String] {

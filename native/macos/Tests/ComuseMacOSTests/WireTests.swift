@@ -70,4 +70,13 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(exact.text, "a🙂")
         XCTAssertFalse(exact.truncated)
     }
+
+    func testChildFrontierBudgetReportsDroppedNodes() {
+        XCTAssertEqual(boundedChildCount(100_000, limit: 12).count, 12)
+        XCTAssertTrue(boundedChildCount(100_000, limit: 12).truncated)
+        XCTAssertEqual(boundedChildCount(4, limit: 4).count, 4)
+        XCTAssertFalse(boundedChildCount(4, limit: 4).truncated)
+        XCTAssertEqual(boundedChildCount(4, limit: 0).count, 0)
+        XCTAssertTrue(boundedChildCount(4, limit: 0).truncated)
+    }
 }
