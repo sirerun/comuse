@@ -49,7 +49,7 @@ func TestErrorEnvelopeAndExitCodes(t *testing.T) {
 	for _, tc := range []struct {
 		code string
 		exit int
-	}{{"permission_denied", 3}, {"policy_refused", 4}, {"invalid_request", 2}, {"cancelled", 1}, {"private native contents", 1}} {
+	}{{"permission_denied", 3}, {"policy_refused", 2}, {"approval_required", 2}, {"desktop_busy", 4}, {"rate_limited", 1}, {"budget_exceeded", 1}, {"invalid_request", 2}, {"cancelled", 1}, {"private native contents", 1}} {
 		var out bytes.Buffer
 		if n := emitError(&out, tc.code); n != tc.exit {
 			t.Fatalf("exit %d", n)
