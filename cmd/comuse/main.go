@@ -43,7 +43,16 @@ type stdio struct {
 	io.Writer
 }
 
-func (stdio) Close() error { return nil }
+func (s stdio) Close() error {
+	var errs []error
+	if c, ok := s.Reader.(io.Closer); ok {
+		errs = append(errs, c.Close())
+	}
+	if c, ok := s.Writer.(io.Closer); ok {
+		errs = append(errs, c.Close())
+	}
+	return errors.Join(errs...)
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
