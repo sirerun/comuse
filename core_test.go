@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -312,7 +313,7 @@ func TestUnknownPersistenceQuarantinesBeforeTerminalFinish(t *testing.T) {
 			calls = append(calls, "finish")
 			return nil
 		})
-		if !errors.Is(err, writeErr) || !equalStrings(calls, []string{"quarantine"}) {
+		if !errors.Is(err, writeErr) || !slices.Equal(calls, []string{"quarantine"}) {
 			t.Fatalf("ordering = calls %v, error %v; want failed quarantine and no finish", calls, err)
 		}
 	})
@@ -325,7 +326,7 @@ func TestUnknownPersistenceQuarantinesBeforeTerminalFinish(t *testing.T) {
 			calls = append(calls, "finish")
 			return nil
 		})
-		if err != nil || !equalStrings(calls, []string{"quarantine", "finish"}) {
+		if err != nil || !slices.Equal(calls, []string{"quarantine", "finish"}) {
 			t.Fatalf("ordering = calls %v, error %v; want quarantine then finish", calls, err)
 		}
 	})
