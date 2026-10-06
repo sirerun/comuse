@@ -232,16 +232,23 @@ func approvalErrorCode(err error) string {
 }
 
 func (s *Session) persistUnknownBeforeTerminal(lease *writer.Lease, ticket *writer.Ticket, action Action, result ActionResult, reason string) (ActionResult, error) {
-	if err := lease.Quarantine(reason); err != nil {
-		s.retainQuarantinedLease(lease)
-		return unknownResult(action.ID), coreError("unknown_outcome")
-	}
-	if err := finishLease(lease, ticket, action, result, "unknown_outcome"); err != nil {
+	if err := persistUnknownOutcome(func() error {
+		return lease.Quarantine(reason)
+	}, func() error {
+		return finishLease(lease, ticket, action, result, "unknown_outcome")
+	}); err != nil {
 		s.retainQuarantinedLease(lease)
 		return unknownResult(action.ID), coreError("unknown_outcome")
 	}
 	s.retainQuarantinedLease(lease)
 	return result, coreError("unknown_outcome")
+}
+
+func persistUnknownOutcome(quarantine, finish func() error) error {
+	if err := quarantine(); err != nil {
+		return err
+	}
+	return finish()
 }
 
 func (s *Session) retainQuarantinedLease(lease *writer.Lease) {
