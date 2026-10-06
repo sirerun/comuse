@@ -55,8 +55,8 @@ Workers own named distinct files/directories and never modify common seam files 
 
 ## 5. Checkable Work Breakdown
 
-### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (9/53)
-### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (0/1)
+### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (13/57)
+### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (1/17)
 ### E3 -- Phase 1 semantic diffs and recovery -> docs/plans/E3-phase1-diffs-recovery.md (0/1)
 ### E4 -- Phase 2 authorized application opening -> docs/plans/E4-phase2-app-opening.md (0/1)
 ### E5 -- Phase 2 explicit image fallback -> docs/plans/E5-phase2-image-fallback.md (0/1)
@@ -105,7 +105,7 @@ T1.32 and T1.33 run concurrently on separate fresh review worktrees, covering al
 
 ### Wave 5: Merge, landed verification and next planning (one coordinator)
 
-T1.34 -> T1.35 -> T2.0. The next outline is expanded only from landed findings. E3 requires the E2 landed milestone that does not exist yet; E4/E5 require Phase 1 landed acceptance, and can then be expanded as parallel phase-2 tracks. E6 waits for their actual landed qualification milestones. Explicit milestone blockers are replaced with exact task dependencies when predecessors expand; planning completion alone never substitutes for landing.
+T1.58 -> T1.59 -> T2.0 for owner-authorized source coding; T1.34 -> T1.35 remains the runtime feasibility chain. The next outline is expanded only from landed findings. E3 requires the E2 landed milestone that does not exist yet; E4/E5 require Phase 1 landed acceptance, and can then be expanded as parallel phase-2 tracks. E6 waits for their actual landed qualification milestones. Explicit milestone blockers are replaced with exact task dependencies when predecessors expand; planning completion alone never substitutes for landing.
 
 ## 7. Milestones and effort
 
@@ -183,3 +183,7 @@ A fresh non-author reviewer spawn failed at the harness total-thread limit. The 
 ## 2026-10-05 source progress clarification
 
 The fixture-scoped MCP SDK probe now has server and adapter source under `spikes/adapters/mcpprobe`. Earlier statements that no MCP server is implemented describe the planning baseline. T1.18/T1.28 and integrated verification/acceptance remain unchecked; source existence does not establish a verified server or live native acceptance. The resumed local delivery and review gates are recorded in E1.
+
+## Coding-first source delivery amendment
+
+PR #7 source landed at da0071a8929500d159a5f356fc7140d8020963dc with identical reviewed tree. E1 T1.56–T1.59 record bounded source delivery without completing held GUI acceptance. E2 is executable for production source coding after its shared contract freezes; T2.16 separately gates native qualification. E2 completion remains source plus runtime, not compilation alone. New runtime capabilities are not advertised merely because code exists. Current live execution capacity is coordinator plus three Luna sessions, with isolated SSD worktrees and shared build lease/load limits. No qualified cloud Luna image is currently established, so no cloud worker or spend is started.
