@@ -117,3 +117,13 @@ func TestExecuteRemainsClosedWithoutNativeDispatch(t *testing.T) {
 		t.Fatalf("closed Execute returned fabricated result: %#v", result)
 	}
 }
+
+func TestExecuteRejectsInvalidTypedActionBeforeClosedBackendResponse(t *testing.T) {
+	native := &nativeBackend{}
+	_, err := native.Execute(context.Background(), backend.Action{
+		ID: "a1", WindowRef: "w1", ElementRef: "e1", StateID: "s1", Kind: backend.ActionInsert,
+	})
+	if err == nil || backend.ErrorCode(err) != "invalid_request" {
+		t.Fatalf("empty insert: got %v, want invalid_request", err)
+	}
+}

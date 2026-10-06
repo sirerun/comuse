@@ -174,6 +174,19 @@ func (native *nativeBackend) Execute(ctx context.Context, action backend.Action)
 		!validOpaque(action.ElementRef) || !validOpaque(action.StateID) || len(action.Text) > maximumTextBytes {
 		return backend.ActionResult{}, backendError("invalid_request")
 	}
+	switch action.Kind {
+	case backend.ActionPress:
+		if action.Text != "" {
+			return backend.ActionResult{}, backendError("invalid_request")
+		}
+	case backend.ActionReplace:
+	case backend.ActionInsert:
+		if action.Text == "" {
+			return backend.ActionResult{}, backendError("invalid_request")
+		}
+	default:
+		return backend.ActionResult{}, backendError("invalid_request")
+	}
 	// Native mutation remains source-only and compile-closed until separately qualified.
 	return backend.ActionResult{}, backendError("unsupported")
 }
