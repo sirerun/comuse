@@ -11,7 +11,7 @@ func TestStrictDecode(t *testing.T) {
 			PID int `json:"pid"`
 		} `json:"scope"`
 	}
-	for _, text := range []string{`{"scope":{"pid":1,"pid":2}}`, `{"scope":{"pid":1},"extra":1}`, `{"scope":{"pid":1}} {}`, `null null`, `{"scope":{"pid":"x"}}`, strings.Repeat("[", 66) + strings.Repeat("]", 66)} {
+	for _, text := range []string{`{"scope":{"pid":1,"pid":2}}`, `{"scope":{"pid":1},"extra":1}`, `{"scope":{"pid":1}} {}`, `null null`, `{"scope":{"pid":"x"}}`, `{"scope":{"pid":1},"bad":"` + string([]byte{255}) + `"}`, strings.Repeat("[", 66) + strings.Repeat("]", 66)} {
 		var v value
 		if Decode(strings.NewReader(text), 32768, &v) == nil {
 			t.Fatalf("accepted invalid request %q", text)
