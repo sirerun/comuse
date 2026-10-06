@@ -110,7 +110,12 @@ extension NativeRuntime {
         var reason = ""
         while let (element, parentRef, order, depth) = stack.popLast() {
             do { try checkDeadline(requestID, deadline: deadline) }
-            catch let failure as ProbeFailure { complete = false; reason = failure.code; break }
+            catch let failure as ProbeFailure {
+                if failure.code == "cancelled" { throw failure }
+                complete = false
+                reason = failure.code
+                break
+            }
             if output.count >= budget.maxNodes { complete = false; reason = "node_limit"; break }
             if depth >= budget.maxDepth {
                 let childResult = children(of: element)

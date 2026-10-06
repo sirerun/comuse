@@ -59,7 +59,7 @@ func Run(ctx context.Context, config backend.Config, fn func(backend.Backend) er
 	}
 
 	configJSON, err := json.Marshal(nativeConfig{SchemaVersion: abiVersion, Scope: nativeScope{
-		Processes: cloneProcesses(config.Scope.Processes), ExpiresAtUnixMilli: config.Scope.ExpiresAt.UnixMilli(),
+		Processes: copyScope(config.Scope).Processes, ExpiresAtUnixMilli: config.Scope.ExpiresAt.UnixMilli(),
 	}, AllowValues: config.AllowValues})
 	if err != nil || len(configJSON) == 0 || len(configJSON) > maxNativeRequest {
 		lib.close()
@@ -81,7 +81,8 @@ func Run(ctx context.Context, config backend.Config, fn func(backend.Backend) er
 		unlockThread = !hasRetainedOwner()
 		return cleanupErr
 	}
-	resolved := backend.Scope{Processes: cloneProcesses(bound.Processes), ExpiresAt: time.UnixMilli(bound.ExpiresAtUnixMilli)}
+	resolved := backend.Scope{Processes: copyScope(backend.Scope{Processes: bound.Processes}).Processes,
+		ExpiresAt: time.UnixMilli(bound.ExpiresAtUnixMilli)}
 	if err = validateBoundScope(config.Scope, resolved); err != nil {
 		cleanupErr := cleanupOpenFailure(lib, runtimeID, err)
 		unlockThread = !hasRetainedOwner()

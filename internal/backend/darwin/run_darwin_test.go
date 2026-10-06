@@ -79,6 +79,19 @@ func TestOwnerRejectsStartsAtNativePendingLimit(t *testing.T) {
 	}
 }
 
+func TestOwnerReturnsAfterContextDrainDeadlineWhenWorkerDoesNotFinish(t *testing.T) {
+	transport := &fakeNativeTransport{}
+	owner := &runtimeOwner{
+		lib: transport, runtimeID: 1, pending: make(map[uint64]pendingRequest),
+		commands: make(chan ownerCommand), completions: make(chan nativeCompletion, 64),
+		closing: true, closed: true, workerDone: make(chan error),
+		drainDeadline: time.Now().Add(-time.Millisecond),
+	}
+	if err := owner.loop(context.Background()); err == nil || backend.ErrorCode(err) != "backend_unavailable" {
+		t.Fatalf("loop with unfinished worker: got %v, want backend_unavailable", err)
+	}
+}
+
 func nowPlusOwnerDrain() time.Time { return time.Now().Add(ownerDrainTimeout) }
 
 func TestNativeErrorEnvelopeUsesStableStringCode(t *testing.T) {
