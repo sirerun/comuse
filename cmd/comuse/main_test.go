@@ -198,7 +198,7 @@ func (r *observedReader) Close() error {
 func boolPointer(value bool) *bool { return &value }
 
 func TestInvokeExplicitReadUsesSessionState(t *testing.T) {
-	s, err := comuse.NewSession(comuse.Config{Backend: &cliBackend{}, Scope: comuse.Scope{Processes: []comuse.ProcessIdentity{{PID: 1, BundleID: "test.app", LaunchID: "generation"}}, ExpiresAt: time.Now().Add(time.Minute)}, Budget: comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 8192, Timeout: time.Second}})
+	s, err := comuse.NewSession(comuse.Config{Backend: &cliBackend{}, Scope: comuse.Scope{Processes: []comuse.ProcessIdentity{{PID: 7, BundleID: "test.fixture", LaunchID: "launch-1"}}, ExpiresAt: time.Now().Add(time.Minute)}, Budget: comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 8192, Timeout: time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestInvokeExplicitReadUsesSessionState(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := content.(comuse.ElementContent)
-	if read.Text != "explicit text" || read.StateID != state.StateID || read.StateID == "native-s" {
+	if read.Text != "fixture" || read.StateID != state.StateID || read.StateID == "native-1" {
 		t.Fatalf("unexpected read: %#v", read)
 	}
 }
