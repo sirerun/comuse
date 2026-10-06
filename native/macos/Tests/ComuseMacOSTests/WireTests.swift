@@ -30,4 +30,44 @@ final class WireTests: XCTestCase {
         XCTAssertNil(object["result"])
         XCTAssertEqual(object["status"] as? String, "error")
     }
+
+    func testPermissionLossPurgesReferencesAndSnapshots() async {
+        await MainActor.run {
+            let process = NativeProcess(pid: 1, bundleID: "example.app", launchID: "1.1")
+            let runtime = NativeRuntime(
+                id: 77,
+                config: NativeConfig(schemaVersion: 1,
+                                     scope: NativeScope(processes: [process], expiresAtUnixMilli: 1),
+                                     allowValues: false),
+                processes: [process]
+            )
+            let element = AXUIElementCreateSystemWide()
+            ReferenceStore.shared.set(runtimeID: 77, value: [
+                "ref": NativeReference(element: element, process: process, windowRef: nil,
+                                        kind: .window, lastSeen: 0)
+            ])
+            SnapshotStore.shared.set(runtimeID: 77, value: [
+                "state": NativeSnapshot(stateID: "state", windowRef: "window", process: process,
+                                         digest: "digest", complete: true, coverageReason: "", refs: [],
+                                         createdAt: 0, byteCount: 0)
+            ])
+
+            XCTAssertThrowsError(try runtime.requireAccessibilityPermission(false))
+            XCTAssertTrue(ReferenceStore.shared.get(runtimeID: 77).isEmpty)
+            XCTAssertTrue(SnapshotStore.shared.get(runtimeID: 77).isEmpty)
+            XCTAssertNoThrow(try runtime.requireAccessibilityPermission(true))
+            XCTAssertTrue(ReferenceStore.shared.get(runtimeID: 77).isEmpty)
+            XCTAssertTrue(SnapshotStore.shared.get(runtimeID: 77).isEmpty)
+        }
+    }
+
+    func testBoundedTextUsesUTF8BytesAndPreservesScalarBoundaries() {
+        let bounded = boundedUTF8Prefix("a🙂b", byteLimit: 4)
+        XCTAssertEqual(bounded.text, "a")
+        XCTAssertTrue(bounded.truncated)
+
+        let exact = boundedUTF8Prefix("a🙂", byteLimit: 5)
+        XCTAssertEqual(exact.text, "a🙂")
+        XCTAssertFalse(exact.truncated)
+    }
 }

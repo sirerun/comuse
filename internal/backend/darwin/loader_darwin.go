@@ -29,6 +29,8 @@ type nativeCompletion struct {
 
 type nativeLibrary struct{ pointer *C.comuse_loader }
 
+func currentIsProcessMain() bool { return C.comuse_loader_is_process_main() == 1 }
+
 var callbackSequence atomic.Uint64
 var callbackRegistry = struct {
 	sync.Mutex
@@ -172,6 +174,8 @@ func nativeStatusError(status int32) error {
 		return backendError("backend_unavailable")
 	case 5:
 		return backendError("desktop_busy")
+	case 6:
+		return backendError("rate_limited")
 	default:
 		return backendError("internal_error")
 	}
