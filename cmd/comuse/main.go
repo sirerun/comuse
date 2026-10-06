@@ -192,11 +192,11 @@ func emitError(out io.Writer, code string) int {
 }
 func exitFor(code string) int {
 	switch code {
-	case "invalid_request":
+	case "invalid_request", "policy_refused", "approval_required":
 		return 2
 	case "permission_denied", "unsupported", "backend_unavailable":
 		return 3
-	case "policy_refused", "approval_required", "desktop_busy", "rate_limited", "budget_exceeded":
+	case "desktop_busy":
 		return 4
 	default:
 		return 1
