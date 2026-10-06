@@ -49,13 +49,12 @@ func Run(ctx context.Context, config backend.Config, fn func(backend.Backend) er
 	if hasRetainedOwner() {
 		return backendError("desktop_busy")
 	}
+	if !currentIsProcessMain() {
+		return backendError("backend_unavailable")
+	}
 	lib, err := loadNativeLibrary(config.LibraryPath)
 	if err != nil {
 		return err
-	}
-	if !lib.isProcessMain() {
-		lib.close()
-		return backendError("backend_unavailable")
 	}
 
 	configJSON, err := json.Marshal(nativeConfig{SchemaVersion: abiVersion, Scope: nativeScope{
@@ -134,7 +133,7 @@ func RetryPendingClose(ctx context.Context) error {
 	}
 	owner.closeAttempts = 0
 	owner.retryAt = time.Time{}
-	owner.drainDeadline = time.Now().Add(ownerDrainTimeout)
+	owner.drainDeadline = boundedDrainDeadline(ctx)
 	err := owner.loop(ctx)
 	if !hasRetainedOwner() {
 		runtime.UnlockOSThread()
@@ -162,12 +161,20 @@ func hasRetainedOwner() bool {
 	return retainedOwner != nil
 }
 
+func boundedDrainDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(ownerDrainTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		return contextDeadline
+	}
+	return deadline
+}
+
 func (owner *runtimeOwner) loop(ctx context.Context) error {
 	if owner.pending == nil {
 		owner.pending = make(map[uint64]pendingRequest)
 	}
 	if owner.drainDeadline.IsZero() {
-		owner.drainDeadline = time.Now().Add(ownerDrainTimeout)
+		owner.drainDeadline = boundedDrainDeadline(ctx)
 	}
 	ctxDone := ctx.Done()
 	for {
@@ -181,7 +188,7 @@ func (owner *runtimeOwner) loop(ctx context.Context) error {
 					owner.backend.closing.Store(true)
 				}
 				if owner.drainDeadline.IsZero() {
-					owner.drainDeadline = time.Now().Add(ownerDrainTimeout)
+					owner.drainDeadline = boundedDrainDeadline(ctx)
 				}
 			}
 		}
@@ -206,7 +213,7 @@ func (owner *runtimeOwner) loop(ctx context.Context) error {
 			if command.close {
 				owner.closing = true
 				owner.closeWaiters = append(owner.closeWaiters, command.reply)
-				owner.drainDeadline = time.Now().Add(ownerDrainTimeout)
+				owner.drainDeadline = boundedDrainDeadline(command.ctx)
 				owner.cancelPending(owner.pending)
 			} else if owner.closing || owner.closed {
 				command.reply <- callResult{err: backendError("session_closed")}
@@ -225,7 +232,7 @@ func (owner *runtimeOwner) loop(ctx context.Context) error {
 			if owner.backend != nil {
 				owner.backend.closing.Store(true)
 			}
-			owner.drainDeadline = time.Now().Add(ownerDrainTimeout)
+			owner.drainDeadline = boundedDrainDeadline(ctx)
 			owner.cancelPending(owner.pending)
 		case <-ctxDone:
 			ctxDone = nil
@@ -236,7 +243,7 @@ func (owner *runtimeOwner) loop(ctx context.Context) error {
 			if owner.backend != nil {
 				owner.backend.closing.Store(true)
 			}
-			owner.drainDeadline = time.Now().Add(ownerDrainTimeout)
+			owner.drainDeadline = boundedDrainDeadline(ctx)
 			owner.cancelPending(owner.pending)
 		case <-time.After(10 * time.Millisecond):
 			for callbackID, request := range owner.pending {
@@ -339,7 +346,11 @@ func validateConfig(config backend.Config) error {
 }
 
 func validateBoundScope(requested backend.Scope, resolved backend.Scope) error {
-	if len(requested.Processes) != len(resolved.Processes) || !resolved.ExpiresAt.Equal(requested.ExpiresAt) {
+	// The v1 native config carries expiry at millisecond precision. Compare at
+	// that wire precision while requiring that the native side never extends it.
+	if len(requested.Processes) != len(resolved.Processes) ||
+		resolved.ExpiresAt.UnixMilli() != requested.ExpiresAt.UnixMilli() ||
+		resolved.ExpiresAt.After(requested.ExpiresAt) {
 		return backendError("backend_unavailable")
 	}
 	wanted := make(map[int32]backend.ProcessIdentity, len(requested.Processes))

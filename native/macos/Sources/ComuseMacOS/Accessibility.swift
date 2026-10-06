@@ -50,6 +50,25 @@ private struct TraversalNode {
     }
 }
 
+struct BoundedText {
+    let text: String
+    let truncated: Bool
+}
+
+func boundedUTF8Prefix(_ input: String, byteLimit: Int) -> BoundedText {
+    var scalars = String.UnicodeScalarView()
+    var byteCount = 0
+    for scalar in input.unicodeScalars {
+        let count = scalar.utf8.count
+        if byteCount + count > byteLimit {
+            return BoundedText(text: String(scalars), truncated: true)
+        }
+        scalars.append(scalar)
+        byteCount += count
+    }
+    return BoundedText(text: String(scalars), truncated: false)
+}
+
 extension NativeRuntime {
     var references: [String: NativeReference] {
         get { ReferenceStore.shared.get(runtimeID: id) }
@@ -137,9 +156,23 @@ extension NativeRuntime {
                 do {
                     let ref = try retain(element, process: freshProcess, windowRef: windowRef, kind: .element)
                     refs.insert(ref)
-                    let label = (stringAttribute(element, kAXTitleAttribute) ?? stringAttribute(element, kAXDescriptionAttribute))
-                        .map { String($0.prefix(4096)) }
-                    let value = config.allowValues ? allowedValue(element, classification: classification, role: role) : nil
+                    var label: String?
+                    if let rawLabel = stringAttribute(element, kAXTitleAttribute) ?? stringAttribute(element, kAXDescriptionAttribute) {
+                        let bounded = boundedUTF8Prefix(rawLabel, byteLimit: 4096)
+                        label = bounded.text
+                        if bounded.truncated {
+                            complete = false
+                            if reason.isEmpty { reason = "text_limit" }
+                        }
+                    }
+                    var value: String?
+                    if config.allowValues, let bounded = allowedValue(element, classification: classification, role: role) {
+                        value = bounded.text
+                        if bounded.truncated {
+                            complete = false
+                            if reason.isEmpty { reason = "text_limit" }
+                        }
+                    }
                     let enabled = boolAttribute(element, kAXEnabledAttribute)
                     let actions = advertisedActions(element, role: role)
                     let node = TraversalNode(ref: ref, parentRef: parentRef, order: order, role: role,
@@ -218,10 +251,11 @@ extension NativeRuntime {
         guard classify(role: role, subrole: subrole) == "normal", role == "AXTextField" else {
             throw ProbeFailure(code: "policy_refused")
         }
-        guard let text = allowedValue(entry.element, classification: "normal", role: role) else {
+        guard let bounded = allowedValue(entry.element, classification: "normal", role: role) else {
             throw ProbeFailure(code: "backend_unavailable")
         }
-        return ["window_ref": windowRef, "element_ref": elementRef, "state_id": stateID, "text": text]
+        guard !bounded.truncated else { throw ProbeFailure(code: "budget_exceeded") }
+        return ["window_ref": windowRef, "element_ref": elementRef, "state_id": stateID, "text": bounded.text]
     }
 
     func validateSnapshot(_ stateID: String, windowRef: String, requestID: UInt64, budget: NativeBudget?) throws -> NativeSnapshot {
@@ -283,11 +317,11 @@ private func boolAttribute(_ element: AXUIElement, _ attribute: String) -> Bool?
     return (value as! NSNumber).boolValue
 }
 
-private func allowedValue(_ element: AXUIElement, classification: String, role: String) -> String? {
+private func allowedValue(_ element: AXUIElement, classification: String, role: String) -> BoundedText? {
     guard classification == "normal", role == "AXTextField",
           let value = copyAttribute(element, kAXValueAttribute as String) else { return nil }
-    if let text = value as? String { return String(text.prefix(8192)) }
-    if let text = value as? NSAttributedString { return String(text.string.prefix(8192)) }
+    if let text = value as? String { return boundedUTF8Prefix(text, byteLimit: 8192) }
+    if let text = value as? NSAttributedString { return boundedUTF8Prefix(text.string, byteLimit: 8192) }
     return nil
 }
 
@@ -308,7 +342,7 @@ private func advertisedActions(_ element: AXUIElement, role: String) -> [String]
     return []
 }
 
-private func boundedBudget(_ input: NativeBudget?) -> (maxDepth: Int, maxNodes: Int, maxBytes: Int, timeout: TimeInterval) {
+func boundedBudget(_ input: NativeBudget?) -> (maxDepth: Int, maxNodes: Int, maxBytes: Int, timeout: TimeInterval) {
     let depth = min(max(input?.maxDepth ?? 16, 1), 64)
     let nodes = min(max(input?.maxNodes ?? 256, 1), 4096)
     let bytes = min(max(input?.maxBytes ?? 32768, 1024), 65536)

@@ -35,6 +35,25 @@ func (f *fakeNativeTransport) start(uint64, []byte, uint64, chan nativeCompletio
 func (f *fakeNativeTransport) cancel(uint64, uint64) error { return nil }
 func (f *fakeNativeTransport) close()                      { f.closed = true }
 
+func TestValidateBoundScopeUsesWireExpiryPrecisionWithoutExtension(t *testing.T) {
+	requestedExpiry := time.Unix(1_800_000_000, 123_456_789)
+	requested := backend.Scope{
+		Processes: []backend.ProcessIdentity{{PID: 42, BundleID: "com.example.app"}},
+		ExpiresAt: requestedExpiry,
+	}
+	resolved := backend.Scope{
+		Processes: []backend.ProcessIdentity{{PID: 42, BundleID: "com.example.app", LaunchID: "launch-1"}},
+		ExpiresAt: time.UnixMilli(requestedExpiry.UnixMilli()),
+	}
+	if err := validateBoundScope(requested, resolved); err != nil {
+		t.Fatalf("millisecond-rounded expiry rejected: %v", err)
+	}
+	resolved.ExpiresAt = resolved.ExpiresAt.Add(time.Millisecond)
+	if err := validateBoundScope(requested, resolved); err == nil {
+		t.Fatal("expiry extension accepted")
+	}
+}
+
 func TestOwnerCloseFailureRetainsAndMainThreadRetryCloses(t *testing.T) {
 	if hasRetainedOwner() {
 		t.Fatal("test starts with a retained native owner")

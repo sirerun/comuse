@@ -115,7 +115,7 @@ private struct AnyCodable: Encodable {
         case let value as String: try container.encode(value)
         case let value as NSNumber:
             if CFGetTypeID(value) == CFBooleanGetTypeID() { try container.encode(value.boolValue) }
-            else if CFNumberIsFloatType(value as! CFNumber) { try container.encode(value.doubleValue) }
+            else if CFNumberIsFloatType(value as CFNumber) { try container.encode(value.doubleValue) }
             else { try container.encode(value.int64Value) }
         case let value as [Any]: try container.encode(value.map(AnyCodable.init))
         case let value as [String: Any]: try container.encode(value.mapValues(AnyCodable.init))
@@ -127,6 +127,7 @@ private struct AnyCodable: Encodable {
 private let idLock = NSLock()
 nonisolated(unsafe) private var nextNativeID: UInt64 = 1
 nonisolated(unsafe) private var cancelledIDs = Set<UInt64>()
+nonisolated(unsafe) private var activeNativeRequests: [UInt64: UInt64] = [:]
 private let cancellationLock = NSLock()
 
 private func allocateID() -> UInt64 {
@@ -137,8 +138,18 @@ private func allocateID() -> UInt64 {
     return value
 }
 
-private func markCancelled(_ requestID: UInt64) {
-    cancellationLock.lock(); cancelledIDs.insert(requestID); cancellationLock.unlock()
+private func registerNativeRequest(_ runtimeID: UInt64, _ requestID: UInt64) -> Bool {
+    cancellationLock.lock(); defer { cancellationLock.unlock() }
+    guard activeNativeRequests.count < 32, activeNativeRequests[requestID] == nil else { return false }
+    activeNativeRequests[requestID] = runtimeID
+    return true
+}
+
+private func cancelNativeRequest(_ runtimeID: UInt64, _ requestID: UInt64) -> Bool {
+    cancellationLock.lock(); defer { cancellationLock.unlock() }
+    guard activeNativeRequests[requestID] == runtimeID else { return false }
+    cancelledIDs.insert(requestID)
+    return true
 }
 
 func isCancelled(_ requestID: UInt64) -> Bool {
@@ -147,7 +158,18 @@ func isCancelled(_ requestID: UInt64) -> Bool {
 }
 
 func clearCancelled(_ requestID: UInt64) {
-    cancellationLock.lock(); cancelledIDs.remove(requestID); cancellationLock.unlock()
+    cancellationLock.lock(); defer { cancellationLock.unlock() }
+    cancelledIDs.remove(requestID)
+    activeNativeRequests.removeValue(forKey: requestID)
+}
+
+private func clearRuntimeRequests(_ runtimeID: UInt64) {
+    cancellationLock.lock(); defer { cancellationLock.unlock() }
+    let requestIDs = activeNativeRequests.compactMap { $0.value == runtimeID ? $0.key : nil }
+    for requestID in requestIDs {
+        activeNativeRequests.removeValue(forKey: requestID)
+        cancelledIDs.remove(requestID)
+    }
 }
 
 @MainActor private var nativeRuntimes: [UInt64: NativeRuntime] = [:]
@@ -169,11 +191,19 @@ final class NativeRuntime {
     func dispatch(requestID: UInt64, callbackID: UInt64, completion: Completion, data: Data) {
         guard requestTasks[requestID] == nil else {
             finish(callbackID: callbackID, requestID: requestID, completion: completion,
-                   bytes: envelope(requestID: extractRequestID(from: data), error: error("invalid_request")))
+                   bytes: envelope(requestID: extractRequestID(from: data), error: nativeErrorCode("invalid_request")))
+            clearCancelled(requestID)
             return
         }
         let task = Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self else {
+                let bytes = envelope(requestID: extractRequestID(from: data), error: nativeErrorCode("backend_unavailable"))
+                bytes.withUnsafeBytes { raw in
+                    completion(callbackID, requestID, 0, raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
+                }
+                clearCancelled(requestID)
+                return
+            }
             let response = self.handle(data, nativeRequestID: requestID)
             self.finish(callbackID: callbackID, requestID: requestID, completion: completion, bytes: response)
             self.requestTasks.removeValue(forKey: requestID)
@@ -183,7 +213,6 @@ final class NativeRuntime {
     }
 
     func cancel(_ requestID: UInt64) {
-        markCancelled(requestID)
         requestTasks[requestID]?.cancel()
     }
 
@@ -191,6 +220,7 @@ final class NativeRuntime {
         guard requestTasks.isEmpty else { return 5 }
         ReferenceStore.shared.remove(runtimeID: id)
         SnapshotStore.shared.remove(runtimeID: id)
+        clearRuntimeRequests(id)
         nativeRuntimes.removeValue(forKey: id)
         return 0
     }
@@ -214,17 +244,19 @@ final class NativeRuntime {
             default: throw ProbeFailure(code: "unsupported")
             }
             let encoded = try JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed, .sortedKeys])
-            guard encoded.count <= comuseMaximumResponseBytes else { throw ProbeFailure(code: "budget_exceeded") }
-            return envelope(requestID: request.requestID, result: encoded)
+            let response = envelope(requestID: request.requestID, result: encoded)
+            guard response.count <= comuseMaximumResponseBytes else { throw ProbeFailure(code: "budget_exceeded") }
+            return response
         } catch let failure as ProbeFailure {
-            return envelope(requestID: extractRequestID(from: data), error: error(failure.code))
+            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode(failure.code))
         } catch {
-            return envelope(requestID: extractRequestID(from: data), error: error("invalid_request"))
+            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode("invalid_request"))
         }
     }
 
     private func doctor() -> [String: Any] {
         let accessibility = AXIsProcessTrusted()
+        if !accessibility { invalidateAccessibilityState() }
         return [
             "capabilities": [
                 "accessibility": accessibility,
@@ -245,6 +277,7 @@ final class NativeRuntime {
         var result: [[String: Any]] = []
         let budget = boundedBudget(request.budget)
         let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
+        var totalBytes = 0
         for process in processes {
             try checkDeadline(requestID, deadline: deadline)
             let app = try application(process)
@@ -255,11 +288,18 @@ final class NativeRuntime {
             var raw: CFTypeRef?
             guard AXUIElementCopyAttributeValue(applicationElement, kAXWindowsAttribute as CFString, &raw) == .success,
                   let values = raw as? [AXUIElement] else { throw ProbeFailure(code: "backend_unavailable") }
-            for window in values.prefix(128) {
+            for window in values {
                 try checkDeadline(requestID, deadline: deadline)
+                guard result.count < min(budget.maxNodes, 128) else { throw ProbeFailure(code: "budget_exceeded") }
                 let ref = try retain(window, process: app.identity, windowRef: nil, kind: .window)
-                let title = stringAttribute(window, kAXTitleAttribute).map { String($0.prefix(1024)) } ?? ""
-                result.append(["ref": ref, "process": processJSON(app.identity), "title": title])
+                let rawTitle = stringAttribute(window, kAXTitleAttribute) ?? ""
+                let title = boundedUTF8Prefix(rawTitle, byteLimit: 1024)
+                guard !title.truncated else { throw ProbeFailure(code: "budget_exceeded") }
+                let row: [String: Any] = ["ref": ref, "process": processJSON(app.identity), "title": title.text]
+                let bytes = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]).count
+                guard totalBytes + bytes <= budget.maxBytes else { throw ProbeFailure(code: "budget_exceeded") }
+                totalBytes += bytes
+                result.append(row)
             }
             guard try application(process).identity == app.identity else { throw ProbeFailure(code: "element_stale") }
         }
@@ -285,7 +325,19 @@ final class NativeRuntime {
     }
 
     func checkPermission() throws {
-        guard AXIsProcessTrusted() else { throw ProbeFailure(code: "permission_denied") }
+        try requireAccessibilityPermission(AXIsProcessTrusted())
+    }
+
+    func requireAccessibilityPermission(_ trusted: Bool) throws {
+        guard trusted else {
+            invalidateAccessibilityState()
+            throw ProbeFailure(code: "permission_denied")
+        }
+    }
+
+    func invalidateAccessibilityState() {
+        ReferenceStore.shared.remove(runtimeID: id)
+        SnapshotStore.shared.remove(runtimeID: id)
     }
 
     func checkDeadline(_ requestID: UInt64, deadline: TimeInterval) throws {
@@ -335,7 +387,7 @@ func extractRequestID(from data: Data) -> String {
     return value
 }
 
-private func error(_ code: String) -> String { code }
+private func nativeErrorCode(_ code: String) -> String { code }
 
 private func envelope(requestID: String, result: Data? = nil, error: String? = nil) -> Data {
     let response: NativeEnvelope
@@ -413,7 +465,7 @@ public func comuseRuntimeOpen(_ configBytes: UnsafePointer<UInt8>?, _ configLeng
 public func comuseRuntimePump(_ runtimeID: UInt64, _ timeoutMilliseconds: UInt32) -> Int32 {
     guard pthread_main_np() != 0, MainActor.assumeIsolated({ nativeRuntimes[runtimeID] != nil }) else { return 3 }
     let bounded = min(timeoutMilliseconds, 50)
-    CFRunLoopRunInMode(kCFRunLoopDefaultMode, TimeInterval(bounded) / 1000.0, true)
+    CFRunLoopRunInMode(CFRunLoopMode.defaultMode, TimeInterval(bounded) / 1000.0, true)
     return 0
 }
 
@@ -433,12 +485,14 @@ public func comuseRequestStart(_ runtimeID: UInt64, _ requestBytes: UnsafePointe
     guard let requestBytes, requestLength > 0, requestLength <= comuseMaximumRequestBytes,
           let completion, let requestOut else { return 1 }
     let nativeID = allocateID()
+    guard registerNativeRequest(runtimeID, nativeID) else { return 6 }
     requestOut.pointee = nativeID
     let data = Data(bytes: requestBytes, count: requestLength)
     Task { @MainActor in
         guard let runtime = nativeRuntimes[runtimeID] else {
-            let bytes = envelope(requestID: extractRequestID(from: data), error: error("backend_unavailable"))
+            let bytes = envelope(requestID: extractRequestID(from: data), error: nativeErrorCode("backend_unavailable"))
             bytes.withUnsafeBytes { raw in completion(callbackID, nativeID, 0, raw.bindMemory(to: UInt8.self).baseAddress, raw.count) }
+            clearCancelled(nativeID)
             return
         }
         runtime.dispatch(requestID: nativeID, callbackID: callbackID, completion: completion, data: data)
@@ -448,7 +502,7 @@ public func comuseRequestStart(_ runtimeID: UInt64, _ requestBytes: UnsafePointe
 
 @_cdecl("comuse_request_cancel")
 public func comuseRequestCancel(_ runtimeID: UInt64, _ requestID: UInt64) -> Int32 {
-    markCancelled(requestID)
+    guard cancelNativeRequest(runtimeID, requestID) else { return 3 }
     Task { @MainActor in nativeRuntimes[runtimeID]?.cancel(requestID) }
     return 0
 }
