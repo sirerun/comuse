@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"unicode/utf8"
 )
 
 func Decode(r io.Reader, maxBytes int64, dst any) error {
 	b, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
 	if err != nil {
 		return errors.New("cannot read JSON")
+	}
+	if !utf8.Valid(b) {
+		return errors.New("invalid JSON encoding")
 	}
 	if int64(len(b)) > maxBytes {
 		return errors.New("JSON exceeds limit")
