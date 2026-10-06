@@ -1,0 +1,190 @@
+package comuse
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/sirerun/comuse/internal/writer"
+)
+
+const (
+	maxSnapshotGenerations = 8
+	maxSnapshotStorage     = 4 * 1024 * 1024
+	snapshotTTL            = 2 * time.Minute
+)
+
+// Config defines a scoped session. Writer and approval fields are required
+// together only when host-authorized mutation is enabled.
+type Config struct {
+	Backend          Backend
+	Scope            Scope
+	Budget           Budget
+	AllowValues      bool
+	ApprovalProvider ApprovalProvider
+	WriterDirectory  string
+	WriterKey        []byte
+	MaxActions       int
+}
+
+// Session owns a backend and its bounded semantic snapshot and action state.
+type Session struct {
+	mu            sync.Mutex
+	actionMu      sync.Mutex
+	closeMu       sync.Mutex
+	changed       chan struct{}
+	active        int
+	closing       bool
+	closed        bool
+	backendClosed bool
+
+	backend          Backend
+	scope            Scope
+	budget           Budget
+	allowValues      bool
+	approvalProvider ApprovalProvider
+	writerDirectory  string
+	writerKey        []byte
+	maxActions       int
+	mutationEnabled  bool
+	sessionID        string
+	now              func() time.Time
+
+	windows       map[string]Window
+	snapshots     map[string][]snapshotBinding
+	snapshotBytes int
+	actionsUsed   int
+	usedApprovals map[string]struct{}
+	quarantined   []*writer.Lease
+}
+
+// NewSession validates and copies configuration without making backend calls.
+func NewSession(config Config) (*Session, error) {
+	if config.Backend == nil {
+		return nil, coreError("invalid_request")
+	}
+	mutationEnabled := config.WriterDirectory != "" || len(config.WriterKey) != 0 || config.MaxActions != 0 || config.ApprovalProvider != nil
+	if mutationEnabled && (config.WriterDirectory == "" || len(config.WriterKey) != 32 || config.MaxActions < 1 || config.MaxActions > 4096 || config.ApprovalProvider == nil) {
+		return nil, coreError("invalid_request")
+	}
+	now := time.Now()
+	if err := validateScope(config.Scope, now); err != nil {
+		return nil, err
+	}
+	if err := validateBudget(config.Budget); err != nil {
+		return nil, err
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, coreError("internal_error")
+	}
+	config.Scope.Processes = append([]ProcessIdentity(nil), config.Scope.Processes...)
+	config.WriterKey = append([]byte(nil), config.WriterKey...)
+	return &Session{
+		changed:          make(chan struct{}),
+		backend:          config.Backend,
+		scope:            config.Scope,
+		budget:           config.Budget,
+		allowValues:      config.AllowValues,
+		approvalProvider: config.ApprovalProvider,
+		writerDirectory:  config.WriterDirectory,
+		writerKey:        config.WriterKey,
+		maxActions:       config.MaxActions,
+		mutationEnabled:  mutationEnabled,
+		sessionID:        hex.EncodeToString(id[:]),
+		now:              time.Now,
+		windows:          make(map[string]Window),
+		snapshots:        make(map[string][]snapshotBinding),
+		usedApprovals:    make(map[string]struct{}),
+	}, nil
+}
+
+func (s *Session) enter(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	if s == nil || ctx == nil {
+		return nil, nil, coreError("invalid_request")
+	}
+	s.mu.Lock()
+	if s.closed || s.closing {
+		s.mu.Unlock()
+		return nil, nil, coreError("session_closed")
+	}
+	if !s.now().Before(s.scope.ExpiresAt) {
+		s.mu.Unlock()
+		return nil, nil, coreError("state_expired")
+	}
+	s.active++
+	s.mu.Unlock()
+	callCtx, cancel := context.WithTimeout(ctx, s.budget.Timeout)
+	return callCtx, func() {
+		cancel()
+		s.mu.Lock()
+		s.active--
+		close(s.changed)
+		s.changed = make(chan struct{})
+		s.mu.Unlock()
+	}, nil
+}
+
+// Close blocks new calls, waits for active calls, closes the backend, then
+// settles quarantined writer leases. Failed closes retain ownership for retry.
+func (s *Session) Close(ctx context.Context) error {
+	if s == nil || ctx == nil {
+		return coreError("invalid_request")
+	}
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closing = true
+	for s.active > 0 {
+		changed := s.changed
+		s.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return coreError("cancelled")
+		}
+		s.mu.Lock()
+	}
+	backend := s.backend
+	backendClosed := s.backendClosed
+	s.mu.Unlock()
+	if !backendClosed {
+		if err := backend.Close(ctx); err != nil {
+			return stableContextError(ctx, err)
+		}
+		s.mu.Lock()
+		s.backendClosed = true
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	leases := append([]*writer.Lease(nil), s.quarantined...)
+	s.mu.Unlock()
+	var closeErr error
+	remaining := make([]*writer.Lease, 0, len(leases))
+	for _, lease := range leases {
+		if err := lease.Close(ctx); err != nil {
+			if errors.Is(err, writer.ErrLeaseRetained) {
+				remaining = append(remaining, lease)
+			}
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	s.mu.Lock()
+	s.quarantined = remaining
+	if closeErr == nil && len(remaining) == 0 {
+		s.closed = true
+		s.backend = nil
+	}
+	s.mu.Unlock()
+	if closeErr != nil {
+		return stableContextError(ctx, closeErr)
+	}
+	return nil
+}
