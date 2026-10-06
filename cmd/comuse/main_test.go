@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/sirerun/comuse"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,3 +115,53 @@ func (b *cliBackend) Execute(context.Context, comuse.Action) (comuse.ActionResul
 	return comuse.ActionResult{}, &comuse.Error{Code: "unsupported", Message: "unsupported"}
 }
 func (*cliBackend) Close(context.Context) error { return nil }
+
+func newCLISession(t *testing.T) *comuse.Session {
+	t.Helper()
+	s, e := comuse.NewSession(comuse.Config{Backend: &cliBackend{}, Scope: comuse.Scope{Processes: []comuse.ProcessIdentity{{PID: 7, BundleID: "test.fixture", LaunchID: "launch-1"}}, ExpiresAt: time.Now().Add(time.Minute)}, Budget: comuse.Budget{MaxDepth: 8, MaxNodes: 32, MaxBytes: 32768, Timeout: time.Second}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	return s
+}
+func TestPersistentCLIFailedOutput(t *testing.T) {
+	s := newCLISession(t)
+	if e := serveCLI(context.Background(), s, strings.NewReader(`{"unknown":true}`), failedWriter{}); e == nil {
+		t.Fatal("output failure reported success")
+	}
+}
+
+type failedWriter struct{}
+
+func (failedWriter) Write([]byte) (int, error) { return 0, errors.New("private transport failure") }
+func TestPersistentCLICancelClosesRead(t *testing.T) {
+	s := newCLISession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	r, w := io.Pipe()
+	defer w.Close()
+	done := make(chan error, 1)
+	go func() { done <- serveCLI(ctx, s, r, io.Discard) }()
+	cancel()
+	select {
+	case e := <-done:
+		if comuse.ErrorCode(e) != "cancelled" {
+			t.Fatalf("cancel: %v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled read did not exit")
+	}
+}
+func TestPersistentCLIErrorSanitization(t *testing.T) {
+	env := errorEnvelope("private backend payload")
+	b, e := json.Marshal(env)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(string(b), "private backend") {
+		t.Fatal("untrusted code leaked")
+	}
+	if env.Error.Code != "internal_error" {
+		t.Fatal("unknown code not normalized")
+	}
+}
