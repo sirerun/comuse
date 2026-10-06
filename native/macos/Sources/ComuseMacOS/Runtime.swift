@@ -285,9 +285,28 @@ final class NativeRuntime {
             guard AXUIElementSetMessagingTimeout(applicationElement, Float(max(0.05, min(budget.timeout, 1.0)))) == .success else {
                 throw ProbeFailure(code: "backend_unavailable")
             }
-            var raw: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(applicationElement, kAXWindowsAttribute as CFString, &raw) == .success,
-                  let values = raw as? [AXUIElement] else { throw ProbeFailure(code: "backend_unavailable") }
+            var windowCount: CFIndex = 0
+            guard AXUIElementGetAttributeValueCount(applicationElement, kAXWindowsAttribute as CFString, &windowCount) == .success,
+                  windowCount >= 0 else { throw ProbeFailure(code: "backend_unavailable") }
+            let remaining = min(budget.maxNodes - result.count, 128 - result.count)
+            let bounds = boundedChildCount(Int(windowCount), limit: remaining)
+            // Windows have no per-row coverage envelope; fail explicitly rather
+            // than return a complete-looking subset when the list is too large.
+            guard !bounds.truncated else { throw ProbeFailure(code: "budget_exceeded") }
+            var rawWindows: CFArray?
+            if bounds.count > 0 {
+                guard AXUIElementCopyAttributeValues(applicationElement, kAXWindowsAttribute as CFString, 0, CFIndex(bounds.count), &rawWindows) == .success else {
+                    throw ProbeFailure(code: "backend_unavailable")
+                }
+            }
+            let values: [AXUIElement]
+            if bounds.count == 0 {
+                values = []
+            } else if let copied = rawWindows as? [AXUIElement] {
+                values = copied
+            } else {
+                throw ProbeFailure(code: "backend_unavailable")
+            }
             for window in values {
                 try checkDeadline(requestID, deadline: deadline)
                 guard result.count < min(budget.maxNodes, 128) else { throw ProbeFailure(code: "budget_exceeded") }
