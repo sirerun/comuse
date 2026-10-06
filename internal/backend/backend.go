@@ -15,9 +15,15 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 func ErrorCode(err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "cancelled"
+	}
 	var e *Error
 	if errors.As(err, &e) {
-		return e.Code
+		switch e.Code {
+		case "invalid_request", "policy_refused", "approval_required", "element_stale", "state_expired", "permission_denied", "unsupported", "backend_unavailable", "desktop_busy", "rate_limited", "budget_exceeded", "cancelled", "session_closed", "unknown_outcome":
+			return e.Code
+		}
 	}
 	return "internal_error"
 }
