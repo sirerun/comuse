@@ -15,8 +15,11 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 func ErrorCode(err error) string {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) {
 		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "budget_exceeded"
 	}
 	var e *Error
 	if errors.As(err, &e) {
