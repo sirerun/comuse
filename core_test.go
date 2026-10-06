@@ -94,9 +94,12 @@ func cloneElements(elements []Element) []Element {
 	return copyElements
 }
 
-type fixedApproval struct{}
+type fixedApproval struct{ err error }
 
-func (fixedApproval) Approve(_ context.Context, request ApprovalRequest) (Approval, error) {
+func (approval fixedApproval) Approve(_ context.Context, request ApprovalRequest) (Approval, error) {
+	if approval.err != nil {
+		return Approval{}, approval.err
+	}
 	return Approval{SessionID: request.SessionID, Action: request.Action, Process: request.Process, ObservedAt: request.ObservedAt, PolicyVersion: request.PolicyVersion, ExpiresAt: request.ExpiresAt}, nil
 }
 
@@ -247,7 +250,7 @@ func TestActionApprovalDurableReplayAndNoTextPersistence(t *testing.T) {
 	}
 }
 
-func TestUnknownActionPersistsDirtyBeforeTerminalAndBlocksReplay(t *testing.T) {
+func TestUnknownActionRetainsInflightWhenJournalWritesFail(t *testing.T) {
 	process := testProcess()
 	root := filepath.Join(t.TempDir(), "state")
 	backend := &fakeBackend{process: process, nativeState: "native-action", elements: testElements(), input: true, qualified: true}
@@ -276,7 +279,7 @@ func TestUnknownActionPersistsDirtyBeforeTerminalAndBlocksReplay(t *testing.T) {
 		t.Fatalf("uncertain action = (%+v, %v), want unknown outcome", result, err)
 	}
 	if err := session.Close(context.Background()); err == nil {
-		t.Fatal("close with unwritable dirty journal succeeded")
+		t.Fatal("close with unwritable journal succeeded")
 	}
 	if got := len(backend.executed); got != 1 {
 		t.Fatalf("native action dispatched %d times", got)
@@ -295,6 +298,50 @@ func TestUnknownActionPersistsDirtyBeforeTerminalAndBlocksReplay(t *testing.T) {
 	var binding [32]byte
 	if _, _, err := lease.Begin("action-after-unknown", binding); !errors.Is(err, writer.ErrDirty) {
 		t.Fatalf("new action after unknown outcome = %v, want ErrDirty", err)
+	}
+}
+
+func TestApprovalCancellationAndDeadlineCodesReplayExactly(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "cancelled", err: context.Canceled, code: "cancelled"},
+		{name: "deadline", err: context.DeadlineExceeded, code: "budget_exceeded"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			process := testProcess()
+			backend := &fakeBackend{process: process, nativeState: "native-action", elements: testElements(), input: true, qualified: true}
+			config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget(), ApprovalProvider: fixedApproval{err: tc.err}, WriterDirectory: filepath.Join(t.TempDir(), "state"), WriterKey: []byte(strings.Repeat("k", 32)), MaxActions: 2}
+			session, err := NewSession(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := session.Windows(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			state, err := session.Observe(context.Background(), "window-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			action := Action{ID: "approval-replay", WindowRef: "window-1", ElementRef: "normal-1", StateID: state.StateID, Kind: ActionPress}
+			first, firstErr := session.Do(context.Background(), action)
+			if ErrorCode(firstErr) != tc.code || first.Execution != ExecutionNotApplied {
+				t.Fatalf("first Do = (%+v, %v), want not applied with %s", first, firstErr, tc.code)
+			}
+			second, secondErr := session.Do(context.Background(), action)
+			if ErrorCode(secondErr) != tc.code || second.Execution != ExecutionNotApplied {
+				t.Fatalf("replay Do = (%+v, %v), want same durable %s outcome", second, secondErr, tc.code)
+			}
+			if len(backend.executed) != 0 {
+				t.Fatalf("approval failure dispatched native action: %#v", backend.executed)
+			}
+			if err := session.Close(context.Background()); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		})
 	}
 }
 
