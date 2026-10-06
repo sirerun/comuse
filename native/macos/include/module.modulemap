@@ -1,0 +1,4 @@
+module ComuseABI {
+    header "comuse.h"
+    export *
+}
