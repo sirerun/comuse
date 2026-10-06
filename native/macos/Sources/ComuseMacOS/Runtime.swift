@@ -9,7 +9,7 @@ let comuseMaximumRequestBytes = 32 * 1024
 let comuseMaximumResponseBytes = 64 * 1024
 let comuseMaximumScopeProcesses = 32
 
-typealias Completion = @convention(c) (UInt64, UInt64, Int32, UnsafePointer<UInt8>?, Int) -> Void
+public typealias Completion = @convention(c) (UInt64, UInt64, Int32, UnsafePointer<UInt8>?, Int) -> Void
 
 struct NativeProcess: Codable, Sendable, Equatable {
     var pid: Int32

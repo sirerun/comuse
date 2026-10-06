@@ -158,6 +158,12 @@ func (l *nativeLibrary) close() {
 
 func nativeStatusError(status int32) error {
 	switch status {
+	case -5, -6:
+		return backendError("unsupported")
+	case -2:
+		return backendError("backend_unavailable")
+	case -1, -3, -4:
+		return backendError("internal_error")
 	case 1:
 		return backendError("invalid_request")
 	case 2:
