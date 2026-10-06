@@ -267,6 +267,37 @@ func TestServeRejectsOversizedFrameAndClosesOwnedStream(t *testing.T) {
 	}
 }
 
+func TestBoundedFrameWriterAllowsLimitAndRejectsOversizeWithoutPartialWrite(t *testing.T) {
+	stream := &finiteStream{Reader: bytes.NewReader(nil)}
+	closeOnce := &streamClose{stream: stream}
+	writer := &boundedFrameWriter{stream: stream, close: closeOnce, maxBytes: maxOutboundFrameBytes}
+	nearLimit := bytes.Repeat([]byte{'x'}, maxOutboundFrameBytes)
+	if n, err := writer.Write(nearLimit); err != nil || n != len(nearLimit) {
+		t.Fatalf("write at configured limit = (%d, %v), want (%d, nil)", n, err, len(nearLimit))
+	}
+	secret := []byte("private-oversized-frame-payload")
+	oversized := make([]byte, maxOutboundFrameBytes+1)
+	copy(oversized, secret)
+	if n, err := writer.Write(oversized); n != 0 || !errors.Is(err, errOutboundFrameTooLarge) {
+		t.Fatalf("oversized write = (%d, %v), want (0, frame-too-large)", n, err)
+	}
+	stream.mu.Lock()
+	written, writes := stream.writtenBytes, stream.writeCalls
+	stream.mu.Unlock()
+	if written != maxOutboundFrameBytes || writes != 1 {
+		t.Fatalf("underlying stream wrote %d bytes in %d calls; want only the one allowed frame", written, writes)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.closeCount(); got != 1 {
+		t.Fatalf("underlying stream closed %d times, want once", got)
+	}
+	if strings.Contains(errOutboundFrameTooLarge.Error(), string(secret)) {
+		t.Fatal("frame limit error leaked payload")
+	}
+}
+
 func TestTextResultCarriesSharedEnvelope(t *testing.T) {
 	envelope := envelopeError("invalid_request")
 	result := textResult(envelope)
@@ -436,11 +467,19 @@ type blockingStream struct {
 
 type finiteStream struct {
 	*bytes.Reader
-	mu     sync.Mutex
-	closeN int
+	mu           sync.Mutex
+	closeN       int
+	writtenBytes int
+	writeCalls   int
 }
 
-func (s *finiteStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s *finiteStream) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeCalls++
+	s.writtenBytes += len(p)
+	return len(p), nil
+}
 func (s *finiteStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

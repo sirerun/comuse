@@ -18,9 +18,15 @@ const (
 	serverName       = "comuse"
 	serverVersion    = "0.1.0-dev"
 	maxArgumentBytes = 16 * 1024
-	maxFrameBytes    = 64 * 1024
-	maxWait          = 30 * time.Second
+	// Max inbound JSON-RPC frame: 16 KiB arguments plus initialize/list overhead.
+	maxFrameBytes = 64 * 1024
+	// Core permits at most 4 MiB of semantic JSON; MCP carries both text and
+	// structured content, so leave room for their enclosing JSON escaping.
+	maxOutboundFrameBytes = 16 * 1024 * 1024
+	maxWait               = 30 * time.Second
 )
+
+var errOutboundFrameTooLarge = errors.New("outbound MCP frame exceeds configured maximum")
 
 // NewServer constructs the read-only semantic MCP server for one host-owned
 // session. Approval and policy remain inside the trusted host session.
@@ -57,7 +63,7 @@ func Serve(ctx context.Context, session *comuse.Session, stream io.ReadWriteClos
 	closeOnce := &streamClose{stream: stream}
 	transport := &mcp.IOTransport{
 		Reader:        &ownedStreamReader{stream: stream, close: closeOnce},
-		Writer:        ownedStreamWriter{stream: stream},
+		Writer:        &boundedFrameWriter{stream: stream, close: closeOnce, maxBytes: maxOutboundFrameBytes},
 		MaxLineLength: maxFrameBytes,
 	}
 	return NewServer(session).Run(ctx, transport)
@@ -82,10 +88,28 @@ type ownedStreamReader struct {
 func (r *ownedStreamReader) Read(p []byte) (int, error) { return r.stream.Read(p) }
 func (r *ownedStreamReader) Close() error               { return r.close.closeStream() }
 
-type ownedStreamWriter struct{ stream io.ReadWriteCloser }
+type boundedFrameWriter struct {
+	stream   io.Writer
+	close    *streamClose
+	maxBytes int
+}
 
-func (w ownedStreamWriter) Write(p []byte) (int, error) { return w.stream.Write(p) }
-func (ownedStreamWriter) Close() error                  { return nil }
+func (w *boundedFrameWriter) Write(p []byte) (int, error) {
+	if len(p) > w.maxBytes {
+		_ = w.close.closeStream()
+		return 0, errOutboundFrameTooLarge
+	}
+	n, err := w.stream.Write(p)
+	if err != nil || n != len(p) {
+		_ = w.close.closeStream()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+	}
+	return n, err
+}
+
+func (w *boundedFrameWriter) Close() error { return w.close.closeStream() }
 
 type toolHandler func(context.Context, *comuse.Session, json.RawMessage) (any, error)
 
