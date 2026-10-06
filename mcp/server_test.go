@@ -151,7 +151,9 @@ func TestSDKToolsDelegateToSharedSession(t *testing.T) {
 	})
 	callTool(t, clientSession, "computer_wait", map[string]any{"window_ref": "window-1", "timeout_ms": 10})
 
-	wantCalls := []string{"doctor", "windows", "observe", "read_element", "observe"}
+	// ReadElement refreshes the observation before resolving the element ref,
+	// so the shared backend sees a second observe immediately before the read.
+	wantCalls := []string{"doctor", "windows", "observe", "observe", "read_element", "observe"}
 	if got := backend.callSnapshot(); !equalStrings(got, wantCalls) {
 		t.Fatalf("backend calls = %v, want %v", got, wantCalls)
 	}
