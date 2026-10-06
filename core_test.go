@@ -288,8 +288,14 @@ func TestUnknownActionRetainsInflightWhenJournalWritesFail(t *testing.T) {
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := session.Close(context.Background()); err != nil {
-		t.Fatalf("retry Close after restoring journal permissions: %v", err)
+	if err := session.Close(context.Background()); ErrorCode(err) != "unknown_outcome" {
+		t.Fatalf("retry Close after restoring journal permissions = %v, want unknown_outcome", err)
+	}
+	if err := session.Close(context.Background()); ErrorCode(err) != "unknown_outcome" {
+		t.Fatalf("repeated Close = %v, want retained terminal unknown_outcome", err)
+	}
+	if _, err := session.Windows(context.Background()); ErrorCode(err) != "session_closed" {
+		t.Fatalf("operation after terminal Close = %v, want session_closed", err)
 	}
 	lease, err := writer.Acquire(context.Background(), root)
 	if err != nil {

@@ -32,14 +32,15 @@ type Config struct {
 
 // Session owns a backend and its bounded semantic snapshot and action state.
 type Session struct {
-	mu            sync.Mutex
-	actionMu      sync.Mutex
-	closeMu       sync.Mutex
-	changed       chan struct{}
-	active        int
-	closing       bool
-	closed        bool
-	backendClosed bool
+	mu                sync.Mutex
+	actionMu          sync.Mutex
+	closeMu           sync.Mutex
+	changed           chan struct{}
+	active            int
+	closing           bool
+	closed            bool
+	backendClosed     bool
+	terminalCloseCode string
 
 	backend          Backend
 	scope            Scope
@@ -138,7 +139,11 @@ func (s *Session) Close(ctx context.Context) error {
 	defer s.closeMu.Unlock()
 	s.mu.Lock()
 	if s.closed {
+		terminalCloseCode := s.terminalCloseCode
 		s.mu.Unlock()
+		if terminalCloseCode != "" {
+			return coreError(terminalCloseCode)
+		}
 		return nil
 	}
 	s.closing = true
@@ -167,11 +172,18 @@ func (s *Session) Close(ctx context.Context) error {
 	leases := append([]*writer.Lease(nil), s.quarantined...)
 	s.mu.Unlock()
 	var closeErr error
+	terminalCloseCode := ""
 	remaining := make([]*writer.Lease, 0, len(leases))
 	for _, lease := range leases {
 		if err := lease.Close(ctx); err != nil {
 			if errors.Is(err, writer.ErrLeaseRetained) {
 				remaining = append(remaining, lease)
+				closeErr = errors.Join(closeErr, err)
+				continue
+			}
+			if errors.Is(err, writer.ErrDirty) {
+				terminalCloseCode = "unknown_outcome"
+				continue
 			}
 			closeErr = errors.Join(closeErr, err)
 		}
@@ -181,10 +193,14 @@ func (s *Session) Close(ctx context.Context) error {
 	if closeErr == nil && len(remaining) == 0 {
 		s.closed = true
 		s.backend = nil
+		s.terminalCloseCode = terminalCloseCode
 	}
 	s.mu.Unlock()
 	if closeErr != nil {
 		return stableContextError(ctx, closeErr)
+	}
+	if terminalCloseCode != "" {
+		return coreError(terminalCloseCode)
 	}
 	return nil
 }
