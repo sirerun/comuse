@@ -73,3 +73,7 @@ Independent review found and assigned durable close, retry ownership and report 
 The complete Go, disabled-cgo, race and vet passes, Swift bridge (14) and fixture core (3) test passes, and four native command builds are recorded at `66f1765c6cd92799de1f6a3e3054a9aaf4aeaeca`. Configured lint with both finding caps disabled passes with zero issues at `b610d747e974861a62a437a96b822e196e64d3c3` after an equivalent test predicate change. Independent source reviews are clear; authored hunks remain excluded from each cross-review.
 
 The actual dedicated fixture command opened the native bridge on its process-main owner and emitted only bounded outcome fields: held, exit 75, fixture_window_unavailable. It did not satisfy GUI acceptance. Its current supported lifetime is the dedicated process; a long-lived embedding needs a retained-owner retry API. The fixed fixture facade issues only a predeclared trusted-host scenario approval, while the generic factory/executor has no automatic approval path. Native input remains disabled and ordinary CLI/MCP remain readonly.
+
+## 2026-10-06 — Bounded feasibility source landed
+
+PR #7 rebase merged at da0071a8929500d159a5f356fc7140d8020963dc; exact tree matches independently reviewed e97. Full recorded local checks provide source evidence while hosted Actions cannot start due to billing. Owner requests coding-first delivery; added source-specific E1 stages and expanded E2 source tasks. Existing GUI, mutation and minimum-OS gates stay open.
