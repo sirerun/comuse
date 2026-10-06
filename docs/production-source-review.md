@@ -16,3 +16,9 @@ This record covers the E2 source integration after main `776e953eed2293db337b694
 Native source preflight findings are being resolved before its first integrated commit. Full Go, Swift, race, lint and independent integrated review remain pending. The first targeted check passed internal/writer, internal/backend and internal/jsonwire, but failed core and MCP; it is not an integrated passing receipt. Shared lease was released after the check. Hosted CI remains unavailable due to account billing.
 
 A second targeted adapter check at 4825336 passed backend/jsonwire but failed MCP no-argument decoding and its expected sanitized error code. Fix e2c4ed7 accepts omitted/null arguments only for no-argument tools and aligns the test with the shared backend_unavailable error. Both remain pending rerun. No failing check has been reported as passing.
+
+## Native review after first source integration
+
+Independent immutable-source review of 09191d2 identified permission-loss cache invalidation, UTF-8 byte bounds, cancellation marker retention, and whole-envelope frame bounds as blockers. The native author is fixing these with source regressions. Process-main validation before library activation and resolved-image identity were also raised by the coordinator. Source image pinning was restored in 5564a04; later identity/activation fixes remain pending.
+
+Local checks: Go at 5564a04 passed native lifecycle/wire, writer, backend, JSON and spike packages, but failed core dirty-close retry, MCP read/cancellation fixtures and CLI test compilation. Core dirty-close fix 874a2a1 and CLI test fix 8f3bcf8 are integrated. MCP typed result schemas, framing cap and fixture/cancellation fixes are integrated in 971bd5f. All need rerun. Swift compile diagnostics have been returned to the native author; no Swift test pass or native acceptance is claimed.
