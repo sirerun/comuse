@@ -16,7 +16,7 @@ import (
 
 const (
 	serverName       = "comuse"
-	serverVersion    = "1.0.0"
+	serverVersion    = "0.1.0-dev"
 	maxArgumentBytes = 16 * 1024
 	maxWait          = 30 * time.Second
 )
@@ -204,6 +204,53 @@ func tool(name, description string, properties map[string]any, required []string
 			"required":             required,
 			"additionalProperties": false,
 		},
+		OutputSchema: sourceEnvelopeSchema(),
+	}
+}
+
+// sourceEnvelopeSchema describes the current shared source-phase envelope.
+// It intentionally does not claim the RFC release envelope's usage/duration
+// or compact-state fields, which remain unqualified.
+func sourceEnvelopeSchema() map[string]any {
+	versionSchema := map[string]any{"type": "integer", "enum": []int{comuse.SchemaVersion}}
+	errorSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"code":    map[string]any{"type": "string", "enum": errorCodeVocabulary()},
+			"message": map[string]any{"type": "string"},
+		},
+		"required":             []string{"code", "message"},
+		"additionalProperties": false,
+	}
+	resultSchema := map[string]any{}
+	success := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"schema_version": versionSchema,
+			"status":         map[string]any{"type": "string", "enum": []string{"ok"}},
+			"result":         resultSchema,
+		},
+		"required":             []string{"schema_version", "status", "result"},
+		"additionalProperties": false,
+	}
+	failure := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"schema_version": versionSchema,
+			"status":         map[string]any{"type": "string", "enum": []string{"error"}},
+			"error":          errorSchema,
+		},
+		"required":             []string{"schema_version", "status", "error"},
+		"additionalProperties": false,
+	}
+	return map[string]any{"type": "object", "oneOf": []any{success, failure}}
+}
+
+func errorCodeVocabulary() []string {
+	return []string{
+		"invalid_request", "policy_refused", "approval_required", "element_stale", "state_expired",
+		"permission_denied", "unsupported", "backend_unavailable", "desktop_busy", "rate_limited",
+		"budget_exceeded", "cancelled", "session_closed", "unknown_outcome", "internal_error",
 	}
 }
 

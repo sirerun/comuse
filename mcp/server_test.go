@@ -81,6 +81,25 @@ func TestSDKListsOnlyReadOnlySemanticTools(t *testing.T) {
 		if !ok || schema["additionalProperties"] != false {
 			t.Errorf("tool %s schema must reject additional properties: %#v", item.Name, item.InputSchema)
 		}
+		output, ok := item.OutputSchema.(map[string]any)
+		if !ok {
+			t.Errorf("tool %s must advertise an output schema: %#v", item.Name, item.OutputSchema)
+			continue
+		}
+		if output["type"] != "object" {
+			t.Errorf("tool %s output schema type = %#v, want object", item.Name, output["type"])
+		}
+		branches, ok := output["oneOf"].([]any)
+		if !ok || len(branches) != 2 {
+			t.Errorf("tool %s output schema must describe success and error envelopes: %#v", item.Name, output)
+			continue
+		}
+		for _, branch := range branches {
+			object, ok := branch.(map[string]any)
+			if !ok || object["additionalProperties"] != false {
+				t.Errorf("tool %s output branch must be a closed object: %#v", item.Name, branch)
+			}
+		}
 	}
 	for name := range want {
 		t.Errorf("missing tool %q", name)
