@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreFoundation
 import CryptoKit
