@@ -139,17 +139,16 @@ extension NativeRuntime {
             }
             if visitedCount >= budget.maxNodes { complete = false; reason = "node_limit"; break }
             visitedCount += 1
-            if depth >= budget.maxDepth {
-                let childResult = children(of: element, limit: 1)
-                if childResult.truncated || !childResult.values.isEmpty || childResult.failed {
-                    complete = false
-                    if reason.isEmpty { reason = "depth_limit" }
-                }
-                continue
-            }
             var pid: pid_t = 0
             guard AXUIElementGetPid(element, &pid) == .success, pid == freshProcess.pid else {
                 complete = false; reason = "scope_changed"; break
+            }
+            if !depthIsIncluded(depth, maximum: budget.maxDepth) {
+                // This frontier item is omitted by the depth bound even when
+                // it is a leaf. Do not inspect descendants past this point.
+                complete = false
+                if reason.isEmpty { reason = "depth_limit" }
+                continue
             }
             let role = stringAttribute(element, kAXRoleAttribute) ?? ""
             let subrole = stringAttribute(element, kAXSubroleAttribute)
@@ -335,6 +334,10 @@ private func allowedValue(_ element: AXUIElement, classification: String, role: 
 func boundedChildCount(_ total: Int, limit: Int) -> (count: Int, truncated: Bool) {
     let bounded = max(0, min(total, limit))
     return (bounded, total > bounded)
+}
+
+func depthIsIncluded(_ depth: Int, maximum: Int) -> Bool {
+    depth < maximum
 }
 
 private func children(of element: AXUIElement, limit: Int) -> (values: [AXUIElement], failed: Bool, truncated: Bool) {
