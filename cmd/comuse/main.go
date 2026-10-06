@@ -171,16 +171,24 @@ func loadConfig(path string) (hostConfig, error) {
 	}
 	return c, nil
 }
-func emitError(out io.Writer, code string) int {
+func safeCode(code string) string {
 	switch code {
 	case "invalid_request", "policy_refused", "approval_required", "element_stale", "state_expired", "permission_denied", "unsupported", "backend_unavailable", "desktop_busy", "rate_limited", "budget_exceeded", "cancelled", "session_closed", "unknown_outcome":
+		return code
 	default:
-		code = "internal_error"
+		return "internal_error"
 	}
-	if json.NewEncoder(out).Encode(comuse.Envelope{SchemaVersion: comuse.SchemaVersion, Status: "error", Error: &comuse.Error{Code: code, Message: code}}) != nil {
+}
+func errorEnvelope(code string) comuse.Envelope {
+	code = safeCode(code)
+	return comuse.Envelope{SchemaVersion: comuse.SchemaVersion, Status: "error", Error: &comuse.Error{Code: code, Message: code}}
+}
+func emitError(out io.Writer, code string) int {
+	env := errorEnvelope(code)
+	if json.NewEncoder(out).Encode(env) != nil {
 		return 1
 	}
-	return exitFor(code)
+	return exitFor(env.Error.Code)
 }
 func exitFor(code string) int {
 	switch code {
@@ -197,13 +205,30 @@ func exitFor(code string) int {
 
 // serveCLI keeps references and baselines within one host session.
 func serveCLI(ctx context.Context, s *comuse.Session, in io.Reader, out io.Writer) error {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			if c, ok := in.(io.Closer); ok {
+				_ = c.Close()
+			}
+		}
+	}()
 	r := bufio.NewReaderSize(in, 32769)
 	for {
+		if ctx.Err() != nil {
+			return &comuse.Error{Code: "cancelled", Message: "cancelled"}
+		}
 		line, e := r.ReadSlice('\n')
 		if errors.Is(e, bufio.ErrBufferFull) {
 			return &comuse.Error{Code: "budget_exceeded", Message: "request exceeds limit"}
 		}
 		if len(line) == 0 && errors.Is(e, io.EOF) {
+			if ctx.Err() != nil {
+				return &comuse.Error{Code: "cancelled", Message: "cancelled"}
+			}
 			return nil
 		}
 		if e != nil && !errors.Is(e, io.EOF) {
@@ -211,7 +236,9 @@ func serveCLI(ctx context.Context, s *comuse.Session, in io.Reader, out io.Write
 		}
 		var q request
 		if jsonwire.Decode(bytes.NewReader(line), 32768, &q) != nil {
-			emitError(out, "invalid_request")
+			if json.NewEncoder(out).Encode(errorEnvelope("invalid_request")) != nil {
+				return &comuse.Error{Code: "internal_error", Message: "response unavailable"}
+			}
 			if errors.Is(e, io.EOF) {
 				return nil
 			}
@@ -220,8 +247,7 @@ func serveCLI(ctx context.Context, s *comuse.Session, in io.Reader, out io.Write
 		result, callErr := invoke(ctx, s, q)
 		env := comuse.Envelope{SchemaVersion: comuse.SchemaVersion, Status: "ok", Result: result}
 		if callErr != nil {
-			code := comuse.ErrorCode(callErr)
-			env = comuse.Envelope{SchemaVersion: comuse.SchemaVersion, Status: "error", Error: &comuse.Error{Code: code, Message: code}}
+			env = errorEnvelope(comuse.ErrorCode(callErr))
 		}
 		if json.NewEncoder(out).Encode(env) != nil {
 			return &comuse.Error{Code: "internal_error", Message: "response unavailable"}
