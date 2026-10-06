@@ -26,6 +26,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	defer done()
 	s.actionMu.Lock()
 	defer s.actionMu.Unlock()
+	epoch := s.currentPermissionEpoch()
 
 	prior, ok := s.findSnapshot(action.WindowRef, action.StateID)
 	if !ok {
@@ -44,13 +45,15 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	// the exact private native state ID is always passed to the backend.
 	nativeSnapshot, callErr := s.backend.Observe(callCtx, action.WindowRef, s.budget)
 	if callErr != nil {
-		return notApplied(action.ID), stableContextError(callCtx, callErr)
+		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
 	}
 	current, binding, normalizeErr := s.normalizeObservation(action.WindowRef, nativeSnapshot)
 	if normalizeErr != nil {
 		return notApplied(action.ID), normalizeErr
 	}
-	s.rememberSnapshot(binding)
+	if !s.rememberSnapshotAtEpoch(binding, epoch) {
+		return notApplied(action.ID), coreError("permission_denied")
+	}
 	if current.StateID != action.StateID {
 		return notApplied(action.ID), coreError("element_stale")
 	}
@@ -62,7 +65,11 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	}
 	doctor, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
-		return notApplied(action.ID), stableContextError(callCtx, callErr)
+		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
+	}
+	s.invalidateIfPermissionDenied(doctor)
+	if !doctor.Capabilities.Accessibility {
+		return notApplied(action.ID), coreError("permission_denied")
 	}
 	if !doctor.Capabilities.Input || !doctor.Capabilities.QualifiedInput {
 		return notApplied(action.ID), coreError("policy_refused")
@@ -155,6 +162,16 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		}
 		return result, coreError(approvalCode)
 	}
+	if s.currentPermissionEpoch() != epoch {
+		result := notApplied(action.ID)
+		if err := finishLease(lease, ticket, action, result, "permission_denied"); err != nil {
+			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
+		}
+		if err := s.closeActionLease(lease); err != nil {
+			return result, coreError("backend_unavailable")
+		}
+		return result, coreError("permission_denied")
+	}
 	if err := callCtx.Err(); err != nil {
 		result := notApplied(action.ID)
 		callError := stableCallError(err)
@@ -175,6 +192,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	nativeAction.StateID = binding.nativeState
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
 	if executeErr != nil {
+		s.invalidateOnBackendError(executeErr)
 		unknown := unknownResult(action.ID)
 		return s.persistUnknownBeforeTerminal(lease, ticket, action, unknown, "native_outcome_unknown")
 	}

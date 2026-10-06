@@ -1,6 +1,7 @@
 package comuse
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,26 +18,33 @@ import (
 )
 
 type fakeBackend struct {
-	mu          sync.Mutex
-	process     ProcessIdentity
-	nativeState string
-	elements    []Element
-	input       bool
-	qualified   bool
-	partial     bool
-	readState   string
-	executed    []Action
-	closeErrors []error
-	executeHook func() (ActionResult, error)
-	doctorCalls int
-	closeCalls  int
+	mu                  sync.Mutex
+	process             ProcessIdentity
+	nativeState         string
+	elements            []Element
+	input               bool
+	qualified           bool
+	partial             bool
+	readState           string
+	executed            []Action
+	closeErrors         []error
+	executeHook         func() (ActionResult, error)
+	observeErr          error
+	accessibilityDenied bool
+	doctorCalls         int
+	closeCalls          int
 }
 
 func (f *fakeBackend) Doctor(context.Context) (DoctorReport, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.doctorCalls++
-	return DoctorReport{Capabilities: Capabilities{Accessibility: true, Input: f.input, QualifiedInput: f.qualified}, Permissions: map[string]string{"accessibility": "granted", "private-native-key": "secret"}}, nil
+	accessibility := !f.accessibilityDenied
+	permission := "granted"
+	if !accessibility {
+		permission = "denied"
+	}
+	return DoctorReport{Capabilities: Capabilities{Accessibility: accessibility, Input: f.input, QualifiedInput: f.qualified}, Permissions: map[string]string{"accessibility": permission, "private-native-key": "secret"}}, nil
 }
 
 func (f *fakeBackend) Windows(context.Context, Budget) ([]Window, error) {
@@ -48,6 +56,9 @@ func (f *fakeBackend) Windows(context.Context, Budget) ([]Window, error) {
 func (f *fakeBackend) Observe(_ context.Context, windowRef string, _ Budget) (Observation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.observeErr != nil {
+		return Observation{}, f.observeErr
+	}
 	coverage := Coverage{Complete: !f.partial}
 	if f.partial {
 		coverage.Reason = "private native coverage detail"
@@ -164,6 +175,36 @@ func TestNewSessionReadonlyCopiesScopeAndCallsNoBackend(t *testing.T) {
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCloseClearsOwnedWriterSecrets(t *testing.T) {
+	process := testProcess()
+	backend := &fakeBackend{process: process, nativeState: "native-a"}
+	callerKey := []byte(strings.Repeat("k", 32))
+	session, err := NewSession(Config{
+		Backend:          backend,
+		Scope:            Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)},
+		Budget:           testBudget(),
+		ApprovalProvider: fixedApproval{},
+		WriterDirectory:  filepath.Join(t.TempDir(), "state"),
+		WriterKey:        callerKey,
+		MaxActions:       2,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if len(session.writerKey) != len(callerKey) || &session.writerKey[0] == &callerKey[0] {
+		t.Fatal("NewSession did not take an owned writer-key copy")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if len(session.writerKey) != 0 || session.approvalProvider != nil || session.writerDirectory != "" || session.sessionID != "" {
+		t.Fatal("terminal Close retained writer secret or provider references")
+	}
+	if !bytes.Equal(callerKey, []byte(strings.Repeat("k", 32))) {
+		t.Fatal("terminal Close modified caller-owned key")
 	}
 }
 
@@ -384,17 +425,105 @@ func TestApprovalCancellationAndDeadlineCodesReplayExactly(t *testing.T) {
 
 func TestCloseRetainsOwnershipAfterBackendCloseFailure(t *testing.T) {
 	secret := "native private close detail"
-	backend := &fakeBackend{process: testProcess(), closeErrors: []error{errors.New(secret)}}
+	backend := &fakeBackend{process: testProcess(), nativeState: "native-a", elements: testElements(), closeErrors: []error{errors.New(secret)}}
 	session := newTestSession(t, backend, false)
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Observe(context.Background(), "window-1"); err != nil {
+		t.Fatal(err)
+	}
 	err := session.Close(context.Background())
 	if ErrorCode(err) != "backend_unavailable" || strings.Contains(err.Error(), secret) {
 		t.Fatalf("unsafe close error: %v", err)
+	}
+	if len(session.windows) != 0 || len(session.snapshots) != 0 || session.snapshotBytes != 0 {
+		t.Fatal("Session.Close retained semantic or native snapshot bindings after active calls drained")
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("retry Close: %v", err)
 	}
 	if backend.closeCalls != 2 {
 		t.Fatalf("Close calls=%d want retry", backend.closeCalls)
+	}
+}
+
+func TestPermissionLossPurgesBindingsAndRequiresFreshSnapshot(t *testing.T) {
+	backend := &fakeBackend{process: testProcess(), nativeState: "native-before", elements: testElements()}
+	session := newTestSession(t, backend, false)
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prior, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backend.mu.Lock()
+	backend.observeErr = coreError("permission_denied")
+	backend.mu.Unlock()
+	if _, err := session.Observe(context.Background(), "window-1"); ErrorCode(err) != "permission_denied" {
+		t.Fatalf("permission-denied observation error = %v", err)
+	}
+	if len(session.windows) != 0 || len(session.snapshots) != 0 || session.snapshotBytes != 0 {
+		t.Fatal("backend permission error did not purge cached bindings")
+	}
+
+	backend.mu.Lock()
+	backend.observeErr = nil
+	backend.accessibilityDenied = true
+	backend.mu.Unlock()
+	status, err := session.Doctor(context.Background())
+	if err != nil || status.Capabilities.Accessibility {
+		t.Fatalf("denied Doctor status = (%+v, %v)", status, err)
+	}
+	if len(session.windows) != 0 || len(session.snapshots) != 0 {
+		t.Fatal("denied Doctor status did not purge cached bindings")
+	}
+
+	backend.mu.Lock()
+	backend.accessibilityDenied = false
+	backend.nativeState = "native-after"
+	backend.mu.Unlock()
+	if _, err := session.Doctor(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.ReadElement(context.Background(), "window-1", "normal-1", prior.StateID); ErrorCode(err) != "state_expired" {
+		t.Fatalf("pre-revocation state after permission regain = %v, want state_expired", err)
+	}
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := session.Observe(context.Background(), "window-1")
+	if err != nil || fresh.StateID == "" {
+		t.Fatalf("fresh observation after permission regain = (%+v, %v)", fresh, err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScopeExpiryPurgesSemanticBindings(t *testing.T) {
+	backend := &fakeBackend{process: testProcess(), nativeState: "native-a", elements: testElements()}
+	session := newTestSession(t, backend, false)
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.mu.Lock()
+	session.scope.ExpiresAt = time.Now().Add(-time.Second)
+	session.mu.Unlock()
+	if _, err := session.ReadElement(context.Background(), "window-1", "normal-1", state.StateID); ErrorCode(err) != "state_expired" {
+		t.Fatalf("expired scope error = %v", err)
+	}
+	if len(session.windows) != 0 || len(session.snapshots) != 0 || session.snapshotBytes != 0 {
+		t.Fatal("expired scope retained semantic/native bindings")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
