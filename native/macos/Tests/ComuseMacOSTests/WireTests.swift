@@ -79,4 +79,11 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(boundedChildCount(4, limit: 0).count, 0)
         XCTAssertTrue(boundedChildCount(4, limit: 0).truncated)
     }
+
+    func testDepthBoundMarksEvenAnOmittedLeafAsOutOfCoverage() {
+        let maxDepth = 3
+        let leafAtFrontierDepth = maxDepth
+        XCTAssertFalse(depthIsIncluded(leafAtFrontierDepth, maximum: maxDepth))
+        XCTAssertTrue(depthIsIncluded(maxDepth - 1, maximum: maxDepth))
+    }
 }
