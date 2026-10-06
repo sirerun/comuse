@@ -30,6 +30,8 @@ type fakeBackend struct {
 	closeErrors         []error
 	executeHook         func() (ActionResult, error)
 	observeErr          error
+	observeStarted      chan struct{}
+	observeRelease      chan struct{}
 	accessibilityDenied bool
 	doctorCalls         int
 	closeCalls          int
@@ -55,15 +57,27 @@ func (f *fakeBackend) Windows(context.Context, Budget) ([]Window, error) {
 
 func (f *fakeBackend) Observe(_ context.Context, windowRef string, _ Budget) (Observation, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.observeErr != nil {
-		return Observation{}, f.observeErr
+	observeErr := f.observeErr
+	nativeState := f.nativeState
+	elements := cloneElements(f.elements)
+	partial := f.partial
+	started, release := f.observeStarted, f.observeRelease
+	if release != nil {
+		f.observeStarted, f.observeRelease = nil, nil
 	}
-	coverage := Coverage{Complete: !f.partial}
-	if f.partial {
+	f.mu.Unlock()
+	if release != nil {
+		close(started)
+		<-release
+	}
+	if observeErr != nil {
+		return Observation{}, observeErr
+	}
+	coverage := Coverage{Complete: !partial}
+	if partial {
 		coverage.Reason = "private native coverage detail"
 	}
-	return Observation{WindowRef: windowRef, StateID: f.nativeState, ObservedAt: time.Now(), Elements: cloneElements(f.elements), Coverage: coverage}, nil
+	return Observation{WindowRef: windowRef, StateID: nativeState, ObservedAt: time.Now(), Elements: elements, Coverage: coverage}, nil
 }
 
 func (f *fakeBackend) ReadElement(_ context.Context, windowRef, elementRef, stateID string, _ Budget) (ElementContent, error) {
@@ -107,6 +121,21 @@ func cloneElements(elements []Element) []Element {
 }
 
 type fixedApproval struct{ err error }
+
+type blockingApproval struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (approval blockingApproval) Approve(ctx context.Context, request ApprovalRequest) (Approval, error) {
+	close(approval.started)
+	select {
+	case <-approval.release:
+		return fixedApproval{}.Approve(ctx, request)
+	case <-ctx.Done():
+		return Approval{}, ctx.Err()
+	}
+}
 
 func (approval fixedApproval) Approve(_ context.Context, request ApprovalRequest) (Approval, error) {
 	if approval.err != nil {
@@ -540,6 +569,140 @@ func TestPermissionLossPurgesBindingsAndRequiresFreshSnapshot(t *testing.T) {
 	fresh, err := session.Observe(context.Background(), "window-1")
 	if err != nil || fresh.StateID == "" {
 		t.Fatalf("fresh observation after permission regain = (%+v, %v)", fresh, err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDoDoesNotRestoreSnapshotAfterConcurrentPermissionLoss(t *testing.T) {
+	backend := &fakeBackend{process: testProcess(), nativeState: "native-before", elements: testElements(), input: true, qualified: true}
+	session := newTestSession(t, backend, true)
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	backend.mu.Lock()
+	backend.observeStarted, backend.observeRelease = started, release
+	backend.mu.Unlock()
+
+	type doResult struct {
+		result ActionResult
+		err    error
+	}
+	completed := make(chan doResult, 1)
+	go func() {
+		result, callErr := session.Do(context.Background(), Action{
+			ID: "observe-revocation", WindowRef: "window-1", ElementRef: "normal-1",
+			StateID: state.StateID, Kind: ActionPress,
+		})
+		completed <- doResult{result: result, err: callErr}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Do did not enter its fresh observation")
+	}
+	backend.mu.Lock()
+	backend.accessibilityDenied = true
+	backend.mu.Unlock()
+	if report, doctorErr := session.Doctor(context.Background()); doctorErr != nil || report.Capabilities.Accessibility {
+		t.Fatalf("denied Doctor = (%+v, %v)", report, doctorErr)
+	}
+	backend.mu.Lock()
+	backend.accessibilityDenied = false
+	backend.mu.Unlock()
+	if report, doctorErr := session.Doctor(context.Background()); doctorErr != nil || !report.Capabilities.Accessibility {
+		t.Fatalf("restored Doctor = (%+v, %v)", report, doctorErr)
+	}
+	close(release)
+	select {
+	case result := <-completed:
+		if ErrorCode(result.err) != "permission_denied" || result.result.Execution != ExecutionNotApplied {
+			t.Fatalf("Do after revocation during Observe = (%+v, %v), want permission_denied/not_applied", result.result, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Do did not finish after observation resumed")
+	}
+	if len(session.windows) != 0 || len(session.snapshots) != 0 || session.snapshotBytes != 0 {
+		t.Fatal("stale Do observation repopulated bindings after permission loss")
+	}
+	if len(backend.executed) != 0 {
+		t.Fatalf("Do dispatched after permission loss: %#v", backend.executed)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDoPersistsPermissionRevocationAcrossBlockedApproval(t *testing.T) {
+	backend := &fakeBackend{process: testProcess(), nativeState: "native-stable", elements: testElements(), input: true, qualified: true}
+	session := newTestSession(t, backend, true)
+	started, release := make(chan struct{}), make(chan struct{})
+	session.approvalProvider = blockingApproval{started: started, release: release}
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := Action{ID: "approval-revocation", WindowRef: "window-1", ElementRef: "normal-1", StateID: state.StateID, Kind: ActionPress}
+	type doResult struct {
+		result ActionResult
+		err    error
+	}
+	completed := make(chan doResult, 1)
+	go func() {
+		result, callErr := session.Do(context.Background(), action)
+		completed <- doResult{result: result, err: callErr}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Do did not enter blocked approval")
+	}
+	backend.mu.Lock()
+	backend.accessibilityDenied = true
+	backend.mu.Unlock()
+	if report, doctorErr := session.Doctor(context.Background()); doctorErr != nil || report.Capabilities.Accessibility {
+		t.Fatalf("denied Doctor = (%+v, %v)", report, doctorErr)
+	}
+	backend.mu.Lock()
+	backend.accessibilityDenied = false
+	backend.mu.Unlock()
+	if report, doctorErr := session.Doctor(context.Background()); doctorErr != nil || !report.Capabilities.Accessibility {
+		t.Fatalf("restored Doctor = (%+v, %v)", report, doctorErr)
+	}
+	close(release)
+	select {
+	case result := <-completed:
+		if ErrorCode(result.err) != "permission_denied" || result.result.Execution != ExecutionNotApplied {
+			t.Fatalf("Do after revocation during approval = (%+v, %v), want permission_denied/not_applied", result.result, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Do did not finish after approval resumed")
+	}
+	if len(backend.executed) != 0 {
+		t.Fatalf("Do dispatched after permission was revoked and restored: %#v", backend.executed)
+	}
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := session.Observe(context.Background(), "window-1")
+	if err != nil || refreshed.StateID != state.StateID {
+		t.Fatalf("fresh state for durable replay = (%+v, %v), want same canonical state %q", refreshed, err, state.StateID)
+	}
+	replayed, err := session.Do(context.Background(), action)
+	if ErrorCode(err) != "permission_denied" || replayed.Execution != ExecutionNotApplied {
+		t.Fatalf("same-ID replay = (%+v, %v), want persisted permission_denied/not_applied", replayed, err)
+	}
+	if len(backend.executed) != 0 {
+		t.Fatalf("replay dispatched native action: %#v", backend.executed)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)

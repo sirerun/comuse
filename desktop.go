@@ -71,6 +71,9 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	if !doctor.Capabilities.Accessibility {
 		return notApplied(action.ID), coreError("permission_denied")
 	}
+	if s.currentPermissionEpoch() != epoch {
+		return notApplied(action.ID), coreError("permission_denied")
+	}
 	if !doctor.Capabilities.Input || !doctor.Capabilities.QualifiedInput {
 		return notApplied(action.ID), coreError("policy_refused")
 	}
@@ -163,14 +166,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		return result, coreError(approvalCode)
 	}
 	if s.currentPermissionEpoch() != epoch {
-		result := notApplied(action.ID)
-		if err := finishLease(lease, ticket, action, result, "permission_denied"); err != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
-		}
-		if err := s.closeActionLease(lease); err != nil {
-			return result, coreError("backend_unavailable")
-		}
-		return result, coreError("permission_denied")
+		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
 	if err := callCtx.Err(); err != nil {
 		result := notApplied(action.ID)
@@ -190,6 +186,9 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 
 	nativeAction := action
 	nativeAction.StateID = binding.nativeState
+	if s.currentPermissionEpoch() != epoch {
+		return s.finishPermissionDeniedAction(lease, ticket, action)
+	}
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
 	if executeErr != nil {
 		s.invalidateOnBackendError(executeErr)
@@ -211,6 +210,17 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		return unknownResult(action.ID), coreError("backend_unavailable")
 	}
 	return result, nil
+}
+
+func (s *Session) finishPermissionDeniedAction(lease *writer.Lease, ticket *writer.Ticket, action Action) (ActionResult, error) {
+	result := notApplied(action.ID)
+	if err := finishLease(lease, ticket, action, result, "permission_denied"); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
+	}
+	if err := s.closeActionLease(lease); err != nil {
+		return result, coreError("backend_unavailable")
+	}
+	return result, coreError("permission_denied")
 }
 
 func (s *Session) closeActionLease(lease *writer.Lease) error {
