@@ -46,7 +46,7 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	defer done()
 	report, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
-		return DoctorReport{}, stableContextError(callCtx, callErr)
+		return DoctorReport{}, s.stableBackendError(callCtx, callErr)
 	}
 	// Reasons and permission values are implementation diagnostics. Retain only
 	// the closed capability booleans and known, stable permission statuses.
@@ -61,6 +61,7 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 		}
 	}
 	report.Permissions = permissions
+	s.invalidateIfPermissionDenied(report)
 	return report, nil
 }
 
@@ -74,9 +75,10 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 		return nil, err
 	}
 	defer done()
+	epoch := s.currentPermissionEpoch()
 	windows, callErr := s.backend.Windows(callCtx, s.budget)
 	if callErr != nil {
-		return nil, stableContextError(callCtx, callErr)
+		return nil, s.stableBackendError(callCtx, callErr)
 	}
 	if len(windows) > s.budget.MaxNodes {
 		return nil, coreError("budget_exceeded")
@@ -97,6 +99,10 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 		return nil, coreError("budget_exceeded")
 	}
 	s.mu.Lock()
+	if s.permissionEpoch != epoch {
+		s.mu.Unlock()
+		return nil, coreError("permission_denied")
+	}
 	s.windows = make(map[string]Window, len(filtered))
 	for _, window := range filtered {
 		s.windows[window.Ref] = window
@@ -115,6 +121,7 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 		return Observation{}, err
 	}
 	defer done()
+	epoch := s.currentPermissionEpoch()
 	s.mu.Lock()
 	_, exists := s.windows[windowRef]
 	s.mu.Unlock()
@@ -123,7 +130,7 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	}
 	native, callErr := s.backend.Observe(callCtx, windowRef, s.budget)
 	if callErr != nil {
-		return Observation{}, stableContextError(callCtx, callErr)
+		return Observation{}, s.stableBackendError(callCtx, callErr)
 	}
 	projection, binding, normalizeErr := s.normalizeObservation(windowRef, native)
 	if normalizeErr != nil {
@@ -132,7 +139,9 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	if exceedsJSONBudget(projection, s.budget.MaxBytes) {
 		return Observation{}, coreError("budget_exceeded")
 	}
-	s.rememberSnapshot(binding)
+	if !s.rememberSnapshotAtEpoch(binding, epoch) {
+		return Observation{}, coreError("permission_denied")
+	}
 	return cloneObservation(projection), nil
 }
 
@@ -146,6 +155,7 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 		return ElementContent{}, err
 	}
 	defer done()
+	epoch := s.currentPermissionEpoch()
 	prior, ok := s.findSnapshot(windowRef, stateID)
 	if !ok {
 		return ElementContent{}, coreError("state_expired")
@@ -158,19 +168,24 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	}
 	current, callErr := s.backend.Observe(callCtx, windowRef, s.budget)
 	if callErr != nil {
-		return ElementContent{}, stableContextError(callCtx, callErr)
+		return ElementContent{}, s.stableBackendError(callCtx, callErr)
 	}
 	projection, binding, normalizeErr := s.normalizeObservation(windowRef, current)
 	if normalizeErr != nil {
 		return ElementContent{}, normalizeErr
 	}
-	s.rememberSnapshot(binding)
+	if !s.rememberSnapshotAtEpoch(binding, epoch) {
+		return ElementContent{}, coreError("permission_denied")
+	}
 	if projection.StateID != stateID {
 		return ElementContent{}, coreError("element_stale")
 	}
 	content, callErr := s.backend.ReadElement(callCtx, windowRef, elementRef, binding.nativeState, s.budget)
 	if callErr != nil {
-		return ElementContent{}, stableContextError(callCtx, callErr)
+		return ElementContent{}, s.stableBackendError(callCtx, callErr)
+	}
+	if s.currentPermissionEpoch() != epoch {
+		return ElementContent{}, coreError("permission_denied")
 	}
 	if content.WindowRef != windowRef || content.ElementRef != elementRef || content.StateID != binding.nativeState || !validText(content.Text, s.budget.MaxBytes) {
 		return ElementContent{}, coreError("backend_unavailable")
@@ -259,9 +274,12 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 	return public, snapshotBinding{public: public, nativeState: native.StateID, canonical: canonical, storedAt: now, storageSize: storageSize}, nil
 }
 
-func (s *Session) rememberSnapshot(binding snapshotBinding) {
+func (s *Session) rememberSnapshotAtEpoch(binding snapshotBinding, epoch uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.permissionEpoch != epoch {
+		return false
+	}
 	s.pruneSnapshotsLocked(s.now())
 	rows := s.snapshots[binding.public.WindowRef]
 	for i, row := range rows {
@@ -303,6 +321,7 @@ func (s *Session) rememberSnapshot(binding snapshotBinding) {
 			s.snapshots[oldWindow] = rows
 		}
 	}
+	return true
 }
 
 func (s *Session) findSnapshot(windowRef, stateID string) (snapshotBinding, bool) {

@@ -41,6 +41,7 @@ type Session struct {
 	closed            bool
 	backendClosed     bool
 	terminalCloseCode string
+	permissionEpoch   uint64
 
 	backend          Backend
 	scope            Scope
@@ -60,6 +61,43 @@ type Session struct {
 	actionsUsed   int
 	usedApprovals map[string]struct{}
 	quarantined   []*writer.Lease
+}
+
+func (s *Session) stableBackendError(ctx context.Context, err error) error {
+	s.invalidateOnBackendError(err)
+	return stableContextError(ctx, err)
+}
+
+func (s *Session) invalidateOnBackendError(err error) {
+	var backendErr *Error
+	if errors.As(err, &backendErr) && backendErr.Code == "permission_denied" {
+		s.invalidateSemanticState()
+	}
+}
+
+func (s *Session) invalidateIfPermissionDenied(report DoctorReport) {
+	if !report.Capabilities.Accessibility || report.Permissions["accessibility"] == "denied" {
+		s.invalidateSemanticState()
+	}
+}
+
+func (s *Session) invalidateSemanticState() {
+	s.mu.Lock()
+	s.purgeSemanticStateLocked()
+	s.mu.Unlock()
+}
+
+func (s *Session) purgeSemanticStateLocked() {
+	s.permissionEpoch++
+	s.windows = make(map[string]Window)
+	s.snapshots = make(map[string][]snapshotBinding)
+	s.snapshotBytes = 0
+}
+
+func (s *Session) currentPermissionEpoch() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.permissionEpoch
 }
 
 // NewSession validates and copies configuration without making backend calls.
@@ -113,6 +151,7 @@ func (s *Session) enter(ctx context.Context) (context.Context, context.CancelFun
 		return nil, nil, coreError("session_closed")
 	}
 	if !s.now().Before(s.scope.ExpiresAt) {
+		s.purgeSemanticStateLocked()
 		s.mu.Unlock()
 		return nil, nil, coreError("state_expired")
 	}
@@ -157,6 +196,9 @@ func (s *Session) Close(ctx context.Context) error {
 		}
 		s.mu.Lock()
 	}
+	// Once active calls have drained, invalidate all public and private native
+	// references even if backend close must be retried.
+	s.purgeSemanticStateLocked()
 	backend := s.backend
 	backendClosed := s.backendClosed
 	s.mu.Unlock()
@@ -194,6 +236,13 @@ func (s *Session) Close(ctx context.Context) error {
 		s.closed = true
 		s.backend = nil
 		s.terminalCloseCode = terminalCloseCode
+		for i := range s.writerKey {
+			s.writerKey[i] = 0
+		}
+		s.writerKey = nil
+		s.writerDirectory = ""
+		s.approvalProvider = nil
+		s.sessionID = ""
 	}
 	s.mu.Unlock()
 	if closeErr != nil {
