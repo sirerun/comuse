@@ -1,9 +1,9 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** E1 seam landed through PR #6 using explicitly authorized local checks; runtime, AX and fixture source is assembled; guarded input, policy, writer/replay and semantic source has passed local Go/race/vet and Swift checks, with three Luna lanes providing independent partition review. GitHub CI remains billing-blocked, and native/runtime acceptance gates remain open.
+**Status:** Bounded feasibility source landed through PR #7 with exact reviewed tree and local checks. PR #8 makes E2 production source preparation executable. Three Luna lanes implement core safety, native backend and MCP; coordinator implements shared contracts and CLI. Shared load currently holds heavy checks; native/runtime acceptance remains open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
-**Updated:** 2026-10-05 UTC.
+**Updated:** 2026-10-06 UTC.
 **Change summary:** New split plan and use-case catalog; executable feasibility horizon, ten worker lanes, coordinator-owned seams, and gated later Phase 1/Phase 2/qualification outlines.
 
 ## 1. Context
@@ -56,7 +56,7 @@ Workers own named distinct files/directories and never modify common seam files 
 ## 5. Checkable Work Breakdown
 
 ### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (13/57)
-### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (1/17)
+### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (2/17)
 ### E3 -- Phase 1 semantic diffs and recovery -> docs/plans/E3-phase1-diffs-recovery.md (0/1)
 ### E4 -- Phase 2 authorized application opening -> docs/plans/E4-phase2-app-opening.md (0/1)
 ### E5 -- Phase 2 explicit image fallback -> docs/plans/E5-phase2-image-fallback.md (0/1)
