@@ -284,7 +284,7 @@ final class NativeRuntime {
         }
     }
 
-    private func checkPermission() throws {
+    func checkPermission() throws {
         guard AXIsProcessTrusted() else { throw ProbeFailure(code: "permission_denied") }
     }
 
