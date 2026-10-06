@@ -13,7 +13,7 @@ This record covers the E2 source integration after main `776e953eed2293db337b694
 | CLI refusal exit codes conflict with RFC | Coordinator inspection against RFC CLI exit contract | CLI | Mapping corrected in 1df3b15; refusal/busy tests; independent review | Fixed, verification pending |
 | MCP structured output lacks output schema | Coordinator independent source review of d8103ea | MCP | Publish schema matching current bounded envelope; tools/list and schema regressions; independent review | Fixed in 4825336, verification pending |
 
-Native source preflight findings are being resolved before its first integrated commit. Full Go, Swift, race, lint and independent integrated review remain pending. The first targeted check passed internal/writer, internal/backend and internal/jsonwire, but failed core and MCP; it is not an integrated passing receipt. Shared lease was released after the check. Hosted CI remains unavailable due to account billing.
+Native source has since been integrated; the historical check failures below remain evidence, not current passing receipts. Full Go, Swift, race, lint and independent integrated review remain pending. The first targeted check passed internal/writer, internal/backend and internal/jsonwire, but failed core and MCP; it is not an integrated passing receipt. Shared lease was released after the check. Hosted CI remains unavailable due to account billing.
 
 A second targeted adapter check at 4825336 passed backend/jsonwire but failed MCP no-argument decoding and its expected sanitized error code. Fix e2c4ed7 accepts omitted/null arguments only for no-argument tools and aligns the test with the shared backend_unavailable error. Both remain pending rerun. No failing check has been reported as passing.
 
@@ -22,3 +22,15 @@ A second targeted adapter check at 4825336 passed backend/jsonwire but failed MC
 Independent immutable-source review of 09191d2 identified permission-loss cache invalidation, UTF-8 byte bounds, cancellation marker retention, and whole-envelope frame bounds as blockers. The native author is fixing these with source regressions. Process-main validation before library activation and resolved-image identity were also raised by the coordinator. Source image pinning was restored in 5564a04; later identity/activation fixes remain pending.
 
 Local checks: Go at 5564a04 passed native lifecycle/wire, writer, backend, JSON and spike packages, but failed core dirty-close retry, MCP read/cancellation fixtures and CLI test compilation. Core dirty-close fix 874a2a1 and CLI test fix 8f3bcf8 are integrated. MCP typed result schemas, framing cap and fixture/cancellation fixes are integrated in 971bd5f. All need rerun. Swift compile diagnostics have been returned to the native author; no Swift test pass or native acceptance is claimed.
+
+## Current source review and pending checks
+
+At immutable `a1a7b5283465bd53326928acaf58c0fba9d7eb9e`, independent nonauthor reviews found no new foundation blocker in core permission epochs, durable replay, explicit reads of normal disabled controls, CLI fixture identity, strict decoding, native bounds/lifecycle, or MCP framing/schema paths. Review partitions excluded each reviewer's own changes. These are source reviews, not execution receipts.
+
+Permission/cache fixes `2e6cbaf`, `67531e3` and `a1a7b52` prevent stale snapshots and action dispatch after an observed permission revocation, including revocation followed by restoration during blocked observation or approval. Explicit text reads remain separate from write eligibility. Native traversal and window enumeration are bounded before materialization (`5ac6b4f`, `97a3c5d`, `27e2a53`).
+
+The last full Go check at `2e6cbaf` passed native/backend/JSON/writer/spike packages but failed a journal fixture after Close scrubbing, a CLI read fixture, and an MCP refresh expectation. Corresponding source fixes are integrated; no passing rerun is claimed. Production Swift compilation has no passing receipt yet. Current-head Go/Swift attempts have been held by the shared one-minute load threshold of 10, before any build begins.
+
+Controlled native smoke source (`5cd9d14`, `fb3db7f`) has independent lifecycle review. It is opt-in, pins the initial thread, validates the controlled fixture identity, tests Doctor callbacks and cancellation/drain/close, rejects a copied second image, and reopens the original image. Uncertain cleanup retains the library. No smoke execution or fixture launch is claimed here.
+
+Phase 1 source parity remains incomplete: full response metadata/accounting, action inventory/adapters, semantic scroll, disabled native actions, canonical desktop exclusion and durable cross-session minute quotas remain planned. Current per-journal locking and per-session action caps do not qualify desktop-wide mutation authority. Default input routes remain closed; runtime fixture acceptance remains a separate gate.
