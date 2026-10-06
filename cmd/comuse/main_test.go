@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -138,13 +139,24 @@ func (failedWriter) Write([]byte) (int, error) { return 0, errors.New("private t
 func TestPersistentCLICancelClosesRead(t *testing.T) {
 	s := newCLISession(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	r, w := io.Pipe()
+	raw, w := io.Pipe()
+	r := &observedReader{ReadCloser: raw, started: make(chan struct{}), closed: make(chan struct{})}
 	defer w.Close()
 	done := make(chan error, 1)
 	go func() { done <- serveCLI(ctx, s, r, io.Discard) }()
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("reader did not start")
+	}
 	cancel()
 	select {
 	case e := <-done:
+		select {
+		case <-r.closed:
+		default:
+			t.Fatal("reader not closed")
+		}
 		if comuse.ErrorCode(e) != "cancelled" {
 			t.Fatalf("cancel: %v", e)
 		}
@@ -164,4 +176,21 @@ func TestPersistentCLIErrorSanitization(t *testing.T) {
 	if env.Error.Code != "internal_error" {
 		t.Fatal("unknown code not normalized")
 	}
+}
+
+type observedReader struct {
+	io.ReadCloser
+	started   chan struct{}
+	closed    chan struct{}
+	readOnce  sync.Once
+	closeOnce sync.Once
+}
+
+func (r *observedReader) Read(p []byte) (int, error) {
+	r.readOnce.Do(func() { close(r.started) })
+	return r.ReadCloser.Read(p)
+}
+func (r *observedReader) Close() error {
+	r.closeOnce.Do(func() { close(r.closed) })
+	return r.ReadCloser.Close()
 }
