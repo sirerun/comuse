@@ -449,34 +449,51 @@ public func comuseRuntimeOpen(_ configBytes: UnsafePointer<UInt8>?, _ configLeng
     guard pthread_main_np() != 0, let configBytes, configLength > 0, configLength <= comuseMaximumRequestBytes,
           let runtimeOut, let resolvedScopeOut, let resolvedScopeLengthOut,
           resolvedScopeCapacity > 0 else { return 1 }
-    return MainActor.assumeIsolated {
-        do {
-            let decoder = JSONDecoder()
-            let config = try decoder.decode(NativeConfig.self, from: Data(bytes: configBytes, count: configLength))
-            guard config.schemaVersion == 1, !config.scope.processes.isEmpty,
-                  config.scope.processes.count <= comuseMaximumScopeProcesses,
-                  config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000),
-                  Set(config.scope.processes.map(\.pid)).count == config.scope.processes.count else { return 1 }
+    do {
+        let decoder = JSONDecoder()
+        let config = try decoder.decode(NativeConfig.self, from: Data(bytes: configBytes, count: configLength))
+        guard config.schemaVersion == 1, !config.scope.processes.isEmpty,
+              config.scope.processes.count <= comuseMaximumScopeProcesses,
+              config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000),
+              Set(config.scope.processes.map(\.pid)).count == config.scope.processes.count else { return 1 }
+
+        // Keep C pointers out of the actor-isolated closure. The C caller owns
+        // their storage for this synchronous ABI call; only Sendable values
+        // cross the MainActor boundary.
+        let opened: Result<(runtimeID: UInt64, scopeData: Data), Int32> = MainActor.assumeIsolated {
             var resolved: [NativeProcess] = []
             for process in config.scope.processes {
                 guard process.pid > 0, !process.bundleID.isEmpty, process.bundleID.utf8.count <= 255,
                       let app = NSRunningApplication(processIdentifier: process.pid), !app.isTerminated,
                       app.bundleIdentifier == process.bundleID,
                       let current = processIdentity(pid: process.pid, bundleID: process.bundleID),
-                      process.launchID.isEmpty || process.launchID == current.launchID else { return 1 }
+                      process.launchID.isEmpty || process.launchID == current.launchID else { return .failure(1) }
                 resolved.append(current)
             }
             let boundScope = NativeScope(processes: resolved, expiresAtUnixMilli: config.scope.expiresAtUnixMilli)
-            let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
-            let data = try encoder.encode(boundScope)
-            guard data.count <= resolvedScopeCapacity else { return 2 }
+            let scopeData: Data
+            do {
+                let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
+                scopeData = try encoder.encode(boundScope)
+            } catch {
+                return .failure(1)
+            }
+            guard scopeData.count <= resolvedScopeCapacity else { return .failure(2) }
             let runtimeID = allocateID()
             nativeRuntimes[runtimeID] = NativeRuntime(id: runtimeID, config: config, processes: resolved)
-            data.copyBytes(to: resolvedScopeOut, count: data.count)
-            resolvedScopeLengthOut.pointee = data.count
-            runtimeOut.pointee = runtimeID
+            return .success((runtimeID, scopeData))
+        }
+        switch opened {
+        case .failure(let status):
+            return status
+        case .success(let result):
+            result.scopeData.copyBytes(to: resolvedScopeOut, count: result.scopeData.count)
+            resolvedScopeLengthOut.pointee = result.scopeData.count
+            runtimeOut.pointee = result.runtimeID
             return 0
-        } catch { return 1 }
+        }
+    } catch {
+        return 1
     }
 }
 
