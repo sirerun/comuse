@@ -38,6 +38,7 @@ type Budget struct {
 	Timeout  time.Duration `json:"timeout"`
 }
 type Config struct {
+	AllowValues bool   `json:"allow_values"`
 	Scope       Scope  `json:"scope"`
 	LibraryPath string `json:"library_path"`
 }
