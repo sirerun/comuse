@@ -222,6 +222,9 @@ func serveCLI(ctx context.Context, s *comuse.Session, in io.Reader, out io.Write
 			return &comuse.Error{Code: "cancelled", Message: "cancelled"}
 		}
 		line, e := r.ReadSlice('\n')
+		if ctx.Err() != nil {
+			return &comuse.Error{Code: "cancelled", Message: "cancelled"}
+		}
 		if errors.Is(e, bufio.ErrBufferFull) {
 			return &comuse.Error{Code: "budget_exceeded", Message: "request exceeds limit"}
 		}
