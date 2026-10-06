@@ -29,6 +29,10 @@ const (
 
 var nativeSmokeErr error
 
+// Failed native close means callbacks or the Swift runtime may still retain
+// pointers into the loader. Keep the Go wrapper alive until this process exits.
+var retainedSmokeLibraries []*nativeLibrary
+
 func init() {
 	// TestMain runs this opt-in probe directly on the initial test-binary
 	// goroutine. Pin that goroutine before testing starts; ordinary Test funcs
@@ -74,32 +78,36 @@ func runControlledNativeSmoke() error {
 	runtimeID, resolvedScope, err := openSmokeRuntime(lib, pid)
 	if err != nil {
 		if runtimeID != 0 {
-			_ = closeSmokeRuntime(lib, runtimeID)
+			if closeErr := closeAndFreeSmokeRuntime(lib, runtimeID); closeErr != nil {
+				return smokeError("native runtime open cleanup", backend.ErrorCode(closeErr))
+			}
+		} else {
+			lib.close()
 		}
-		lib.close()
 		return smokeError("native runtime open", backend.ErrorCode(err))
 	}
 	if err := validateSmokeResolvedScope(resolvedScope, pid); err != nil {
-		_ = closeSmokeRuntime(lib, runtimeID)
-		lib.close()
+		if closeErr := closeAndFreeSmokeRuntime(lib, runtimeID); closeErr != nil {
+			return smokeError("native runtime validation cleanup", backend.ErrorCode(closeErr))
+		}
 		return err
 	}
 
 	if err := smokeDoctorCallback(lib, runtimeID, false); err != nil {
-		_ = closeSmokeRuntime(lib, runtimeID)
-		lib.close()
+		if closeErr := closeAndFreeSmokeRuntime(lib, runtimeID); closeErr != nil {
+			return smokeError("native Doctor cleanup", backend.ErrorCode(closeErr))
+		}
 		return err
 	}
 	if err := smokeDoctorCallback(lib, runtimeID, true); err != nil {
-		_ = closeSmokeRuntime(lib, runtimeID)
-		lib.close()
+		if closeErr := closeAndFreeSmokeRuntime(lib, runtimeID); closeErr != nil {
+			return smokeError("cancelled Doctor cleanup", backend.ErrorCode(closeErr))
+		}
 		return err
 	}
-	if err := closeSmokeRuntime(lib, runtimeID); err != nil {
-		lib.close()
+	if err := closeAndFreeSmokeRuntime(lib, runtimeID); err != nil {
 		return smokeError("native runtime close/drain", backend.ErrorCode(err))
 	}
-	lib.close()
 
 	copyPath, cleanup, err := copyNativeImage(libraryPath, tempRoot)
 	if err != nil {
@@ -153,8 +161,8 @@ func nativeSmokeInputs() (string, int32, string, error) {
 		return "", 0, "", errors.New("COMUSE_NATIVE_SMOKE_TMP must be a task temp directory on the external build volume")
 	}
 	resolvedTemp, err := filepath.EvalSymlinks(tempRoot)
-	if err != nil {
-		return "", 0, "", errors.New("native smoke temp directory is unavailable")
+	if err != nil || !underBuildOffload(resolvedTemp) {
+		return "", 0, "", errors.New("native smoke temp directory must resolve to the external build volume")
 	}
 	info, err := os.Stat(resolvedTemp)
 	if err != nil || !info.IsDir() {
@@ -194,7 +202,7 @@ func validateSmokeResolvedScope(data []byte, pid int32) error {
 	return nil
 }
 
-func smokeDoctorCallback(lib *nativeLibrary, runtimeID uint64, cancelBeforePump bool) error {
+func smokeDoctorCallback(lib *nativeLibrary, runtimeID uint64, cancelBeforePump bool) (resultErr error) {
 	requestID := "native-smoke-doctor"
 	if cancelBeforePump {
 		requestID = "native-smoke-cancel"
@@ -227,9 +235,13 @@ func smokeDoctorCallback(lib *nativeLibrary, runtimeID uint64, cancelBeforePump 
 					return
 				}
 			default:
-				_ = lib.pump(runtimeID, ownerPumpTimeoutMS)
+				if pumpErr := lib.pump(runtimeID, ownerPumpTimeoutMS); pumpErr != nil {
+					resultErr = errors.New("native callback drain failed after request error")
+					return
+				}
 			}
 		}
+		resultErr = errors.New("native callback did not drain before the smoke deadline")
 	}()
 	if cancelBeforePump {
 		if err := lib.cancel(runtimeID, nativeID); err != nil {
@@ -287,6 +299,15 @@ func closeSmokeRuntime(lib *nativeLibrary, runtimeID uint64) error {
 		}
 	}
 	return backendError("unknown_outcome")
+}
+
+func closeAndFreeSmokeRuntime(lib *nativeLibrary, runtimeID uint64) error {
+	if err := closeSmokeRuntime(lib, runtimeID); err != nil {
+		retainedSmokeLibraries = append(retainedSmokeLibraries, lib)
+		return err
+	}
+	lib.close()
+	return nil
 }
 
 func smokeRunDoctor(libraryPath string, pid int32) error {
