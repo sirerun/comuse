@@ -9,17 +9,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/sirerun/comuse"
-	"github.com/sirerun/comuse/internal/backend"
-	"github.com/sirerun/comuse/internal/backend/darwin"
-	"github.com/sirerun/comuse/internal/jsonwire"
-	comusemcp "github.com/sirerun/comuse/mcp"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/sirerun/comuse"
+	"github.com/sirerun/comuse/internal/backend"
+	"github.com/sirerun/comuse/internal/backend/darwin"
+	"github.com/sirerun/comuse/internal/jsonwire"
+	comusemcp "github.com/sirerun/comuse/mcp"
 )
 
 // The runtime initializes main on the initial thread when init locks it.
@@ -56,8 +57,9 @@ func (s stdio) Close() error {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	os.Exit(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer) int {
 	fs := flag.NewFlagSet("comuse", flag.ContinueOnError)
