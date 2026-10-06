@@ -103,7 +103,7 @@ func (*cliBackend) Windows(context.Context, comuse.Budget) ([]comuse.Window, err
 }
 func (*cliBackend) Observe(context.Context, string, comuse.Budget) (comuse.Observation, error) {
 	v := "fixture"
-	return comuse.Observation{WindowRef: "w1", StateID: "native-1", ObservedAt: time.Now(), Elements: []comuse.Element{{Ref: "e1", Role: "AXTextField", Classification: "safe", Value: &v}}, Coverage: comuse.Coverage{Complete: true}}, nil
+	return comuse.Observation{WindowRef: "w1", StateID: "native-1", ObservedAt: time.Now(), Elements: []comuse.Element{{Ref: "e1", Role: "AXTextField", Classification: "normal", Value: &v}}, Coverage: comuse.Coverage{Complete: true}}, nil
 }
 func (*cliBackend) ReadElement(context.Context, string, string, string, comuse.Budget) (comuse.ElementContent, error) {
 	return comuse.ElementContent{WindowRef: "w1", ElementRef: "e1", StateID: "native-1", Text: "fixture"}, nil
