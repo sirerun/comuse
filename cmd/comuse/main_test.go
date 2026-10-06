@@ -194,3 +194,29 @@ func (r *observedReader) Close() error {
 	r.closeOnce.Do(func() { close(r.closed) })
 	return r.ReadCloser.Close()
 }
+
+func boolPointer(value bool) *bool { return &value }
+
+func TestInvokeExplicitReadUsesSessionState(t *testing.T) {
+	s, err := comuse.NewSession(comuse.Config{Backend: &cliBackend{}, Scope: cliScope(), Budget: backend.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 8192, Timeout: time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close(context.Background()) }()
+	if _, err = invoke(context.Background(), s, request{Command: "windows"}); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := invoke(context.Background(), s, request{Command: "a11y", WindowRef: "w1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := observed.(comuse.Observation)
+	content, err := invoke(context.Background(), s, request{Command: "read-element", WindowRef: "w1", ElementRef: "e1", StateID: state.StateID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := content.(comuse.ElementContent)
+	if read.Text != "explicit text" || read.StateID != state.StateID || read.StateID == "native-s" {
+		t.Fatalf("unexpected read: %#v", read)
+	}
+}
