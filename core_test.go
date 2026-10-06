@@ -301,6 +301,36 @@ func TestUnknownActionRetainsInflightWhenJournalWritesFail(t *testing.T) {
 	}
 }
 
+func TestUnknownPersistenceQuarantinesBeforeTerminalFinish(t *testing.T) {
+	t.Run("dirty write fails and suppresses finish", func(t *testing.T) {
+		var calls []string
+		writeErr := errors.New("synthetic dirty write failure")
+		err := persistUnknownOutcome(func() error {
+			calls = append(calls, "quarantine")
+			return writeErr
+		}, func() error {
+			calls = append(calls, "finish")
+			return nil
+		})
+		if !errors.Is(err, writeErr) || !equalStrings(calls, []string{"quarantine"}) {
+			t.Fatalf("ordering = calls %v, error %v; want failed quarantine and no finish", calls, err)
+		}
+	})
+	t.Run("successful dirty write precedes finish", func(t *testing.T) {
+		var calls []string
+		err := persistUnknownOutcome(func() error {
+			calls = append(calls, "quarantine")
+			return nil
+		}, func() error {
+			calls = append(calls, "finish")
+			return nil
+		})
+		if err != nil || !equalStrings(calls, []string{"quarantine", "finish"}) {
+			t.Fatalf("ordering = calls %v, error %v; want quarantine then finish", calls, err)
+		}
+	})
+}
+
 func TestApprovalCancellationAndDeadlineCodesReplayExactly(t *testing.T) {
 	tests := []struct {
 		name string
