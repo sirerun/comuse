@@ -22,7 +22,7 @@ func TestDecodeArgsStrictObject(t *testing.T) {
 		raw  json.RawMessage
 		want bool
 	}{
-		{name: "omitted empty arguments", want: true},
+		{name: "omitted arguments rejected for required tool"},
 		{name: "empty object", raw: json.RawMessage(`{}`), want: true},
 		{name: "valid window", raw: json.RawMessage(`{"window_ref":"w1"}`), want: true},
 		{name: "unknown field", raw: json.RawMessage(`{"window_ref":"w1","pid":10}`)},
@@ -39,6 +39,21 @@ func TestDecodeArgsStrictObject(t *testing.T) {
 				t.Fatalf("decodeArgs() success = %v, want %v (err %v)", got, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestDecodeEmptyArgsAcceptsAbsentOrEmptyObject(t *testing.T) {
+	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("{}"), json.RawMessage("  null  ")} {
+		var args emptyArgs
+		if err := decodeArgs(raw, &args); err != nil {
+			t.Errorf("decodeArgs(%q, emptyArgs) = %v, want nil", raw, err)
+		}
+	}
+	for _, raw := range []json.RawMessage{json.RawMessage("[]"), json.RawMessage(`{"unexpected":true}`)} {
+		var args emptyArgs
+		if err := decodeArgs(raw, &args); err == nil {
+			t.Errorf("decodeArgs(%q, emptyArgs) unexpectedly succeeded", raw)
+		}
 	}
 }
 
@@ -270,7 +285,7 @@ func TestErrorsAreSanitizedAtMCPBoundary(t *testing.T) {
 	if bytes.Contains([]byte(text), []byte("private-native-payload-secret")) {
 		t.Fatal("backend error payload leaked through MCP")
 	}
-	if !bytes.Contains([]byte(text), []byte(`"code":"internal_error"`)) {
+	if !bytes.Contains([]byte(text), []byte(`"code":"backend_unavailable"`)) {
 		t.Fatalf("sanitized result lacks stable code: %s", text)
 	}
 }

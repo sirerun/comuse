@@ -173,11 +173,15 @@ func errorCode(ctx context.Context, err error) string {
 }
 
 func decodeArgs(raw json.RawMessage, dst any) error {
+	_, empty := dst.(*emptyArgs)
 	if len(raw) == 0 {
-		if _, ok := dst.(*emptyArgs); ok {
+		if empty {
 			return nil
 		}
 		return errInvalidRequest
+	}
+	if empty && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
 	}
 	if len(raw) > maxArgumentBytes {
 		return errInvalidRequest
