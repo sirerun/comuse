@@ -34,6 +34,9 @@ func nativeAXDeadlineIPC<T>(_ element: AXUIElement, deadline: TimeInterval,
         throw ProbeFailure(code: "budget_exceeded")
     }
     guard configure(element, timeout) == .success else { throw ProbeFailure(code: "backend_unavailable") }
+    guard nativeAXMessagingTimeout(remaining: deadline - now()) != nil else {
+        throw ProbeFailure(code: "budget_exceeded")
+    }
     return try operation()
 }
 
