@@ -15,7 +15,7 @@ func (s *Session) ProcessRef(identity ProcessIdentity) (string, error) {
 		return "", err
 	}
 	defer done()
-	if !scopeContains(s.scope, identity) {
+	if !s.now().Before(s.scope.ExpiresAt) || !scopeContains(s.scope, identity) {
 		return "", coreError("policy_refused")
 	}
 	s.mu.Lock()
