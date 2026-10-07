@@ -377,7 +377,7 @@ func allowedActions(actions []string) []string {
 	result := make([]string, 0, len(actions))
 	for _, action := range actions {
 		switch action {
-		case ActionPress, ActionReplace, ActionInsert:
+		case ActionPress, ActionReplace, ActionInsert, ActionScroll, ActionPick, ActionFocus:
 			if _, exists := seen[action]; exists {
 				continue
 			}
