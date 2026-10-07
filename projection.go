@@ -178,6 +178,8 @@ func buildFullObservation(session *Session, observation Observation) (semantic.S
 		scopeID = observation.ScopeID
 	}
 	nodes := make(map[string]semantic.Node, len(observation.Elements))
+	var focusedRef *string
+	focusedCount := 0
 	type orderedRef struct {
 		ref   string
 		order int
@@ -185,6 +187,10 @@ func buildFullObservation(session *Session, observation Observation) (semantic.S
 	children := make(map[string][]orderedRef)
 	roots := make([]orderedRef, 0)
 	for _, element := range observation.Elements {
+		if element.Classification == "normal" && element.Focused != nil && *element.Focused {
+			focusedCount++
+			focusedRef = cloneString(&element.Ref)
+		}
 		var parent *string
 		if element.ParentRef != "" {
 			parent = cloneString(&element.ParentRef)
@@ -224,9 +230,12 @@ func buildFullObservation(session *Session, observation Observation) (semantic.S
 			coverage.Limitations = append(coverage.Limitations, observation.Coverage.Reason)
 		}
 	}
+	if focusedCount != 1 {
+		focusedRef = nil
+	}
 	candidate := semantic.Snapshot{Metadata: semantic.Metadata{SchemaVersion: semantic.SchemaVersion, ScopeID: scopeID,
 		WindowRef: observation.WindowRef, ObservedAt: observation.ObservedAt, ActionSequence: actionSequence,
-		Coverage: coverage, Context: semantic.Context{RootRefs: rootRefs}}, Kind: "snapshot", Nodes: nodes, Historical: false}
+		Coverage: coverage, Context: semantic.Context{RootRefs: rootRefs, FocusedElementRef: focusedRef}}, Kind: "snapshot", Nodes: nodes, Historical: false}
 	normalized, err := semantic.Normalize(candidate)
 	if err != nil {
 		return semantic.Snapshot{}, coreError("internal_error")
