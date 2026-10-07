@@ -141,7 +141,7 @@ func (approval fixedApproval) Approve(_ context.Context, request ApprovalRequest
 	if approval.err != nil {
 		return Approval{}, approval.err
 	}
-	return Approval{SessionID: request.SessionID, Action: request.Action, Process: request.Process, ObservedAt: request.ObservedAt, PolicyVersion: request.PolicyVersion, ExpiresAt: request.ExpiresAt}, nil
+	return Approval(request), nil
 }
 
 func testProcess() ProcessIdentity {
