@@ -1,6 +1,7 @@
 package semantic
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,13 @@ import (
 var (
 	errHistoryInvalid = errors.New("invalid_request")
 	errHistoryExpired = errors.New("state_expired")
+	// ErrScopeRotationRequired prevents expired hashes from acquiring new metadata.
+	// The trusted owner must rotate ScopeID before purging and republishing.
+	ErrScopeRotationRequired = errors.New("state_expired")
 )
+
+const maxHistoryTombstones = 128
+const historyTombstoneCharge uint64 = 64
 
 type historyKey struct {
 	scope  string
@@ -32,19 +39,21 @@ type historyEntry struct {
 // History retains immutable, normalized snapshots for one session. The owner
 // must purge it whenever session authority or policy is invalidated.
 type History struct {
-	mu        sync.Mutex
-	normalize func(Snapshot) (Snapshot, error)
-	entries   map[historyKey]historyEntry
-	bytes     uint64
-	lastNow   time.Time
-	order     uint64
+	mu               sync.Mutex
+	normalize        func(Snapshot) (Snapshot, error)
+	entries          map[historyKey]historyEntry
+	retired          map[[32]byte]struct{}
+	rotationRequired bool
+	bytes            uint64
+	lastNow          time.Time
+	order            uint64
 }
 
 func NewHistory(normalize func(Snapshot) (Snapshot, error)) (*History, error) {
 	if normalize == nil {
 		return nil, errHistoryInvalid
 	}
-	return &History{normalize: normalize, entries: make(map[historyKey]historyEntry)}, nil
+	return &History{normalize: normalize, entries: make(map[historyKey]historyEntry), retired: make(map[[32]byte]struct{})}, nil
 }
 
 // Publish normalizes and validates a fresh snapshot before atomically admitting
@@ -76,7 +85,15 @@ func (h *History) Publish(snapshot Snapshot, now time.Time) (Snapshot, error) {
 		// remains fresh and independent from the stored defensive copy.
 		return CloneSnapshot(current), nil
 	}
-	h.evictFor(charge)
+	if h.rotationRequired {
+		return Snapshot{}, ErrScopeRotationRequired
+	}
+	if _, retired := h.retired[historyKeyDigest(key)]; retired {
+		return Snapshot{}, ErrScopeRotationRequired
+	}
+	if !h.evictFor(charge) {
+		return Snapshot{}, ErrScopeRotationRequired
+	}
 	h.order++
 	h.entries[key] = historyEntry{snapshot: CloneSnapshot(current), admitted: now, bytes: charge, order: h.order}
 	h.bytes += charge
@@ -106,7 +123,8 @@ func (h *History) Lookup(scopeID, windowRef, stateID string, now time.Time) (Sna
 }
 
 // Purge invalidates every retained state. Coordinator-owned authority changes
-// must call this method; this type does not infer revocation itself.
+// must rotate the trusted scope generation before calling this method;
+// this type does not infer revocation itself or permit reuse of an old scope.
 func (h *History) Purge() {
 	if h == nil {
 		return
@@ -114,6 +132,8 @@ func (h *History) Purge() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	clear(h.entries)
+	clear(h.retired)
+	h.rotationRequired = false
 	h.bytes = 0
 }
 
@@ -154,11 +174,12 @@ func (h *History) expire(now time.Time) {
 		if !now.Before(entry.admitted.Add(StateTTL)) {
 			delete(h.entries, key)
 			h.bytes -= entry.bytes
+			h.retire(key)
 		}
 	}
 }
 
-func (h *History) evictFor(incoming uint64) {
+func (h *History) evictFor(incoming uint64) bool {
 	for len(h.entries) >= MaxGenerations || h.bytes > uint64(MaxStateBytes)-incoming {
 		var oldestKey historyKey
 		var oldest historyEntry
@@ -169,11 +190,33 @@ func (h *History) evictFor(incoming uint64) {
 			}
 		}
 		if first {
-			return
+			return false
 		}
 		delete(h.entries, oldestKey)
 		h.bytes -= oldest.bytes
+		h.retire(oldestKey)
+		if h.rotationRequired {
+			return false
+		}
 	}
+	return true
+}
+
+func historyKeyDigest(key historyKey) [32]byte {
+	return sha256.Sum256([]byte(key.scope + "\x00" + key.window + "\x00" + key.state))
+}
+
+func (h *History) retire(key historyKey) {
+	digest := historyKeyDigest(key)
+	if _, ok := h.retired[digest]; ok {
+		return
+	}
+	if len(h.retired) >= maxHistoryTombstones || h.bytes > uint64(MaxStateBytes)-historyTombstoneCharge {
+		h.rotationRequired = true
+		return
+	}
+	h.retired[digest] = struct{}{}
+	h.bytes += historyTombstoneCharge
 }
 
 func validateHistorySnapshot(s Snapshot) error {
