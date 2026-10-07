@@ -34,3 +34,23 @@ The last full Go check at `2e6cbaf` passed native/backend/JSON/writer/spike pack
 Controlled native smoke source (`5cd9d14`, `fb3db7f`) has independent lifecycle review. It is opt-in, pins the initial thread, validates the controlled fixture identity, tests Doctor callbacks and cancellation/drain/close, rejects a copied second image, and reopens the original image. Uncertain cleanup retains the library. No smoke execution or fixture launch is claimed here.
 
 Phase 1 source parity remains incomplete: full response metadata/accounting, action inventory/adapters, semantic scroll, disabled native actions, canonical desktop exclusion and durable cross-session minute quotas remain planned. Current per-journal locking and per-session action caps do not qualify desktop-wide mutation authority. Default input routes remain closed; runtime fixture acceptance remains a separate gate.
+
+## 2026-10-07 source convergence update
+
+The historical pending checks and planned source gaps above describe their recorded revisions. Foundation PR #9 landed98b5b81 after independent exact-head review and passing local Go/Swift/race/lint and landed checks. Frozen continuation contract PR #10 landed2a481a8 after independent schema review and exact-tree verification.
+
+Current unmerged parity source includes shared canonical envelopes/accounting, strict17-operation requests, official SDK and CLI routes, semantic scroll and complete wait/raw inventory, protected canonical desktop exclusion/durable minute quota/replay/recovery, pure diff/history and common inspected-context DTO. These remain source candidates, not full Phase1 delivery or GUI qualification.
+
+Portable independent review of153ec59 requested changes for PP-R1-F01: revoked Accessibility could appear as an empty successful window enumeration and falsely satisfy window_closed. Regression failed atc25ba07 and correction6e473e4 requires fresh permission/context evidence. Exact6e473e4 passes full Linux Go race, vet, lint, cgo-disabled checks and35 actual-envelope vectors against the normative schema. Semantic reconstruction fuzz passes325674 executions in16seconds. Actual Apple default synthetic fixtures20 and qualification fixtures21 pass; macOS14 arm64 release target compilation passes. Darwin CLI/backend/seam checks also pass under the shared lease. These are local source receipts, not hosted CI or native GUI/input acceptance.
+
+Native display/focus producer and private generation guards are in a separate author lane. Affected common context/permission independent review is queued; full integrated final review, guarded merge and landed checks remain required. Public stored/auto/since integration is intentionally gated until E2 lands. Literal default production input stays disabled, and no signing or release is claimed.
+
+## Native remediation convergence and current independent review
+
+Draft PR #11 publishes source candidate36ba79e from landed contract2a481a8. Common Go context review CP-R3 independently approves frozen63e38bb and resolves all four CP-R1 findings, independently reproducing six prior red regressions and preserving PP-R1-F01. Common source remains unchanged in the native remediation wave.
+
+Native review NP-R1 requested five source fixes: actual focused control identity, fresh coordinate hit proof, AX process/launch identity before disclosure, unknown title handling and strict closed ABI JSON. Author796e464 and coordinator corrections address these plus stable inspected US keyboard layout/modifier order, explicit per-kind zero/empty fields and CF runtime type guards before AXValue geometry/selection access. Production native input remains literalfalse. The actual Apple compiler/test failures and fixes are recorded in the E2 plan; no failing receipt is discarded or described as passing.
+
+Exact tested source d9d7e1a passes Apple default33 and qualification34 synthetic fixtures, arm64 macOS14 target release compilation, Darwin CLI/backend/seam tests and full Mac Go race. Host is macOS26.6.2, so the target compile does not prove minimumOS runtime behavior. Original Go1.27.1 full Linux race/vet/lint0/cgo0 and39 actual-envelope schema vectors pass. Plan-only commits preserve identical tested native/Go/contracts source.
+
+Native rereview T2.79 is queued at frozen36ba79e. It is not yet approved. Full candidate T2.26/27, guarded merge and landed checks remain open. Public E3 observation modes remain gated on E2 landing; Phase2 and qualification source planning follow their explicit predecessor gates. No native events, GUI/input acceptance, hosted CI pass, signing, release publication or deployment is claimed.
