@@ -8,6 +8,10 @@ import Foundation
 
 enum NativeReferenceKind: Equatable { case window, element }
 
+func nativeElementIdentityIsCurrent(actualPID: Int32, expected: NativeProcess, current: NativeProcess) -> Bool {
+    actualPID > 0 && actualPID == expected.pid && current == expected
+}
+
 struct NativeReference {
     let element: AXUIElement
     let process: NativeProcess
@@ -105,6 +109,14 @@ extension NativeRuntime {
     }
 
     func retain(_ element: AXUIElement, process: NativeProcess, windowRef: String?, kind: NativeReferenceKind) throws -> String {
+        let currentProcess = try matchingProcess(process)
+        var actualPID: pid_t = 0
+        guard currentProcess == process,
+              AXUIElementGetPid(element, &actualPID) == .success,
+              actualPID == process.pid,
+              nativeElementIdentityIsCurrent(actualPID: Int32(actualPID), expected: process, current: currentProcess) else {
+            throw ProbeFailure(code: "element_stale")
+        }
         let desktopGeneration = try refreshDesktopGeneration()
         var current = references
         let now = ProcessInfo.processInfo.systemUptime
@@ -400,11 +412,16 @@ private struct AXActionAccess: NativeActionAccess {
         }
         var focusedRole: String?
         var focusedClassification: String?
+        var focusedIdentity: String?
         if let focusedElement {
             let focusedWindowValue = copyAttribute(focusedElement, kAXWindowAttribute as String)
             if let focusedWindowValue, CFEqual(focusedWindowValue, window.element) {
                 focusedRole = stringAttribute(focusedElement, kAXRoleAttribute)
                 focusedClassification = classify(role: focusedRole ?? "", subrole: stringAttribute(focusedElement, kAXSubroleAttribute))
+                if focusedClassification == "normal" {
+                    focusedIdentity = try runtime.retain(focusedElement, process: process,
+                                                         windowRef: action.windowRef, kind: .element)
+                }
             }
         }
         let windowBounds = axBounds(window.element)
@@ -417,6 +434,7 @@ private struct AXActionAccess: NativeActionAccess {
                                   focused: boolAttribute(element.element, kAXFocusedAttribute) == true,
                                   windowFocused: focusedWindow.map { CFEqual($0, window.element) } ?? false,
                                   focusedRole: focusedRole, focusedClassification: focusedClassification,
+                                  focusedIdentity: focusedIdentity,
                                   windowBounds: windowBounds, elementBounds: axBounds(element.element),
                                   displayBounds: displayBounds, displayID: displayID)
     }
@@ -462,7 +480,7 @@ private struct AXActionAccess: NativeActionAccess {
                   CGPreflightPostEventAccess(), CGEventSource(stateID: .hidSystemState) != nil else { return false }
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
             guard checkedPoint(Double(center.x), Double(center.y), target: target) != nil else { return false }
-            try validateCoordinateHit(center, target: target, runtime: runtime)
+            try validateCoordinateHit(center, target: target, runtime: runtime, requiresExactTarget: true)
             return true
         case "focus_window":
             var names: CFArray?
@@ -568,23 +586,55 @@ private func axBounds(_ element: AXUIElement) -> CGRect? {
 }
 
 @MainActor
-private func validateCoordinateHit(_ point: CGPoint, target: NativeActionTarget, runtime: NativeRuntime) throws {
+private func validateCoordinateHit(_ point: CGPoint, target: NativeActionTarget, runtime: NativeRuntime,
+                                   requiresExactTarget: Bool = false) throws {
     guard let window = try? runtime.resolve(target.windowRef, kind: .window) else {
         throw ProbeFailure(code: "policy_refused")
     }
+    let process = try runtime.matchingProcess(target.process)
+    guard process == target.process else { throw ProbeFailure(code: "element_stale") }
     let app = AXUIElementCreateApplication(target.process.pid)
     guard let focusedWindow = copyAttribute(app, kAXFocusedWindowAttribute as String), CFEqual(focusedWindow, window.element) else {
         throw ProbeFailure(code: "state_expired")
+    }
+    let scopedTarget: AXUIElement
+    if target.elementRef.isEmpty {
+        scopedTarget = window.element
+    } else {
+        scopedTarget = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef).element
     }
     var hit: AXUIElement?
     guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success,
           let hit else { throw ProbeFailure(code: "policy_refused") }
     let role = stringAttribute(hit, kAXRoleAttribute) ?? ""
     let classification = classify(role: role, subrole: stringAttribute(hit, kAXSubroleAttribute))
+    var hitPID: pid_t = 0
+    let exactWindow = copyAttribute(hit, kAXWindowAttribute as String).map { CFEqual($0, window.element) } ?? false
+    let exactTarget = CFEqual(hit, scopedTarget)
+    let targetRelated = exactTarget || axDescendant(hit, of: scopedTarget, maximumParents: 32)
+    var targetPID: pid_t = 0
     guard classification == "normal",
-          let hitWindow = copyAttribute(hit, kAXWindowAttribute as String), CFEqual(hitWindow, window.element) else {
+          AXUIElementGetPid(hit, &hitPID) == .success,
+          AXUIElementGetPid(scopedTarget, &targetPID) == .success,
+          targetPID == target.process.pid,
+          validNativeCoordinateHit(NativeCoordinateHitFacts(
+            point: point, expectedPID: target.process.pid, actualPID: Int32(hitPID),
+            targetBounds: axBounds(scopedTarget), hitBounds: axBounds(hit), exactWindow: exactWindow,
+            targetRelated: targetRelated, exactTarget: exactTarget, requiresExactTarget: requiresExactTarget)) else {
         throw ProbeFailure(code: "policy_refused")
     }
+}
+
+private func axDescendant(_ candidate: AXUIElement, of ancestor: AXUIElement, maximumParents: Int) -> Bool {
+    var current = candidate
+    for _ in 0..<maximumParents {
+        guard let value = copyAttribute(current, kAXParentAttribute as String),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return false }
+        let parent = unsafeBitCast(value, to: AXUIElement.self)
+        if CFEqual(parent, ancestor) { return true }
+        current = parent
+    }
+    return false
 }
 
 private func classify(role: String, subrole: String?) -> String {

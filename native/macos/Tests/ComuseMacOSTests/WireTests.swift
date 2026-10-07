@@ -79,6 +79,56 @@ final class WireTests: XCTestCase {
         }
     }
 
+    func testRawKeyboardStopsWhenSameRoleNormalFocusIdentityChangesAndCleansUp() async throws {
+        try await MainActor.run {
+            for (json, focusChange) in [
+                (#"{"id":"a1","window_ref":"w1","kind":"type_text","text":"ab"}"#, "between_scalars"),
+                (#"{"id":"a1","window_ref":"w1","kind":"press_key","keys":"ctrl a"}"#, "between_down_up")
+            ] {
+                let action = try Self.decodeAction(json: json)
+                let access = FakeNativeActionAccess()
+                access.target = access.target.withFocusedInput(role: "AXTextField", classification: "normal", identity: "first")
+                let poster = FakeNativeInputPoster()
+                let changeFocus = {
+                    access.target = access.target.withFocusedInput(role: "AXTextField", classification: "normal", identity: "second")
+                }
+                if focusChange == "between_scalars" { poster.afterFirstKeyUp = changeFocus }
+                else { poster.afterFirstPost = changeFocus }
+                let result = try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)
+                XCTAssertEqual(result["execution"] as? String, "partially_applied")
+                XCTAssertEqual(result["cleanup"] as? String, "complete")
+                XCTAssertEqual(poster.events, ["key_down", "key_up"])
+                XCTAssertEqual(access.dispatchCount, 1)
+            }
+        }
+    }
+
+    func testPhysicalKeyRoutesRequireInspectedStableUSLayoutAndAcceptModifierOrder() async throws {
+        try await MainActor.run {
+            XCTAssertFalse(nativeKeyboardLayoutQualified(initial: nil, current: nil))
+            XCTAssertFalse(nativeKeyboardLayoutQualified(initial: "com.apple.keylayout.French", current: "com.apple.keylayout.French"))
+            XCTAssertFalse(nativeKeyboardLayoutQualified(initial: "com.apple.keylayout.US", current: "com.apple.keylayout.French"))
+            XCTAssertTrue(nativeKeyboardLayoutQualified(initial: "com.apple.keylayout.US", current: "com.apple.keylayout.US"))
+
+            for keys in ["ctrl shift a", "shift ctrl a"] {
+                let action = try Self.decodeAction(json: #"{"id":"a1","window_ref":"w1","kind":"press_key","keys":"\#(keys)"}"#)
+                let access = FakeNativeActionAccess()
+                access.target = access.target.withFocusedInput(role: "AXTextField", classification: "normal")
+                let poster = FakeNativeInputPoster()
+                poster.layoutIdentifier = nil
+                XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0))
+                XCTAssertTrue(poster.events.isEmpty)
+
+                poster.layoutIdentifier = "com.apple.keylayout.US"
+                poster.afterFirstPost = { poster.layoutIdentifier = "com.apple.keylayout.French" }
+                let changed = try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)
+                XCTAssertEqual(changed["execution"] as? String, "partially_applied")
+                XCTAssertEqual(changed["cleanup"] as? String, "complete")
+                XCTAssertEqual(poster.events, ["key_down", "key_up"])
+            }
+        }
+    }
+
     func testCancellationAfterDownUsesIndependentReleasePath() async throws {
         try await MainActor.run {
             let action = try Self.decodeAction(json: #"{"id":"a1","window_ref":"w1","kind":"type_text","text":"x"}"#)
@@ -155,7 +205,7 @@ final class WireTests: XCTestCase {
                 access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
                                                    process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
                                                    role: "AXButton", classification: "normal", enabled: true, focused: true, windowFocused: true,
-                                                   focusedRole: "AXTextField", focusedClassification: "normal",
+                                                   focusedRole: "AXTextField", focusedClassification: "normal", focusedIdentity: "focus-1",
                                                    windowBounds: CGRect(x: 0, y: 0, width: 1000, height: 1000),
                                                    displayBounds: CGRect(x: 0, y: 0, width: 1000, height: 1000), displayID: 1)
                 let poster = FakeNativeInputPoster()
@@ -206,6 +256,43 @@ final class WireTests: XCTestCase {
             }
             XCTAssertEqual(access.dispatchCount, 1)
         }
+    }
+
+    func testCoordinateHitValidatorRejectsForeignWrongWindowAndStaleGeometry() {
+        let point = CGPoint(x: 5, y: 5)
+        let bounds = CGRect(x: 0, y: 0, width: 10, height: 10)
+        let base = NativeCoordinateHitFacts(point: point, expectedPID: 10, actualPID: 10,
+                                           targetBounds: bounds, hitBounds: bounds, exactWindow: true,
+                                           targetRelated: true, exactTarget: true, requiresExactTarget: false)
+        XCTAssertTrue(validNativeCoordinateHit(base))
+        XCTAssertFalse(validNativeCoordinateHit(NativeCoordinateHitFacts(point: point, expectedPID: 10, actualPID: 11,
+            targetBounds: bounds, hitBounds: bounds, exactWindow: true, targetRelated: true,
+            exactTarget: true, requiresExactTarget: false)))
+        XCTAssertFalse(validNativeCoordinateHit(NativeCoordinateHitFacts(point: point, expectedPID: 10, actualPID: 10,
+            targetBounds: bounds, hitBounds: bounds, exactWindow: false, targetRelated: true,
+            exactTarget: true, requiresExactTarget: false)))
+        XCTAssertFalse(validNativeCoordinateHit(NativeCoordinateHitFacts(point: point, expectedPID: 10, actualPID: 10,
+            targetBounds: bounds, hitBounds: CGRect(x: 6, y: 6, width: 2, height: 2), exactWindow: true,
+            targetRelated: true, exactTarget: false, requiresExactTarget: true)))
+        XCTAssertFalse(validNativeCoordinateHit(NativeCoordinateHitFacts(point: point, expectedPID: 10, actualPID: 10,
+            targetBounds: bounds, hitBounds: CGRect(x: .infinity, y: 0, width: 1, height: 1), exactWindow: true,
+            targetRelated: true, exactTarget: true, requiresExactTarget: false)))
+    }
+
+    func testReferenceProducersRejectForeignAXPIDAndChangedLaunchIdentity() {
+        let scoped = NativeProcess(pid: 10, bundleID: "example.app", launchID: "launch-a")
+        for producer in ["enumerated_window", "focused_window"] {
+            XCTAssertFalse(nativeElementIdentityIsCurrent(actualPID: 11, expected: scoped, current: scoped), producer)
+            XCTAssertFalse(nativeElementIdentityIsCurrent(actualPID: 10, expected: scoped,
+                current: NativeProcess(pid: 10, bundleID: "example.app", launchID: "launch-b")), producer)
+        }
+        XCTAssertTrue(nativeElementIdentityIsCurrent(actualPID: 10, expected: scoped, current: scoped))
+    }
+
+    func testWindowTitleEvidenceDistinguishesObservedEmptyFromUnavailable() {
+        XCTAssertEqual(nativeWindowTitleEvidence(""), "")
+        XCTAssertNil(nativeWindowTitleEvidence(nil))
+        XCTAssertNil(nativeWindowTitleEvidence(NSAttributedString(string: "not a title string")))
     }
 
     func testNativeActionExecutorRejectsStaleIdentityFocusAndUnreliableSelectionBeforeDispatch() async throws {
@@ -265,16 +352,24 @@ final class WireTests: XCTestCase {
     private static func decodeAction(kind: String, text: String) throws -> NativeAction {
         let value: [String: Any] = ["id": "a1", "window_ref": "w1", "element_ref": "e1",
                                     "state_id": "s1", "kind": kind, "text": text]
-        return try JSONDecoder().decode(NativeAction.self, from: JSONSerialization.data(withJSONObject: value))
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        return try decodeAction(json: String(decoding: data, as: UTF8.self))
     }
 
     private static func decodeAction(json: String) throws -> NativeAction {
-        try JSONDecoder().decode(NativeAction.self, from: Data(json.utf8))
+        guard var action = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            throw ProbeFailure(code: "invalid_request")
+        }
+        action["element_ref"] = action["element_ref"] ?? ""
+        action["state_id"] = action["state_id"] ?? ""
+        let actionData = try JSONSerialization.data(withJSONObject: action, options: [.sortedKeys])
+        let request = #"{"schema_version":1,"request_id":"r","operation":"execute","action":\#(String(decoding: actionData, as: UTF8.self))}"#
+        return try XCTUnwrap(decodeNativeRequest(Data(request.utf8)).action)
     }
 
     func testDecodeGoObserveRequest() throws {
         let payload = #"{"schema_version":1,"request_id":"r1","operation":"observe","window_ref":"w1","budget":{"max_depth":8,"max_nodes":64,"max_bytes":8192,"timeout":1000000000}}"#.data(using: .utf8)!
-        let request = try JSONDecoder().decode(NativeRequest.self, from: payload)
+        let request = try decodeNativeRequest(payload)
         XCTAssertEqual(request.requestID, "r1")
         XCTAssertEqual(request.windowRef, "w1")
         XCTAssertEqual(request.budget?.timeoutNanoseconds, 1_000_000_000)
@@ -283,12 +378,29 @@ final class WireTests: XCTestCase {
 
     func testDecodeGoPressAndReplaceWithOmittedText() throws {
         let press = #"{"schema_version":1,"request_id":"r2","operation":"execute","action":{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"press"}}"#.data(using: .utf8)!
-        let decodedPress = try JSONDecoder().decode(NativeRequest.self, from: press)
+        let decodedPress = try decodeNativeRequest(press)
         XCTAssertEqual(decodedPress.action?.text, "")
 
         let replace = #"{"schema_version":1,"request_id":"r3","operation":"execute","action":{"id":"a2","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"replace"}}"#.data(using: .utf8)!
-        let decodedReplace = try JSONDecoder().decode(NativeRequest.self, from: replace)
+        let decodedReplace = try decodeNativeRequest(replace)
         XCTAssertEqual(decodedReplace.action?.text, "")
+    }
+
+    func testProductionDecoderRejectsDuplicateUnknownNullAndExtraneousMembersRecursively() throws {
+        let samples = [
+            #"{"schema_version":1,"request_id":"r","request_id":"x","operation":"doctor"}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"doctor","budget":{"max_depth":1,"max_depth":1,"max_nodes":1,"max_bytes":1,"timeout":1}}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"doctor","harmless":0}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"execute","action":{"id":"a","window_ref":"w","element_ref":"e","state_id":"s","kind":"replace","text":null}}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"execute","action":{"id":"a","window_ref":"w","element_ref":"e","state_id":"s","kind":"press","x":0}}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"observe","window_ref":"w","budget":{"max_depth":1,"max_nodes":1,"max_bytes":1,"timeout":1,"extra":0}}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"doctor"} trailing"#
+        ]
+        for sample in samples {
+            XCTAssertThrowsError(try decodeNativeRequest(Data(sample.utf8)), sample)
+        }
+        XCTAssertThrowsError(try decodeNativeConfig(Data(#"{"schema_version":1,"schema_version":1,"scope":{"processes":[],"expires_at_unix_milli":1},"allow_values":false}"#.utf8)))
+        XCTAssertThrowsError(try decodeNativeConfig(Data(#"{"schema_version":1,"scope":{"processes":[{"pid":1,"bundle_id":"x","launch_id":"l","extra":0}],"expires_at_unix_milli":1},"allow_values":false}"#.utf8)))
     }
 
     func testErrorEnvelopeUsesCodeStringAndNoResult() throws {
@@ -303,7 +415,7 @@ final class WireTests: XCTestCase {
     func testNativeErrorClassificationKeepsInternalFailuresDistinct() throws {
         let malformedInput: Error
         do {
-            _ = try JSONDecoder().decode(NativeRequest.self, from: Data("{}".utf8))
+            _ = try decodeNativeRequest(Data("{}".utf8))
             XCTFail("expected malformed request")
             return
         } catch {
@@ -377,7 +489,7 @@ final class WireTests: XCTestCase {
     var target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
                                     process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
                                     role: "AXButton", classification: "normal", enabled: true, focused: false, windowFocused: true,
-                                    focusedRole: nil, focusedClassification: nil,
+                                    focusedRole: nil, focusedClassification: nil, focusedIdentity: nil,
                                     windowBounds: CGRect(x: 0, y: 0, width: 1000, height: 1000),
                                     displayBounds: CGRect(x: 0, y: 0, width: 1000, height: 1000), displayID: 1)
     var dispatchCount = 0
@@ -387,6 +499,7 @@ final class WireTests: XCTestCase {
     var supportsActions = true
     var cancelled = false
     var hitClassification = "normal"
+    var layoutIdentifier: String? = "com.apple.keylayout.US"
 
     func check(requestID: UInt64, deadline: TimeInterval) throws {
         if cancelled { throw ProbeFailure(code: "cancelled") }
@@ -398,6 +511,7 @@ final class WireTests: XCTestCase {
                                         process: target.process, role: "AXWindow", classification: "normal",
                                         enabled: target.enabled, focused: false, windowFocused: target.windowFocused,
                                         focusedRole: target.focusedRole, focusedClassification: target.focusedClassification,
+                                        focusedIdentity: target.focusedIdentity,
                                         windowBounds: target.windowBounds, elementBounds: target.elementBounds,
                                         displayBounds: target.displayBounds, displayID: target.displayID)
         }
@@ -440,10 +554,11 @@ final class WireTests: XCTestCase {
     var failAfterDown = false
     var failCleanup = false
     var afterFirstPost: (() -> Void)?
+    var afterFirstKeyUp: (() -> Void)?
     private var failed = false
     private let clock = FakeNativeActionClock()
 
-    private lazy var sequence = QuartzInputPoster(sink: self, clock: clock)
+    private lazy var sequence = QuartzInputPoster(sink: self, clock: clock, keyboardLayout: { self.layoutIdentifier })
 
     func post(_ action: NativeAction, target: NativeActionTarget,
               checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch {
@@ -464,6 +579,10 @@ final class WireTests: XCTestCase {
         events.append(name)
         if let callback = afterFirstPost, event.kind == .keyDown || event.kind == .mouseDown {
             afterFirstPost = nil
+            callback()
+        }
+        if let callback = afterFirstKeyUp, event.kind == .keyUp {
+            afterFirstKeyUp = nil
             callback()
         }
         if failAfterDown && !failed && (event.kind == .keyDown || event.kind == .mouseDown) {
@@ -488,15 +607,15 @@ private extension NativeActionTarget {
         NativeActionTarget(actionID: actionID, windowRef: windowRef, elementRef: elementRef, stateID: stateID,
                            process: process, role: role, classification: classification, enabled: enabled,
                            focused: value, windowFocused: windowFocused, focusedRole: focusedRole,
-                           focusedClassification: focusedClassification, windowBounds: windowBounds,
+                           focusedClassification: focusedClassification, focusedIdentity: focusedIdentity, windowBounds: windowBounds,
                            elementBounds: elementBounds, displayBounds: displayBounds, displayID: displayID)
     }
 
-    func withFocusedInput(role: String, classification: String) -> NativeActionTarget {
+    func withFocusedInput(role: String, classification: String, identity: String? = "focus") -> NativeActionTarget {
         NativeActionTarget(actionID: actionID, windowRef: windowRef, elementRef: elementRef, stateID: stateID,
                            process: process, role: self.role, classification: self.classification, enabled: enabled,
                            focused: focused, windowFocused: windowFocused, focusedRole: role,
-                           focusedClassification: classification, windowBounds: windowBounds,
+                           focusedClassification: classification, focusedIdentity: identity, windowBounds: windowBounds,
                            elementBounds: elementBounds, displayBounds: displayBounds, displayID: displayID)
     }
 }

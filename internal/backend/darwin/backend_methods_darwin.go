@@ -48,8 +48,13 @@ func (native *nativeBackend) invoke(ctx context.Context, operation, windowRef, e
 	}
 	defer native.inflight.Add(-1)
 	requestID := formatRequestID(requestSequence.Add(1))
+	var actionWire *nativeAction
+	if action != nil {
+		projected := actionTransport(*action)
+		actionWire = &projected
+	}
 	request := nativeRequest{SchemaVersion: abiVersion, RequestID: requestID, Operation: operation,
-		WindowRef: windowRef, ElementRef: elementRef, StateID: stateID, Budget: budget, Action: action}
+		WindowRef: windowRef, ElementRef: elementRef, StateID: stateID, Budget: budget, Action: actionWire}
 	data, err := json.Marshal(request)
 	if err != nil || len(data) == 0 || len(data) > maxNativeRequest {
 		return backendError("invalid_request")

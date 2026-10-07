@@ -9,6 +9,8 @@ let comuseMaximumRequestBytes = 32 * 1024
 let comuseMaximumResponseBytes = 64 * 1024
 let comuseMaximumScopeProcesses = 32
 
+func nativeWindowTitleEvidence(_ value: Any?) -> String? { value as? String }
+
 public typealias Completion = @convention(c) (UInt64, UInt64, Int32, UnsafePointer<UInt8>?, Int) -> Void
 
 struct NativeProcess: Codable, Sendable, Equatable {
@@ -262,8 +264,7 @@ final class NativeRuntime {
 
     private func handle(_ data: Data, nativeRequestID: UInt64) -> Data {
         do {
-            let decoder = JSONDecoder()
-            let request = try decoder.decode(NativeRequest.self, from: data)
+            let request = try decodeNativeRequest(data)
             guard request.schemaVersion == 1, validRequestID(request.requestID) else {
                 throw ProbeFailure(code: "invalid_request")
             }
@@ -353,8 +354,11 @@ final class NativeRuntime {
                 try checkDeadline(requestID, deadline: deadline)
                 guard result.count < min(budget.maxNodes, 128) else { throw ProbeFailure(code: "budget_exceeded") }
                 let ref = try retain(window, process: app.identity, windowRef: nil, kind: .window)
-                let rawTitle = stringAttribute(window, kAXTitleAttribute) ?? ""
-                let title = boundedUTF8Prefix(rawTitle, byteLimit: 1024)
+                guard let inspectedTitle = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String)) else {
+                    invalidateAccessibilityState()
+                    throw ProbeFailure(code: "backend_unavailable")
+                }
+                let title = boundedUTF8Prefix(inspectedTitle, byteLimit: 1024)
                 guard !title.truncated else { throw ProbeFailure(code: "budget_exceeded") }
                 let row: [String: Any] = ["ref": ref, "process": processJSON(app.identity), "title": title.text]
                 let bytes = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]).count
@@ -516,8 +520,7 @@ public func comuseRuntimeOpen(_ configBytes: UnsafePointer<UInt8>?, _ configLeng
           let runtimeOut, let resolvedScopeOut, let resolvedScopeLengthOut,
           resolvedScopeCapacity > 0 else { return 1 }
     do {
-        let decoder = JSONDecoder()
-        let config = try decoder.decode(NativeConfig.self, from: Data(bytes: configBytes, count: configLength))
+        let config = try decodeNativeConfig(Data(bytes: configBytes, count: configLength))
         guard config.schemaVersion == 1, !config.scope.processes.isEmpty,
               config.scope.processes.count <= comuseMaximumScopeProcesses,
               config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000),
