@@ -458,13 +458,6 @@ func finishLease(lease *writer.Lease, ticket *writer.Ticket, action Action, resu
 		outcome = writer.OutcomePartial
 	}
 	metadata := actionMetadata(action, result, code)
-	// The writer's frozen value-free metadata vocabulary predates raw developer
-	// operations. Their exact canonical Action remains in the durable binding;
-	// leave the optional descriptive label empty until that vocabulary is
-	// extended, rather than recording a false semantic action kind.
-	if isDeveloperActionKind(action.Kind) {
-		metadata.Action = ""
-	}
 	return lease.FinishWithMetadata(ticket, outcome, metadata)
 }
 
