@@ -92,6 +92,7 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	// Refresh the observation and capability immediately before admission. A
 	// caller's public state hash remains stable across hidden native state, but
 	// the exact private native state ID is always passed to the backend.
+	s.account(callCtx, CounterObservationA11y, 1)
 	nativeSnapshot, callErr := s.backend.Observe(callCtx, action.WindowRef, s.budget)
 	if callErr != nil {
 		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
@@ -223,6 +224,7 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
+	s.account(callCtx, CounterActions, 1)
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
 	if executeErr != nil {
 		s.invalidateOnBackendError(executeErr)
