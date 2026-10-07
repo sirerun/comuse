@@ -68,3 +68,31 @@ type Unchanged struct {
 // BindingCharge is a constant retention charge per opaque native reference.
 // Actual binding contents never affect public retention accounting.
 const BindingCharge = 256
+
+// CloneSnapshot separates every mutable record and metadata container.
+func CloneSnapshot(s Snapshot) Snapshot {
+	s.Coverage.Limitations = append([]string{}, s.Coverage.Limitations...)
+	s.Context.RootRefs = append([]string{}, s.Context.RootRefs...)
+	s.Context.FocusedElementRef = copyPointer(s.Context.FocusedElementRef)
+	nodes := make(map[string]Node, len(s.Nodes))
+	for ref, n := range s.Nodes {
+		n.Label = copyPointer(n.Label)
+		n.Value = copyPointer(n.Value)
+		n.ParentRef = copyPointer(n.ParentRef)
+		n.Enabled = copyPointer(n.Enabled)
+		n.Checked = copyPointer(n.Checked)
+		n.Selected = copyPointer(n.Selected)
+		n.ChildRefs = append([]string{}, n.ChildRefs...)
+		n.Actions = append([]string{}, n.Actions...)
+		nodes[ref] = n
+	}
+	s.Nodes = nodes
+	return s
+}
+func copyPointer[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
