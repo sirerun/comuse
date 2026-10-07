@@ -131,6 +131,7 @@ func TestDisplayGenerationRotatesScopeAndPurgesAuthorityWithoutPermissionFailure
 	permissionEpoch := session.currentPermissionEpoch()
 	secondContext := testDesktopContext(process)
 	secondContext.DisplayGeneration = 2
+	secondContext.FocusedWindow = nil
 	backend.setDesktop(secondContext)
 	report, err := session.Doctor(context.Background())
 	if err != nil || report.DesktopContext.DisplayGeneration != 2 {
@@ -185,6 +186,7 @@ func TestLateObservationFromPriorDisplayEpochFailsClosed(t *testing.T) {
 	<-started
 	changed := testDesktopContext(process)
 	changed.DisplayGeneration = 2
+	changed.FocusedWindow = nil
 	backend.setDesktop(changed)
 	if _, err := session.Doctor(context.Background()); err != nil {
 		t.Fatal(err)

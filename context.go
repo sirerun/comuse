@@ -34,11 +34,42 @@ func (s *Session) validateDesktopContext(value *DesktopContext) (*DesktopContext
 	copy := cloneDesktopContext(value)
 	if copy.FocusedWindow != nil {
 		window := *copy.FocusedWindow
-		if !opaqueASCII(window.Ref) || !scopeContains(s.scope, window.Process) || !utf8.ValidString(window.Title) || !validText(window.Title, s.budget.MaxBytes) {
+		if !opaqueASCII(window.Ref) || !scopeContains(s.scope, window.Process) || !utf8.ValidString(window.Title) || len(window.Title) > 4096 || !validText(window.Title, s.budget.MaxBytes) {
 			return nil, coreError("backend_unavailable")
 		}
 	}
 	return copy, nil
+}
+
+// bindContextFocus makes a freshly inspected, exactly scoped focused reference
+// usable without requiring a redundant enumeration. Epoch checks prevent an
+// older Doctor response from restoring invalidated authority.
+func (s *Session) bindContextFocus(value *DesktopContext, permissionEpoch, contextEpoch uint64) error {
+	if value == nil || value.FocusedWindow == nil {
+		return nil
+	}
+	window := *value.FocusedWindow
+	if exceedsJSONBudget(window, s.budget.MaxBytes) {
+		return coreError("budget_exceeded")
+	}
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.permissionEpoch != permissionEpoch {
+		return coreError("permission_denied")
+	}
+	if s.contextEpoch != contextEpoch {
+		return coreError("state_expired")
+	}
+	if !s.hasDesktopContext || s.desktopContext.DisplayID != value.DisplayID || s.desktopContext.DisplayGeneration != value.DisplayGeneration {
+		return coreError("state_expired")
+	}
+	if _, exists := s.windows[window.Ref]; !exists && len(s.windows) >= s.budget.MaxNodes {
+		return coreError("budget_exceeded")
+	}
+	s.windows[window.Ref] = window
+	return nil
 }
 
 // reconcileDesktopContext atomically installs inspected context evidence.
@@ -100,6 +131,9 @@ func compactState(value *DesktopContext) (*MetadataCompactState, StateStatus, er
 // revalidateDesktopAuthority is the stored-state seam: it performs one fresh
 // Doctor read and no Snapshot/Observe call, then checks the captured authority.
 func (s *Session) revalidateDesktopAuthority(ctx context.Context, expectedEpoch uint64) (*MetadataCompactState, StateStatus, error) {
+	if observed, _ := ctx.Value(stateAccountingKey{}).(bool); observed {
+		s.account(ctx, CounterObservationState, 1)
+	}
 	report, err := s.backend.Doctor(ctx)
 	if err != nil {
 		return nil, StateUnavailable, s.stableBackendError(ctx, err)

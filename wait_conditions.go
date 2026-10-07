@@ -183,7 +183,7 @@ func (s *Session) pollWaitCondition(ctx context.Context, params WaitParams, boun
 		}
 		// Absence is closure evidence only after a fresh permission and
 		// desktop-authority check; revoked AX can enumerate an empty list.
-		if _, _, err := s.revalidateDesktopAuthority(ctx, contextEpoch); err != nil {
+		if _, _, err := s.revalidateDesktopAuthority(context.WithValue(ctx, stateAccountingKey{}, true), contextEpoch); err != nil {
 			return false, nil, nil, err
 		}
 		for _, window := range windows {

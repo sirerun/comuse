@@ -29,13 +29,18 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	if observed, _ := callCtx.Value(stateAccountingKey{}).(bool); observed {
 		s.account(callCtx, CounterObservationState, 1)
 	}
+	permissionEpoch := s.currentPermissionEpoch()
 	contextEpoch := s.contextEpochNow()
 	report, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
 		return DoctorReport{}, s.stableBackendError(callCtx, callErr)
 	}
-	if _, _, err = s.reconcileDesktopContextAt(report.DesktopContext, &contextEpoch); err != nil {
+	changed, _, err := s.reconcileDesktopContextAt(report.DesktopContext, &contextEpoch)
+	if err != nil {
 		return DoctorReport{}, err
+	}
+	if changed {
+		contextEpoch++
 	}
 	report.DesktopContext = cloneDesktopContext(report.DesktopContext)
 	// Reasons and permission values are implementation diagnostics. Retain only
@@ -53,6 +58,11 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	}
 	report.Permissions = permissions
 	s.invalidateIfPermissionDenied(report)
+	if report.Capabilities.Accessibility && report.Permissions["accessibility"] != "denied" {
+		if err := s.bindContextFocus(report.DesktopContext, permissionEpoch, contextEpoch); err != nil {
+			return DoctorReport{}, err
+		}
+	}
 	return report, nil
 }
 
@@ -71,6 +81,15 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 		return nil, err
 	}
 	defer done()
+	// Establish inspected context before retaining enumeration references. A
+	// first Observe must not rotate away the window it was just given.
+	report, doctorErr := s.Doctor(context.WithValue(callCtx, stateAccountingKey{}, true))
+	if doctorErr != nil {
+		return nil, doctorErr
+	}
+	if !report.Capabilities.Accessibility || report.Permissions["accessibility"] == "denied" {
+		return nil, coreError("permission_denied")
+	}
 	epoch := s.currentPermissionEpoch()
 	contextEpoch := s.contextEpochNow()
 	s.account(callCtx, CounterObservationState, 1)
