@@ -31,6 +31,22 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(object["status"] as? String, "error")
     }
 
+    func testNativeErrorClassificationKeepsInternalFailuresDistinct() throws {
+        let malformedInput: Error
+        do {
+            _ = try JSONDecoder().decode(NativeRequest.self, from: Data("{}".utf8))
+            XCTFail("expected malformed request")
+            return
+        } catch {
+            malformedInput = error
+        }
+
+        XCTAssertEqual(nativeErrorCode(for: malformedInput), "invalid_request")
+        XCTAssertEqual(nativeErrorCode(for: ProbeFailure(code: "policy_refused")), "policy_refused")
+        XCTAssertEqual(nativeErrorCode(for: ProbeFailure(code: "private diagnostic")), "internal_error")
+        XCTAssertEqual(nativeErrorCode(for: NSError(domain: "synthetic", code: 7)), "internal_error")
+    }
+
     func testPermissionLossPurgesReferencesAndSnapshots() async throws {
         try await MainActor.run {
             let process = NativeProcess(pid: 1, bundleID: "example.app", launchID: "1.1")
