@@ -112,3 +112,36 @@ func TestQuotaCorruptionFailsClosed(t *testing.T) {
 		t.Fatal("corrupt durable quota was reset")
 	}
 }
+
+func TestQuotaRollingWindowBoundaryRetainsGraceWithoutBlocking(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "canonical")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store := newQuotaStoreAt(root, uint32(os.Getuid()))
+	now := time.UnixMilli(1800000000000)
+	for batch := 0; batch < 2; batch++ {
+		for i := 0; i < MaxActionsPerMinute; i++ {
+			commitment := sha256.Sum256([]byte(fmt.Sprintf("boundary-%d-%d", batch, i)))
+			if err := store.reserveAt(context.Background(), commitment, now.Add(time.Duration(batch)*time.Minute)); err != nil {
+				t.Fatalf("new slot%d at boundary batch%d: %v", i, batch, err)
+			}
+		}
+	}
+	if err := store.reserveAt(context.Background(), sha256.Sum256([]byte("overflow")), now.Add(time.Minute)); !errors.Is(err, ErrQuotaExhausted) {
+		t.Fatal("boundary burst exceeded rolling quota:", err)
+	}
+}
+func TestQuotaDuplicateJSONKeysFailClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "canonical")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, fmt.Sprintf("quota-%d.json", os.Getuid()))
+	if err := os.WriteFile(path, []byte(`{"version":1,"watermark_ms":1800000000000,"reservations":[],"reservations":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := newQuotaStoreAt(root, uint32(os.Getuid())).reserveAt(context.Background(), sha256.Sum256([]byte("duplicate")), time.UnixMilli(1800000000000)); err == nil {
+		t.Fatal("ambiguous duplicate JSON accepted")
+	}
+}

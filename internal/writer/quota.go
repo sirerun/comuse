@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sirerun/comuse/internal/jsonwire"
 )
 
 const (
@@ -19,6 +20,8 @@ const (
 	quotaWindow         = time.Minute
 	quotaRetention      = 61 * time.Second
 	maxQuotaBytes       = 16 * 1024
+	// A full burst can expire at60s while still retained for the61s grace.
+	maxQuotaRecords = 2 * MaxActionsPerMinute
 )
 
 var ErrQuotaExhausted = errors.New("desktop action quota exhausted")
@@ -171,16 +174,25 @@ func loadQuotaState(path string, uid uint32) (quotaDiskState, error) {
 	if info.Mode().Perm()&0o077 != 0 {
 		return quotaDiskState{}, errors.New("durable UID quota permissions are not private")
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxQuotaBytes+1))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&state); err != nil {
+	var wire struct {
+		Version         *int   `json:"version"`
+		WatermarkMillis *int64 `json:"watermark_ms"`
+		Reservations    *[]struct {
+			Commitment *string `json:"commitment"`
+			AtMillis   *int64  `json:"at_ms"`
+		} `json:"reservations"`
+	}
+	if err := jsonwire.Decode(file, maxQuotaBytes, &wire); err != nil || wire.Version == nil || wire.WatermarkMillis == nil || wire.Reservations == nil {
 		return quotaDiskState{}, errors.New("durable UID quota is unreadable or corrupt")
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return quotaDiskState{}, errors.New("durable UID quota contains trailing data")
+	state = quotaDiskState{Version: *wire.Version, WatermarkMillis: *wire.WatermarkMillis, Reservations: make([]quotaReservation, 0, len(*wire.Reservations))}
+	for _, record := range *wire.Reservations {
+		if record.Commitment == nil || record.AtMillis == nil {
+			return quotaDiskState{}, errors.New("durable UID quota record is incomplete")
+		}
+		state.Reservations = append(state.Reservations, quotaReservation{Commitment: *record.Commitment, AtMillis: *record.AtMillis})
 	}
-	if state.Version != 1 || state.WatermarkMillis < 0 || len(state.Reservations) > MaxActionsPerMinute || state.Reservations == nil {
+	if state.Version != 1 || state.WatermarkMillis < 0 || len(state.Reservations) > maxQuotaRecords || state.Reservations == nil {
 		return quotaDiskState{}, errors.New("durable UID quota is outside supported bounds")
 	}
 	seen := make(map[string]struct{}, len(state.Reservations))
@@ -200,7 +212,7 @@ func loadQuotaState(path string, uid uint32) (quotaDiskState, error) {
 }
 
 func saveQuotaState(path string, uid uint32, state quotaDiskState) error {
-	if len(state.Reservations) > MaxActionsPerMinute {
+	if len(state.Reservations) > maxQuotaRecords {
 		return errors.New("durable UID quota exceeds record bound")
 	}
 	data, err := json.Marshal(state)
