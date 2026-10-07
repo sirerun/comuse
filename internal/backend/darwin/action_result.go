@@ -21,13 +21,17 @@ type nativeActionResult struct {
 
 func decodeActionResult(wire nativeActionResult, action backend.Action) (backend.ActionResult, error) {
 	expected := expectedNativeActionResult(action)
-	expectedMethod, expectedStep := expected[0], expected[1]
-	if wire.ActionID != action.ID || expectedMethod == "" || wire.Method != expectedMethod ||
-		len(wire.CompletedSteps) != 1 || wire.CompletedSteps[0] != expectedStep ||
-		wire.Execution != backend.ExecutionApplied || wire.Verification.Status != backend.VerificationUnavailable ||
+	if wire.ActionID != action.ID || expected.method == "" || wire.Method != expected.method ||
+		!validNativeCompletedSteps(action, wire.CompletedSteps, wire.Execution) ||
+		!oneOf(string(wire.Execution), string(backend.ExecutionNotApplied), string(backend.ExecutionApplied),
+			string(backend.ExecutionPartiallyApplied), string(backend.ExecutionUnknown)) ||
+		!oneOf(string(wire.Cleanup), string(backend.CleanupComplete), string(backend.CleanupDirty), string(backend.CleanupUnknown)) ||
+		wire.Verification.Status != backend.VerificationUnavailable ||
 		wire.Verification.Reason != "" ||
 		(wire.StateStatus != backend.StateUnavailable && wire.StateStatus != backend.StateStatus("partial") && wire.StateStatus != backend.StateAvailable) ||
-		wire.Cleanup != backend.CleanupComplete {
+		(wire.Execution == backend.ExecutionApplied && wire.Cleanup != backend.CleanupComplete) ||
+		(wire.Execution == backend.ExecutionNotApplied && wire.Cleanup != backend.CleanupComplete) ||
+		(containsNativeStep(wire.CompletedSteps, "cleanup") && wire.Cleanup != backend.CleanupComplete) {
 		return backend.ActionResult{}, &backend.Error{Code: "backend_unavailable", Message: "The native backend is unavailable."}
 	}
 	return backend.ActionResult{ActionID: wire.ActionID, Execution: wire.Execution,
@@ -35,33 +39,79 @@ func decodeActionResult(wire nativeActionResult, action backend.Action) (backend
 		Method: wire.Method, CompletedSteps: append([]string(nil), wire.CompletedSteps...)}, nil
 }
 
-func expectedNativeActionResult(action backend.Action) [2]string {
+type nativeExpectedResult struct {
+	method string
+	steps  []string
+}
+
+func expectedNativeActionResult(action backend.Action) nativeExpectedResult {
 	switch action.Kind {
 	case backend.ActionPress:
-		return [2]string{"ax_press", "press"}
+		return nativeExpectedResult{"ax_press", []string{"press"}}
 	case backend.ActionReplace:
-		return [2]string{"ax_set_value", "set_value"}
+		return nativeExpectedResult{"ax_set_value", []string{"set_value"}}
 	case backend.ActionInsert, backend.ActionTypeText:
-		return [2]string{"cg_unicode", "unicode"}
+		return nativeExpectedResult{"cg_unicode", []string{"key_down", "key_up"}}
 	case backend.ActionPick:
-		return [2]string{"ax_pick", "pick"}
+		return nativeExpectedResult{"ax_pick", []string{"pick"}}
 	case backend.ActionFocus:
-		return [2]string{"ax_focus", "focus"}
+		return nativeExpectedResult{"ax_focus", []string{"focus"}}
 	case backend.ActionScroll:
-		return [2]string{"ax_scroll", "scroll"}
+		return nativeExpectedResult{"cg_scroll", []string{"scroll"}}
 	case backend.ActionClick:
-		return [2]string{"cg_click", "click"}
+		return nativeExpectedResult{"cg_click", []string{"mouse_down", "mouse_up"}}
 	case backend.ActionPressKey:
-		return [2]string{"cg_key", "key"}
+		return nativeExpectedResult{"cg_key", []string{"key_down", "key_up"}}
 	case backend.ActionCoordinateScroll:
-		return [2]string{"cg_scroll", "scroll"}
+		return nativeExpectedResult{"cg_scroll", []string{"scroll"}}
 	case backend.ActionDrag:
-		return [2]string{"cg_drag", "drag"}
+		return nativeExpectedResult{"cg_drag", []string{"mouse_down", "mouse_move", "mouse_up"}}
 	case backend.ActionFocusWindow:
-		return [2]string{"ax_focus_window", "focus_window"}
+		return nativeExpectedResult{"ax_focus_window", []string{"focus"}}
 	default:
-		return [2]string{}
+		return nativeExpectedResult{}
 	}
+}
+
+func validNativeCompletedSteps(action backend.Action, got []string, execution backend.ExecutionStatus) bool {
+	want := expectedNativeActionResult(action).steps
+	if len(got) > 128 {
+		return false
+	}
+	stepIndex := 0
+	cleanupSeen := false
+	for _, step := range got {
+		if step == "cleanup" {
+			if cleanupSeen || stepIndex != len(got)-1 {
+				return false
+			}
+			cleanupSeen = true
+			continue
+		}
+		if stepIndex >= len(want) || step != want[stepIndex] {
+			return false
+		}
+		stepIndex++
+	}
+	if execution == backend.ExecutionApplied {
+		return stepIndex == len(want) && !cleanupSeen
+	}
+	if execution == backend.ExecutionNotApplied {
+		return len(got) == 0
+	}
+	if execution == backend.ExecutionPartiallyApplied {
+		return stepIndex > 0
+	}
+	return true
+}
+
+func containsNativeStep(steps []string, target string) bool {
+	for _, step := range steps {
+		if step == target {
+			return true
+		}
+	}
+	return false
 }
 
 // validateNativeAction mirrors the frozen common Action DTO limits at the
