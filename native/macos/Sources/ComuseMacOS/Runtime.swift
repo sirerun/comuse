@@ -247,10 +247,8 @@ final class NativeRuntime {
             let response = envelope(requestID: request.requestID, result: encoded)
             guard response.count <= comuseMaximumResponseBytes else { throw ProbeFailure(code: "budget_exceeded") }
             return response
-        } catch let failure as ProbeFailure {
-            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode(failure.code))
         } catch {
-            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode("invalid_request"))
+            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode(for: error))
         }
     }
 
@@ -406,7 +404,22 @@ func extractRequestID(from data: Data) -> String {
     return value
 }
 
-private func nativeErrorCode(_ code: String) -> String { code }
+private let nativeErrorCodes: Set<String> = [
+    "invalid_request", "policy_refused", "element_stale", "state_expired", "permission_denied",
+    "unsupported", "backend_unavailable", "budget_exceeded", "cancelled", "internal_error"
+]
+
+private func nativeErrorCode(_ code: String) -> String {
+    nativeErrorCodes.contains(code) ? code : "internal_error"
+}
+
+func nativeErrorCode(for error: Error) -> String {
+    if let failure = error as? ProbeFailure {
+        return nativeErrorCodes.contains(failure.code) ? failure.code : "internal_error"
+    }
+    if error is DecodingError { return "invalid_request" }
+    return "internal_error"
+}
 
 private func envelope(requestID: String, result: Data? = nil, error: String? = nil) -> Data {
     let response: NativeEnvelope
