@@ -321,3 +321,30 @@ func TestDeveloperActionFreshScopeAndNoRawModelAdvertisement(t *testing.T) {
 		t.Fatal("out-of-scope target reached Execute")
 	}
 }
+
+type deadlineRawTestBackend struct {
+	*rawTestBackend
+	remaining time.Duration
+}
+
+func (b *deadlineRawTestBackend) Execute(ctx context.Context, action Action) (ActionResult, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ActionResult{}, coreError("backend_unavailable")
+	}
+	b.remaining = time.Until(deadline)
+	return b.rawTestBackend.Execute(ctx, action)
+}
+func TestDeveloperAdmissionDeadlineIsBoundedBeforeBackend(t *testing.T) {
+	s, base := newRawTestSession(t, allRawKinds(), nil)
+	b := &deadlineRawTestBackend{rawTestBackend: base}
+	s.backend = b
+	s.budget.Timeout = 30 * time.Second
+	_, err := s.Click(context.Background(), ClickParams{WindowTarget: WindowTarget{"deadline-click", "window-1"}, Point: Point{X: 1, Y: 1}, Button: "left", Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.remaining <= 0 || b.remaining > 10*time.Second {
+		t.Fatalf("native context deadline=%v", b.remaining)
+	}
+}

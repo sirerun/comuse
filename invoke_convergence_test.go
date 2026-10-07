@@ -70,3 +70,49 @@ func TestSharedExplicitReadReturnsOneFreshAuthorizedRecord(t *testing.T) {
 		t.Fatalf("read=%+v", read)
 	}
 }
+
+func TestSharedCallKeepsConditionWaitOutcomeAndNoObservation(t *testing.T) {
+	checked := false
+	base := &fakeBackend{process: testProcess(), nativeState: "condition-state", elements: []Element{{Ref: "normal-1", Role: "AXCheckBox", Classification: "normal", Checked: &checked}}}
+	s := newWaitTestSession(t, &semanticBooleanWaitBackend{fakeBackend: base}, testProcess())
+	t.Cleanup(func() {
+		if err := s.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := s.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	obs, err := s.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []bool{false, true} {
+		env, err := s.Call(context.Background(), Request{Operation: OperationWait, Wait: &WaitParams{Condition: "element_checked", WindowRef: "window-1", ElementRef: "normal-1", StateID: obs.StateID, Expected: &expected, TimeoutMS: 1, PollIntervalMS: 50}})
+		if expected && ErrorCode(err) != "budget_exceeded" {
+			t.Fatalf("timeout err=%v", err)
+		}
+		if !expected && err != nil {
+			t.Fatal(err)
+		}
+		encoded, e := json.Marshal(env.Result)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var result MetadataWaitResult
+		if e := json.Unmarshal(encoded, &result); e != nil {
+			t.Fatal(e)
+		}
+		code := ""
+		if err != nil {
+			code = ErrorCode(err)
+		}
+		if result.Condition != "element_checked" || result.Satisfied == expected || !validWaitEnvelopeOutcome(WaitResult{Reason: result.Reason, Satisfied: result.Satisfied}, code) {
+			t.Fatalf("wait result=%s err=%v", encoded, err)
+		}
+		observation, e := json.Marshal(env.Observation)
+		if e != nil || string(observation) != "null" {
+			t.Fatalf("condition observation=%s err=%v", observation, e)
+		}
+	}
+}

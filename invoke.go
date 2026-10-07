@@ -93,7 +93,9 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 		}
 	case OperationWait:
 		if request.Wait.Condition != "" {
-			err = coreError("unsupported")
+			var condition WaitResult
+			condition, err = s.WaitCondition(ctx, *request.Wait)
+			result = condition
 			break
 		}
 		var observed Observation
@@ -201,7 +203,9 @@ func finishCall(s *Session, call *CallSnapshot, operation Operation, result, obs
 		code = ErrorCode(domainErr)
 	}
 	if domainErr != nil && actionResult == nil {
-		result = nil
+		if wait, ok := result.(WaitResult); !ok || !validWaitEnvelopeOutcome(wait, code) {
+			result = nil
+		}
 		observation = nil
 	}
 	resultPayload, payloadErr := projectResult(result)
@@ -286,4 +290,23 @@ func requestMutationOperation(operation Operation) bool {
 	default:
 		return false
 	}
+}
+
+func validWaitEnvelopeOutcome(result WaitResult, code string) bool {
+	switch result.Reason {
+	case "satisfied":
+		return code == "" && result.Satisfied
+	case "timeout":
+		return code == "budget_exceeded" && !result.Satisfied
+	case "cancelled":
+		return code == "cancelled" && !result.Satisfied
+	case "ambiguous":
+		return code == "unsupported" && !result.Satisfied
+	case "unavailable":
+		switch code {
+		case "invalid_request", "policy_refused", "element_stale", "state_expired", "permission_denied", "unsupported", "backend_unavailable", "session_closed", "internal_error":
+			return !result.Satisfied
+		}
+	}
+	return false
 }
