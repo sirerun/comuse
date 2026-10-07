@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -306,5 +307,55 @@ func TestServeRejectsOverlongLineWithoutUnboundedOutput(t *testing.T) {
 	var envelope cliWireEnvelope
 	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &envelope); err != nil || envelope.Error == nil || envelope.Error.Code != "invalid_request" {
 		t.Fatalf("oversize input did not receive canonical rejection: envelope=%+v err=%v", envelope, err)
+	}
+}
+
+func TestCLIQualifiedSemanticDispatchAndReplay(t *testing.T) {
+	b := newParityMCPActionBackend()
+	session, err := comuse.NewSyntheticSessionForTest(comuse.Config{Backend: b, Scope: comuse.Scope{Processes: []comuse.ProcessIdentity{b.process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 16384, Timeout: time.Second}, ApprovalProvider: parityMCPApproval{}, WriterDirectory: filepath.Join(t.TempDir(), "journal"), WriterKey: bytes.Repeat([]byte{0x72}, 32), MaxActions: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := session.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		op    comuse.Operation
+		extra map[string]any
+	}{{comuse.OperationClickElement, nil}, {comuse.OperationElementAction, map[string]any{"kind": "press"}}, {comuse.OperationWriteElement, map[string]any{"mode": "replace", "text": ""}}, {comuse.OperationScrollElement, map[string]any{"direction": "down", "amount": "page"}}}
+	for i, c := range cases {
+		obs, err := session.Observe(context.Background(), "window-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := map[string]any{"action_id": string(c.op) + "-cli", "window_ref": "window-1", "element_ref": obs.Elements[0].Ref, "state_id": obs.StateID}
+		for k, v := range c.extra {
+			args[k] = v
+		}
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for repeat := 0; repeat < 2; repeat++ {
+			var out bytes.Buffer
+			if code := cli.Dispatch(context.Background(), session, c.op, raw, &out); code != 0 {
+				t.Fatalf("%s exit%d: %s", c.op, code, out.String())
+			}
+			var env comuse.ResultEnvelope
+			if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+				t.Fatal(err)
+			}
+			if !env.OK || env.Execution != string(backend.ExecutionApplied) || env.Usage.SerializedTextBytes == 0 {
+				t.Fatalf("envelope: %s", out.String())
+			}
+			if len(b.executionsCopy()) != i+1 {
+				t.Fatal("replay dispatched new input")
+			}
+		}
 	}
 }
