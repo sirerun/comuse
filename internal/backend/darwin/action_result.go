@@ -50,9 +50,6 @@ func expectedNativeActionResult(action backend.Action) [2]string {
 	case backend.ActionScroll:
 		return [2]string{"ax_scroll", "scroll"}
 	case backend.ActionClick:
-		if action.ElementRef != "" {
-			return [2]string{"ax_press", "click"}
-		}
 		return [2]string{"cg_click", "click"}
 	case backend.ActionPressKey:
 		return [2]string{"cg_key", "key"}
@@ -91,10 +88,7 @@ func validateNativeAction(action backend.Action) bool {
 	case backend.ActionInsert:
 		return semantic && action.Text != "" && noPoint && noPointer && action.DelayMS == 0 && noKeys && noScroll && noMotion
 	case backend.ActionClick:
-		if semantic {
-			return action.Text == "" && noPoint && noPointer && action.DelayMS == 0 && noKeys && noScroll && noMotion
-		}
-		return action.X >= 0 && action.Y >= 0 && action.X <= 1_000_000 && action.Y <= 1_000_000 &&
+		return !semantic && action.X >= 0 && action.Y >= 0 && action.X <= 1_000_000 && action.Y <= 1_000_000 &&
 			(action.Button == "left" || action.Button == "right" || action.Button == "middle") &&
 			action.Count >= 1 && action.Count <= 2 && action.HoldMS >= 0 && action.HoldMS <= 1000 &&
 			action.EndX == 0 && action.EndY == 0 && action.Text == "" && action.Direction == "" && action.Amount == "" &&

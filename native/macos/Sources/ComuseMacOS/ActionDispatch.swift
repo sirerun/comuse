@@ -237,8 +237,7 @@ func validNativeAction(_ action: NativeAction) -> Bool {
     case "replace": return semantic
     case "insert": return semantic && !action.text.isEmpty
     case "click":
-        if semantic { return action.text.isEmpty }
-        return inCoordinateRange(action.x, action.y) && ["left", "right", "middle"].contains(action.button) &&
+        return !semantic && inCoordinateRange(action.x, action.y) && ["left", "right", "middle"].contains(action.button) &&
             (1...2).contains(action.count) && (0...1000).contains(action.holdMS)
     case "pick", "focus": return semantic && action.text.isEmpty
     case "scroll": return semantic && ["up", "down", "left", "right"].contains(action.direction) && ["line", "page"].contains(action.amount)
@@ -266,9 +265,7 @@ func nativeActionRoute(_ action: NativeAction) -> NativeActionRoute? {
     case "press": return NativeActionRoute(method: "ax_press", step: "press", requiresEnabled: true, requiresFocused: false)
     case "replace": return NativeActionRoute(method: "ax_set_value", step: "set_value", requiresEnabled: true, requiresFocused: false)
     case "insert": return NativeActionRoute(method: "cg_unicode", step: "unicode", requiresEnabled: true, requiresFocused: true)
-    case "click": return semantic
-        ? NativeActionRoute(method: "ax_press", step: "click", requiresEnabled: true, requiresFocused: false)
-        : NativeActionRoute(method: "cg_click", step: "click", requiresEnabled: false, requiresFocused: false)
+    case "click": return NativeActionRoute(method: "cg_click", step: "click", requiresEnabled: false, requiresFocused: false)
     case "pick": return NativeActionRoute(method: "ax_pick", step: "pick", requiresEnabled: true, requiresFocused: false)
     case "focus": return NativeActionRoute(method: "ax_focus", step: "focus", requiresEnabled: true, requiresFocused: false)
     case "scroll": return NativeActionRoute(method: "ax_scroll", step: "scroll", requiresEnabled: true, requiresFocused: false)

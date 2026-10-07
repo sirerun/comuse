@@ -6,7 +6,7 @@ final class WireTests: XCTestCase {
     func testRemainingNativeInventoryUsesSyntheticAccessAndPosterRoutes() async throws {
         try await MainActor.run {
             let payloads = [
-                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"click"}"#,
+                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"press"}"#,
                 #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"pick"}"#,
                 #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"focus"}"#,
                 #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"scroll","direction":"down","amount":"line"}"#,
@@ -297,10 +297,12 @@ final class WireTests: XCTestCase {
 
     func check(requestID: UInt64, deadline: TimeInterval) throws {}
     func revalidate(_ action: NativeAction) throws -> NativeActionTarget {
-        target = NativeActionTarget(actionID: action.id, windowRef: action.windowRef, elementRef: action.elementRef,
-                                    stateID: action.stateID, process: target.process, role: target.role,
-                                    classification: target.classification, enabled: target.enabled,
-                                    focused: target.focused, windowFocused: target.windowFocused)
+        if action.elementRef.isEmpty && action.stateID.isEmpty {
+            target = NativeActionTarget(actionID: action.id, windowRef: action.windowRef, elementRef: "",
+                                        stateID: "", process: target.process, role: target.role,
+                                        classification: target.classification, enabled: target.enabled,
+                                        focused: target.focused, windowFocused: target.windowFocused)
+        }
         return target
     }
     func supports(_ kind: String, target: NativeActionTarget) throws -> Bool { supportsActions }
@@ -336,7 +338,7 @@ final class WireTests: XCTestCase {
 private func nativeTestMethod(_ action: NativeAction) -> String {
     switch action.kind {
     case "insert", "type_text": return "cg_unicode"
-    case "click": return action.elementRef.isEmpty ? "cg_click" : "ax_press"
+    case "click": return "cg_click"
     case "press_key": return "cg_key"
     case "coordinate_scroll": return "cg_scroll"
     case "drag": return "cg_drag"

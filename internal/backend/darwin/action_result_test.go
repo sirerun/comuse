@@ -40,7 +40,7 @@ func TestNativeInventoryValidationAndMethodMapping(t *testing.T) {
 		action backend.Action
 		method string
 	}{
-		{"semantic_click", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionClick}, "ax_press"},
+		{"semantic_click_as_press", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionPress}, "ax_press"},
 		{"pick", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionPick}, "ax_pick"},
 		{"focus", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionFocus}, "ax_focus"},
 		{"semantic_scroll", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionScroll, Direction: "down", Amount: "line"}, "ax_scroll"},
