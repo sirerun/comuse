@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 import XCTest
 @testable import ComuseMacOS
 
@@ -390,6 +391,15 @@ final class WireTests: XCTestCase {
         let replace = #"{"schema_version":1,"request_id":"r3","operation":"execute","action":{"id":"a2","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"replace","text":""}}"#.data(using: .utf8)!
         let decodedReplace = try decodeNativeRequest(replace)
         XCTAssertEqual(decodedReplace.action?.text, "")
+    }
+
+    func testProductionAXValueInspectionRejectsWrongCFTypes() throws {
+        XCTAssertNil(nativeAXValue("wrong type" as CFString))
+        XCTAssertNil(nativeAXValue(kCFBooleanTrue))
+        var point = CGPoint(x: 1, y: 2)
+        let value = try XCTUnwrap(AXValueCreate(.cgPoint, &point))
+        XCTAssertNotNil(nativeAXValue(value))
+        XCTAssertEqual(AXValueGetType(try XCTUnwrap(nativeAXValue(value))), .cgPoint)
     }
 
     func testProductionDecoderRequiresAllActionFieldsIncludingZeroAndEmptyValues() throws {

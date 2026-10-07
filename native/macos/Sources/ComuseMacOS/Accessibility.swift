@@ -7,6 +7,13 @@ import Darwin
 import Foundation
 
 enum NativeReferenceKind: Equatable { case window, element }
+// AX attributes are untrusted CF values; inspect their runtime type before
+// invoking AXValue APIs on a retained pointer.
+func nativeAXValue(_ raw: CFTypeRef) -> AXValue? {
+    guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    return unsafeBitCast(raw, to: AXValue.self)
+}
+
 
 func nativeElementIdentityIsCurrent(actualPID: Int32, expected: NativeProcess, current: NativeProcess) -> Bool {
     actualPID > 0 && actualPID == expected.pid && current == expected
@@ -513,7 +520,7 @@ private struct AXActionAccess: NativeActionAccess {
             throw ProbeFailure(code: "unsupported")
         }
         var range = CFRange(location: 0, length: 0)
-        let value = unsafeBitCast(rawRange, to: AXValue.self)
+        guard let value = nativeAXValue(rawRange) else { throw ProbeFailure(code: "state_expired") }
         guard AXValueGetType(value) == .cfRange, AXValueGetValue(value, .cfRange, &range) else {
             throw ProbeFailure(code: "state_expired")
         }
@@ -574,13 +581,14 @@ private func textRole(_ role: String) -> Bool {
 
 private func axBounds(_ element: AXUIElement) -> CGRect? {
     guard let position = copyAttribute(element, kAXPositionAttribute as String),
-          let size = copyAttribute(element, kAXSizeAttribute as String) else { return nil }
+          let size = copyAttribute(element, kAXSizeAttribute as String),
+          let positionValue = nativeAXValue(position), let sizeValue = nativeAXValue(size) else { return nil }
     var point = CGPoint.zero
     var dimensions = CGSize.zero
-    guard AXValueGetType((unsafeBitCast(position, to: AXValue.self))) == .cgPoint,
-          AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
-          AXValueGetType(unsafeBitCast(size, to: AXValue.self)) == .cgSize,
-          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions) else { return nil }
+    guard AXValueGetType(positionValue) == .cgPoint,
+          AXValueGetValue(positionValue, .cgPoint, &point),
+          AXValueGetType(sizeValue) == .cgSize,
+          AXValueGetValue(sizeValue, .cgSize, &dimensions) else { return nil }
     let bounds = CGRect(origin: point, size: dimensions)
     return bounds.isFinitePositive ? bounds : nil
 }
