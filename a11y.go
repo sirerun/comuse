@@ -128,6 +128,7 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	if !exists {
 		return Observation{}, coreError("element_stale")
 	}
+	s.account(callCtx, CounterObservationA11y, 1)
 	native, callErr := s.backend.Observe(callCtx, windowRef, s.budget)
 	if callErr != nil {
 		return Observation{}, s.stableBackendError(callCtx, callErr)
@@ -166,6 +167,7 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	if _, ok := s.window(windowRef); !ok {
 		return ElementContent{}, coreError("element_stale")
 	}
+	s.account(callCtx, CounterObservationA11y, 1)
 	current, callErr := s.backend.Observe(callCtx, windowRef, s.budget)
 	if callErr != nil {
 		return ElementContent{}, s.stableBackendError(callCtx, callErr)

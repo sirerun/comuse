@@ -43,6 +43,7 @@ type Session struct {
 	terminalCloseCode string
 	permissionEpoch   uint64
 
+	ledger           *Ledger
 	backend          Backend
 	scope            Scope
 	budget           Budget
@@ -124,6 +125,7 @@ func NewSession(config Config) (*Session, error) {
 	config.WriterKey = append([]byte(nil), config.WriterKey...)
 	return &Session{
 		changed:          make(chan struct{}),
+		ledger:           NewLedger(),
 		backend:          config.Backend,
 		scope:            config.Scope,
 		budget:           config.Budget,
