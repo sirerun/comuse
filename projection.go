@@ -61,9 +61,6 @@ func projectDoctor(value DoctorReport) MetadataDoctor {
 	for key, permission := range value.Permissions {
 		permissions[key] = permission
 	}
-	if permissions == nil {
-		permissions = map[string]string{}
-	}
 	return MetadataDoctor{Capabilities: MetadataCapabilities{
 		Accessibility: value.Capabilities.Accessibility, Input: value.Capabilities.Input,
 		ScreenCapture: value.Capabilities.ScreenCapture, QualifiedInput: value.Capabilities.QualifiedInput,

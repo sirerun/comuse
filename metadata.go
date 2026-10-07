@@ -145,7 +145,7 @@ func validIdentifier(value string) bool {
 		return false
 	}
 	for _, c := range value {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._:/-", c)) {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("._:/-", c) {
 			return false
 		}
 	}
@@ -279,7 +279,7 @@ func validReason(v string) bool {
 		return false
 	}
 	for _, c := range v {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
 			return false
 		}
 	}
@@ -530,7 +530,7 @@ func validStateID(value string) bool {
 		return false
 	}
 	for _, c := range value {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

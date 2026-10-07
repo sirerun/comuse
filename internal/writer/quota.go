@@ -70,7 +70,7 @@ func (q *QuotaStore) Reserve(ctx context.Context, commitment [32]byte) error {
 	return q.reserveAt(ctx, commitment, time.Now())
 }
 
-func (q *QuotaStore) reserveAt(ctx context.Context, commitment [32]byte, now time.Time) error {
+func (q *QuotaStore) reserveAt(ctx context.Context, commitment [32]byte, now time.Time) (returnedErr error) {
 	if ctx == nil || q == nil || q.uid == 0 || !filepath.IsAbs(q.root) {
 		return errors.New("quota store is not safely initialized")
 	}
@@ -89,7 +89,7 @@ func (q *QuotaStore) reserveAt(ctx context.Context, commitment [32]byte, now tim
 	if err != nil {
 		return fmt.Errorf("open UID quota lock: %w", err)
 	}
-	defer lockFile.Close()
+	defer func() { returnedErr = errors.Join(returnedErr, lockFile.Close()) }()
 	info, err := lockFile.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return errors.New("UID quota lock is not a regular file")
@@ -103,7 +103,7 @@ func (q *QuotaStore) reserveAt(ctx context.Context, commitment [32]byte, now tim
 	if err := acquireFileLock(ctx, lockFile); err != nil {
 		return err
 	}
-	defer releaseFileLock(lockFile)
+	defer func() { returnedErr = errors.Join(returnedErr, releaseFileLock(lockFile)) }()
 
 	state, err := loadQuotaState(statePath, q.uid)
 	if err != nil {
@@ -154,7 +154,7 @@ func (q *QuotaStore) reserveAt(ctx context.Context, commitment [32]byte, now tim
 	return nil
 }
 
-func loadQuotaState(path string, uid uint32) (quotaDiskState, error) {
+func loadQuotaState(path string, uid uint32) (result quotaDiskState, returnedErr error) {
 	state := quotaDiskState{Version: 1, Reservations: []quotaReservation{}}
 	file, err := openLedgerFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -163,7 +163,7 @@ func loadQuotaState(path string, uid uint32) (quotaDiskState, error) {
 	if err != nil {
 		return quotaDiskState{}, fmt.Errorf("open durable UID quota: %w", err)
 	}
-	defer file.Close()
+	defer func() { returnedErr = errors.Join(returnedErr, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxQuotaBytes {
 		return quotaDiskState{}, errors.New("durable UID quota has invalid type or size")

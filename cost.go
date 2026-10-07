@@ -357,13 +357,6 @@ func saturatingAdd(value, amount uint64) uint64 {
 	return value + amount
 }
 
-func delta(current, baseline uint64) uint64 {
-	if current < baseline {
-		return 0
-	}
-	return current - baseline
-}
-
 func saturatingDuration(start time.Time) uint64 {
 	if start.IsZero() {
 		return 0
