@@ -44,7 +44,169 @@
         "code",
         "message"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_request"
+            },
+            "message": {
+              "const": "invalid_request"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "policy_refused"
+            },
+            "message": {
+              "const": "policy_refused"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "approval_required"
+            },
+            "message": {
+              "const": "approval_required"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "element_stale"
+            },
+            "message": {
+              "const": "element_stale"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "state_expired"
+            },
+            "message": {
+              "const": "state_expired"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "permission_denied"
+            },
+            "message": {
+              "const": "permission_denied"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unsupported"
+            },
+            "message": {
+              "const": "unsupported"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "backend_unavailable"
+            },
+            "message": {
+              "const": "backend_unavailable"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "desktop_busy"
+            },
+            "message": {
+              "const": "desktop_busy"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "rate_limited"
+            },
+            "message": {
+              "const": "rate_limited"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "budget_exceeded"
+            },
+            "message": {
+              "const": "budget_exceeded"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "cancelled"
+            },
+            "message": {
+              "const": "cancelled"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "session_closed"
+            },
+            "message": {
+              "const": "session_closed"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_outcome"
+            },
+            "message": {
+              "const": "unknown_outcome"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "internal_error"
+            },
+            "message": {
+              "const": "internal_error"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "replay_result_expired"
+            },
+            "message": {
+              "const": "replay_result_expired"
+            }
+          }
+        }
+      ]
     },
     "Verification": {
       "type": "object",
@@ -385,7 +547,7 @@
           "const": 1
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "scope_id": {
           "$ref": "#/$defs/Opaque"
@@ -395,7 +557,8 @@
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "maxLength": 40
         },
         "action_sequence": {
           "type": "integer",
@@ -460,7 +623,7 @@
           "const": 1
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "scope_id": {
           "$ref": "#/$defs/Opaque"
@@ -470,7 +633,8 @@
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "maxLength": 40
         },
         "action_sequence": {
           "type": "integer",
@@ -487,7 +651,7 @@
           "const": "delta"
         },
         "base_state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "upsert": {
           "type": "object",
@@ -534,7 +698,7 @@
           "const": 1
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "scope_id": {
           "$ref": "#/$defs/Opaque"
@@ -544,7 +708,8 @@
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "maxLength": 40
         },
         "action_sequence": {
           "type": "integer",
@@ -561,7 +726,7 @@
           "const": "unchanged"
         },
         "base_state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         }
       },
       "required": [
@@ -591,11 +756,12 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "maxLength": 40
         },
         "text": {
           "type": "string",
@@ -652,7 +818,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/Opaque"
+              "$ref": "#/$defs/StateID"
             }
           ]
         },
@@ -731,6 +897,12 @@
             "properties": {
               "window_ref": {
                 "type": "null"
+              },
+              "condition": {
+                "const": "window_appears"
+              },
+              "satisfied": {
+                "const": false
               }
             }
           }
@@ -1195,11 +1367,12 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "maxLength": 40
         },
         "elements": {
           "type": "array",
@@ -1873,6 +2046,85 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "$ref": "#/$defs/WaitResult"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "$ref": "#/$defs/LegacySnapshot"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "$ref": "#/$defs/Snapshot"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "const": "ambiguous"
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Error"
+                  },
+                  {
+                    "properties": {
+                      "code": {
+                        "const": "unsupported"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
         }
       ]
     },
@@ -1889,7 +2141,7 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         }
       },
       "required": [
@@ -1913,7 +2165,7 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "kind": {
           "enum": [
@@ -1945,7 +2197,7 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "mode": {
           "enum": [
@@ -1982,7 +2234,7 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "direction": {
           "enum": [
@@ -2019,7 +2271,7 @@
           "$ref": "#/$defs/Opaque"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         }
       },
       "required": [
@@ -2043,10 +2295,10 @@
           ]
         },
         "since": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         },
         "state_id": {
-          "$ref": "#/$defs/Opaque"
+          "$ref": "#/$defs/StateID"
         }
       },
       "required": [
@@ -2188,7 +2440,7 @@
               "$ref": "#/$defs/Opaque"
             },
             "state_id": {
-              "$ref": "#/$defs/Opaque"
+              "$ref": "#/$defs/StateID"
             }
           },
           "required": [
@@ -2223,7 +2475,7 @@
               "$ref": "#/$defs/Opaque"
             },
             "state_id": {
-              "$ref": "#/$defs/Opaque"
+              "$ref": "#/$defs/StateID"
             },
             "expected": {
               "type": "boolean"
@@ -2262,7 +2514,7 @@
               "$ref": "#/$defs/Opaque"
             },
             "state_id": {
-              "$ref": "#/$defs/Opaque"
+              "$ref": "#/$defs/StateID"
             },
             "expected": {
               "type": "boolean"
@@ -2632,6 +2884,10 @@
       "properties": {},
       "required": [],
       "additionalProperties": false
+    },
+    "StateID": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     }
   }
 }
