@@ -44,10 +44,10 @@ func TestParseHelloResponseRejectsInvalidOrUnexpectedEnvelopes(t *testing.T) {
 
 func TestValidateCompletionHandle(t *testing.T) {
 	t.Parallel()
-	if err := validateCompletionHandle(completion{handle: 71}, 71); err != nil {
+	if err := validateCompletionHandle(71, 71); err != nil {
 		t.Fatalf("matching callback handle rejected: %v", err)
 	}
-	if err := validateCompletionHandle(completion{handle: 72}, 71); err == nil {
+	if err := validateCompletionHandle(72, 71); err == nil {
 		t.Fatal("mismatched callback handle was accepted")
 	}
 }
