@@ -36,6 +36,7 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	// Reasons and permission values are implementation diagnostics. Retain only
 	// the closed capability booleans and known, stable permission statuses.
 	report.Capabilities.Reasons = nil
+	report.Capabilities.ActionKinds = allowedActions(report.Capabilities.ActionKinds)
 	permissions := make(map[string]string)
 	for name, state := range report.Permissions {
 		if !knownPermission(name) {

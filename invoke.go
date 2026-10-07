@@ -38,6 +38,10 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 	}
 	defer done()
 	ctx = callCtx
+	if request.mutation() && !s.mutationEnabled {
+		outcome := notApplied(requestActionID(request))
+		return finishCall(s, call, request.Operation, outcome, nil, &outcome, coreError("unsupported"))
+	}
 	if unsupportedOperation(request.Operation) {
 		if actionID := requestActionID(request); actionID != "" {
 			outcome := notApplied(actionID)

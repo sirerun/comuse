@@ -171,6 +171,9 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	if !doctor.Capabilities.Input || !doctor.Capabilities.QualifiedInput {
 		return notApplied(action.ID), coreError("policy_refused")
 	}
+	if !qualifiedActionKind(doctor.Capabilities, action.Kind) {
+		return notApplied(action.ID), coreError("unsupported")
+	}
 	if s.approvalProvider == nil {
 		return notApplied(action.ID), coreError("approval_required")
 	}
