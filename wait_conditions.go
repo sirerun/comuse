@@ -176,8 +176,14 @@ func (s *Session) pollWaitCondition(ctx context.Context, params WaitParams, boun
 		}
 		return false, nil, nil, nil
 	case "window_closed":
+		contextEpoch := s.contextEpochNow()
 		windows, err := s.Windows(ctx)
 		if err != nil {
+			return false, nil, nil, err
+		}
+		// Absence is closure evidence only after a fresh permission and
+		// desktop-authority check; revoked AX can enumerate an empty list.
+		if _, _, err := s.revalidateDesktopAuthority(ctx, contextEpoch); err != nil {
 			return false, nil, nil, err
 		}
 		for _, window := range windows {
