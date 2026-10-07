@@ -9,6 +9,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sirerun/comuse"
 )
@@ -19,6 +20,7 @@ const (
 	maxArgumentBytes      = 16 * 1024
 	maxFrameBytes         = 64 * 1024
 	maxOutboundFrameBytes = 16 * 1024 * 1024
+	ledgerResourceURI     = "comuse://session/ledger"
 )
 
 var errOutboundFrameTooLarge = errors.New("outbound MCP frame exceeds configured maximum")
@@ -92,8 +94,33 @@ func newServer(session *comuse.Session, routes []route) *sdk.Server {
 			OutputSchema: outputSchema(),
 		}, routeHandler(session, item.operation))
 	}
+	server.AddResource(&sdk.Resource{
+		URI:         ledgerResourceURI,
+		Name:        "comuse_ledger",
+		MIMEType:    "application/json",
+		Description: "Read the cumulative ledger for this host-owned session.",
+	}, ledgerResourceHandler(session))
 	server.AddReceivingMiddleware(unsupportedSemanticMiddleware(session))
 	return server
+}
+
+func ledgerResourceHandler(session *comuse.Session) sdk.ResourceHandler {
+	return func(ctx context.Context, request *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
+		if request == nil || request.Params == nil || request.Params.URI != ledgerResourceURI {
+			return nil, sdk.ResourceNotFoundError(ledgerResourceURI)
+		}
+		snapshot, err := session.Ledger(ctx)
+		if err != nil {
+			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: comuse.ErrorCode(err)}
+		}
+		encoded, err := json.Marshal(snapshot)
+		if err != nil {
+			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "internal_error"}
+		}
+		return &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{
+			URI: ledgerResourceURI, MIMEType: "application/json", Text: string(encoded),
+		}}}, nil
+	}
 }
 
 // Serve runs the official SDK over an owned bounded stdio-like stream.

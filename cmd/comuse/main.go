@@ -61,14 +61,21 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 	if err := fs.Parse(args); err != nil {
 		return emitRejection(out, "invalid_request")
 	}
-	if fs.NArg() != 1 || *configPath == "" {
+	if (*configPath == "") || (fs.NArg() != 1 && fs.NArg() != 2) {
 		return emitRejection(out, "invalid_request")
 	}
 	command := fs.Arg(0)
+	ledgerFlag := fs.NArg() == 2 && command == "state" && fs.Arg(1) == "--ledger"
+	if fs.NArg() == 2 && !ledgerFlag {
+		return emitRejection(out, "invalid_request")
+	}
 	if command != "mcp" && !cli.IsCommand(command) {
 		return emitRejection(out, "invalid_request")
 	}
 	if command == "mcp" {
+		if fs.NArg() != 1 {
+			return emitRejection(out, "invalid_request")
+		}
 		cfg, err := loadConfig(*configPath)
 		if err != nil {
 			return emitRejection(out, "invalid_request")
@@ -98,7 +105,11 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			}
 		}()
 		commandStarted = true
-		commandCode = cli.Run(ctx, session, []string{command}, in, out, diagnostics)
+		commandArgs := []string{command}
+		if ledgerFlag {
+			commandArgs = append(commandArgs, "--ledger")
+		}
+		commandCode = cli.Run(ctx, session, commandArgs, in, out, diagnostics)
 		return nil
 	})
 	if err != nil {

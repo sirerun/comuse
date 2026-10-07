@@ -97,3 +97,26 @@ func TestInvalidArgumentsDoNotReachHostOrPolluteStderr(t *testing.T) {
 		}
 	}
 }
+
+func TestStateLedgerLaunchFlagReachesHostDispatcher(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "host.json")
+	if err := os.WriteFile(config, []byte(`{"library_path":"/native/library"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output, diagnostics bytes.Buffer
+	code := run(t.Context(), []string{"--config", config, "state", "--ledger"}, strings.NewReader(""), &output, &diagnostics)
+	if code == 2 {
+		t.Fatalf("state --ledger rejected before host dispatch: %s", output.String())
+	}
+	if diagnostics.Len() != 0 || strings.Contains(output.String(), config) {
+		t.Fatalf("diagnostics=%q output=%q", diagnostics.String(), output.String())
+	}
+	var envelope comuse.ResultEnvelope
+	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "unsupported" {
+		t.Fatalf("Linux host setup should reach the existing unsupported backend gate, got %s", output.String())
+	}
+}

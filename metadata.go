@@ -73,7 +73,10 @@ type ModelUsage struct {
 	Estimate *EstimateUsageRecord `json:"estimate"`
 }
 
-func (m ModelUsage) clone() *ModelUsage {
+func (m *ModelUsage) clone() *ModelUsage {
+	if m == nil {
+		return nil
+	}
 	out := ModelUsage{}
 	if m.Actual != nil {
 		actual := *m.Actual
@@ -95,11 +98,8 @@ func (c *CallSnapshot) ReportActual(report ActualModelUsage) error {
 	if c == nil {
 		return ErrInvalidMetadata
 	}
-	actual := ActualUsageRecord{Kind: "actual", Source: report.Source, Model: report.Model,
-		InputTokens: report.InputTokens, OutputTokens: report.OutputTokens, ImageTokens: report.ImageTokens,
-		CostUSD: cloneString(report.CostUSD)}
-	if !validIdentifier(actual.Source) || !validIdentifier(actual.Model) ||
-		!jsonSafe(actual.InputTokens) || !jsonSafe(actual.OutputTokens) || !jsonSafe(actual.ImageTokens) || !validCost(actual.CostUSD) {
+	usage, err := newModelUsage(&report, nil)
+	if err != nil {
 		return ErrInvalidMetadata
 	}
 	c.mu.Lock()
@@ -108,9 +108,10 @@ func (c *CallSnapshot) ReportActual(report ActualModelUsage) error {
 		return ErrCallFinished
 	}
 	if c.modelUsage == nil {
-		c.modelUsage = &ModelUsage{}
+		c.modelUsage = usage
+	} else {
+		c.modelUsage.Actual = usage.Actual
 	}
-	c.modelUsage.Actual = &actual
 	return nil
 }
 
@@ -118,14 +119,8 @@ func (c *CallSnapshot) ReportEstimate(report EstimateModelUsage) error {
 	if c == nil {
 		return ErrInvalidMetadata
 	}
-	estimate := EstimateUsageRecord{Kind: "estimate", Source: report.Source, Model: report.Model,
-		Version: report.Version, Detail: report.Detail, Method: report.Method,
-		InputTokensEst: cloneUint64(report.InputTokensEst), OutputTokensEst: cloneUint64(report.OutputTokensEst),
-		ImageTokensEst: cloneUint64(report.ImageTokensEst), CostUSDEst: cloneString(report.CostUSDEst)}
-	if !validIdentifier(estimate.Source) || !validIdentifier(estimate.Model) || !validIdentifier(estimate.Version) ||
-		!validIdentifier(estimate.Detail) || !validIdentifier(estimate.Method) ||
-		!validOptionalJSONSafe(estimate.InputTokensEst) || !validOptionalJSONSafe(estimate.OutputTokensEst) ||
-		!validOptionalJSONSafe(estimate.ImageTokensEst) || !validCost(estimate.CostUSDEst) {
+	usage, err := newModelUsage(nil, &report)
+	if err != nil {
 		return ErrInvalidMetadata
 	}
 	c.mu.Lock()
@@ -134,10 +129,39 @@ func (c *CallSnapshot) ReportEstimate(report EstimateModelUsage) error {
 		return ErrCallFinished
 	}
 	if c.modelUsage == nil {
-		c.modelUsage = &ModelUsage{}
+		c.modelUsage = usage
+	} else {
+		c.modelUsage.Estimate = usage.Estimate
 	}
-	c.modelUsage.Estimate = &estimate
 	return nil
+}
+
+func newModelUsage(actualReport *ActualModelUsage, estimateReport *EstimateModelUsage) (*ModelUsage, error) {
+	usage := &ModelUsage{}
+	if actualReport != nil {
+		actual := ActualUsageRecord{Kind: "actual", Source: actualReport.Source, Model: actualReport.Model,
+			InputTokens: actualReport.InputTokens, OutputTokens: actualReport.OutputTokens, ImageTokens: actualReport.ImageTokens,
+			CostUSD: cloneString(actualReport.CostUSD)}
+		if !validIdentifier(actual.Source) || !validIdentifier(actual.Model) ||
+			!jsonSafe(actual.InputTokens) || !jsonSafe(actual.OutputTokens) || !jsonSafe(actual.ImageTokens) || !validCost(actual.CostUSD) {
+			return nil, ErrInvalidMetadata
+		}
+		usage.Actual = &actual
+	}
+	if estimateReport != nil {
+		estimate := EstimateUsageRecord{Kind: "estimate", Source: estimateReport.Source, Model: estimateReport.Model,
+			Version: estimateReport.Version, Detail: estimateReport.Detail, Method: estimateReport.Method,
+			InputTokensEst: cloneUint64(estimateReport.InputTokensEst), OutputTokensEst: cloneUint64(estimateReport.OutputTokensEst),
+			ImageTokensEst: cloneUint64(estimateReport.ImageTokensEst), CostUSDEst: cloneString(estimateReport.CostUSDEst)}
+		if !validIdentifier(estimate.Source) || !validIdentifier(estimate.Model) || !validIdentifier(estimate.Version) ||
+			!validIdentifier(estimate.Detail) || !validIdentifier(estimate.Method) ||
+			!validOptionalJSONSafe(estimate.InputTokensEst) || !validOptionalJSONSafe(estimate.OutputTokensEst) ||
+			!validOptionalJSONSafe(estimate.ImageTokensEst) || !validCost(estimate.CostUSDEst) {
+			return nil, ErrInvalidMetadata
+		}
+		usage.Estimate = &estimate
+	}
+	return usage, nil
 }
 
 func validIdentifier(value string) bool {
