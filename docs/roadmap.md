@@ -3,27 +3,28 @@
 ## Shipped
 
 - Versioned native feasibility seam — PR #6.
-- Bounded feasibility source — PR #7, landed da0071a; reviewed tree equality and recorded local checks. Runtime acceptance remains open.
-- Production source plan — PR #8; source coding separated from runtime qualification.
+- Bounded feasibility source — PR #7, da0071a; runtime acceptance open.
+- Production source plan — PR #8.
+- Production semantic runtime foundation — PR #9,98b5b81; independently reviewed, local checks, exact landed tree and landed tests/race passed. Default native input remains disabled.
 
 ## In progress
 
-- Public Go session, semantic observations, policy and durable writer/replay — core Luna lane.
-- Production macOS bridge and scoped semantic backend — native Luna lane.
-- Official SDK readonly MCP adapter and protocol tests — adapter Luna lane.
-- Shared contracts, persistent CLI and integration — coordinator.
+- Remaining Phase1 source parity contract — coordinator, independent review queued.
+- Source plan continuation and E3 decomposition — coordinator.
 
 ## In flight
 
-- Production source integration and exact-head local verification/review are pending worker completion.
+- No implementation PR open after foundation merge; isolated parity contract candidate awaiting review.
 
 ## Planned
 
-- Complete Phase1 RFC parity, semantic diffs/history/recovery, Phase2 app opening and explicit image fallback.
-- Qualified artifacts and runtime/support matrix; publication requires its own release authorization.
+- Full response/accounting, semantic scroll, complete action/wait/read inventory, canonical desktop exclusion and durable minute quotas.
+- Semantic diffs/history/recovery and library/CLI/MCP reconstruction.
+- Phase2 authorized app opening, explicit image fallback and artifact qualification.
 
 ## Blocked
 
-- Heavy verification holds while shared-machine one-minute load exceeds10.
-- Hosted Actions cannot start due to account billing; use authorized local evidence.
-- Controlled GUI/live-input and minimum-OS runtime qualification remain open. Native mutations stay closed; source/build evidence is not acceptance.
+- Hosted Actions cannot start due billing; authorized local evidence remains delivery gate.
+- Shared Mac load intermittently holds native builds; portable work moved to isolated DGX execution.
+- Fixture windows unavailable; live AX/action acceptance and minimumOS runtime qualification remain open.
+- Signing, release publishing and deployment have separate owner gates.

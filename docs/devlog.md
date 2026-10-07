@@ -77,3 +77,7 @@ The actual dedicated fixture command opened the native bridge on its process-mai
 ## 2026-10-06 — Bounded feasibility source landed
 
 PR #7 rebase merged at da0071a8929500d159a5f356fc7140d8020963dc; exact tree matches independently reviewed e97. Full recorded local checks provide source evidence while hosted Actions cannot start due to billing. Owner requests coding-first delivery; added source-specific E1 stages and expanded E2 source tasks. Existing GUI, mutation and minimum-OS gates stay open.
+
+## 2026-10-07 — Production foundation landed and source continuation
+
+PR #9 source1830cf5 independently approved and rebase merged98b5b81 over776e953. Reviewed and landed trees equal, revision reachable from current main, landed Linux Go/race checks passed. Mac exact-source Darwin tests/lint/full race passed; unchanged Swift native source had eight tests and macOS14-target build passing8797. Every hosted failing check individually reported billing-only job-not-started. No protections changed. Actual read-only CLI/MCP Doctor/protocol/EOF/idleSIGINT checks passed from protected external-backed artifact volume; fixture window list empty and complete opt-in native probe failed path admission. No GUI/action/minimumOS/signing/release acceptance claimed. Portable coding/reviews moved to isolated DGX worktrees with checked transfer hashes and preserved originals. Shared dispatcher owns fair Luna admission; remaining source parity, E3 and later phases are unfinished.
