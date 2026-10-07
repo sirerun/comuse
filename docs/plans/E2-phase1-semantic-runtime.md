@@ -179,3 +179,9 @@ Native inventory author e8637fb is integrated17c8148. Actual Apple qualification
 - [ ] T2.68 Verify inspected desktop context convergence Owner: coordinator Est: 1h kind: agent stage: verify lane: agent blocked-by: [T2.67, T2.48] verifies: [UC-001, UC-003, UC-008, UC-012, UC-016] acc: [Synthetic context/focus/display change and concurrent stale binding tests plus actual Apple producer compilation and strict Go decoder checks pass exact integrated head, without input or runtime qualification]
 
 Context Luna owns common backend DTO, core/a11y/desktop/projection/invoke, ledger_view and wait_conditions source convergence plus dedicated context tests. Native correction Luna retains native/macos and backend/darwin. Proposed desktop_context is trusted backend evidence, never model request authority; literal default production false gates stay closed. T2.27 complete independent review covers T2.67 as part of full candidate.
+
+## Portable source early independent inspection
+
+- [ ] T2.69 Independently inspect verified portable parity source Owner: independent Luna Est: 1h kind: agent stage: review lane: agent blocked-by: [T2.19, T2.21, T2.23, T2.25, T2.31, T2.44, T2.46, T2.50] verifies: [UC-001, UC-003, UC-008, UC-012, UC-016] acc: [Nonauthor immutable base/head review of all portable core/wire/adapter/accounting/writer/puresemantic-history changes records stable findings, no source edits. Native and in-flight context excluded explicitly; this receipt never substitutes T2.27 complete final review or permits merge]
+
+Early portable review runs against the verified source snapshot while native/context leaves continue in isolated ownership. Findings retain exact frozen evidence and create fix/affected verification/rereview tasks if accepted. Complete final native/context integrated candidate still requires T2.26/27.
