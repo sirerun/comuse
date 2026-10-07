@@ -286,10 +286,11 @@ func (s *Session) retainQuarantinedLease(lease *writer.Lease) {
 }
 
 func (s *Session) quarantineLease(lease *writer.Lease, actionID, reason string) (ActionResult, error) {
-	_ = lease.Quarantine(reason)
-	s.mu.Lock()
-	s.quarantined = append(s.quarantined, lease)
-	s.mu.Unlock()
+	if err := lease.Quarantine(reason); err != nil {
+		s.retainQuarantinedLease(lease)
+		return unknownResult(actionID), coreError("unknown_outcome")
+	}
+	s.retainQuarantinedLease(lease)
 	return unknownResult(actionID), coreError("unknown_outcome")
 }
 
