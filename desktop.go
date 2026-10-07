@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/sirerun/comuse/internal/writer"
 )
@@ -15,8 +16,14 @@ const actionPolicyVersion uint64 = 1
 
 // Do admits one host-approved action against a fresh complete scoped snapshot.
 func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, returnedErr error) {
-	if err := validateAction(action); err != nil {
-		return notApplied(action.ID), err
+	var validationErr error
+	if isDeveloperActionKind(action.Kind) {
+		validationErr = validateDeveloperAction(action)
+	} else {
+		validationErr = validateAction(action)
+	}
+	if validationErr != nil {
+		return notApplied(action.ID), validationErr
 	}
 	if s == nil || !s.mutationEnabled {
 		return notApplied(action.ID), coreError("approval_required")
@@ -78,16 +85,44 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 		return result, nil
 	}
 
-	prior, ok := s.findSnapshot(action.WindowRef, action.StateID)
-	if !ok {
-		return notApplied(action.ID), coreError("state_expired")
-	}
-	if !normalTarget(prior.public, action.ElementRef) || !hasAdvertisedAction(prior.public, action.ElementRef, action.Kind) {
-		return notApplied(action.ID), coreError("policy_refused")
-	}
-	window, ok := s.window(action.WindowRef)
-	if !ok || !scopeContains(s.scope, window.Process) {
-		return notApplied(action.ID), coreError("element_stale")
+	// A well-formed new action admission is charged once after durable replay
+	// lookup, including later policy refusals and cancellation. Exact replays
+	// above do not consume another logical action.
+	s.account(callCtx, CounterActions, 1)
+	raw := isDeveloperActionKind(action.Kind)
+	var prior snapshotBinding
+	var window Window
+	var nativeState string
+	var observedAt time.Time
+	if raw {
+		windows, windowsErr := s.Windows(callCtx)
+		if windowsErr != nil {
+			return notApplied(action.ID), windowsErr
+		}
+		var found bool
+		for _, candidate := range windows {
+			if candidate.Ref == action.WindowRef {
+				window, found = candidate, true
+				break
+			}
+		}
+		if !found || !scopeContains(s.scope, window.Process) {
+			return notApplied(action.ID), coreError("element_stale")
+		}
+		observedAt = s.now()
+	} else {
+		var ok bool
+		prior, ok = s.findSnapshot(action.WindowRef, action.StateID)
+		if !ok {
+			return notApplied(action.ID), coreError("state_expired")
+		}
+		if !normalTarget(prior.public, action.ElementRef) || !hasAdvertisedAction(prior.public, action.ElementRef, action.Kind) {
+			return notApplied(action.ID), coreError("policy_refused")
+		}
+		window, ok = s.window(action.WindowRef)
+		if !ok || !scopeContains(s.scope, window.Process) {
+			return notApplied(action.ID), coreError("element_stale")
+		}
 	}
 
 	desktop, desktopErr := s.acquireDesktop(callCtx)
@@ -134,29 +169,33 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 		return notApplied(action.ID), coreError("backend_unavailable")
 	}
 
-	// Refresh the observation and capability immediately before admission. A
-	// caller's public state hash remains stable across hidden native state, but
-	// the exact private native state ID is always passed to the backend.
-	s.account(callCtx, CounterObservationA11y, 1)
-	nativeSnapshot, callErr := s.backend.Observe(callCtx, action.WindowRef, s.budget)
-	if callErr != nil {
-		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
-	}
-	current, binding, normalizeErr := s.normalizeObservation(action.WindowRef, nativeSnapshot)
-	if normalizeErr != nil {
-		return notApplied(action.ID), normalizeErr
-	}
-	if !s.rememberSnapshotAtEpoch(binding, epoch) {
-		return notApplied(action.ID), coreError("permission_denied")
-	}
-	if current.StateID != action.StateID {
-		return notApplied(action.ID), coreError("element_stale")
-	}
-	if !current.Coverage.Complete {
-		return notApplied(action.ID), coreError("policy_refused")
-	}
-	if !normalTarget(current, action.ElementRef) || !hasAdvertisedAction(current, action.ElementRef, action.Kind) {
-		return notApplied(action.ID), coreError("element_stale")
+	if !raw {
+		// Refresh the observation and capability immediately before admission.
+		// A caller's public state hash remains stable across hidden native state,
+		// but the exact private native state ID is always passed to the backend.
+		s.account(callCtx, CounterObservationA11y, 1)
+		nativeSnapshot, callErr := s.backend.Observe(callCtx, action.WindowRef, s.budget)
+		if callErr != nil {
+			return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
+		}
+		current, binding, normalizeErr := s.normalizeObservation(action.WindowRef, nativeSnapshot)
+		if normalizeErr != nil {
+			return notApplied(action.ID), normalizeErr
+		}
+		if !s.rememberSnapshotAtEpoch(binding, epoch) {
+			return notApplied(action.ID), coreError("permission_denied")
+		}
+		if current.StateID != action.StateID {
+			return notApplied(action.ID), coreError("element_stale")
+		}
+		if !current.Coverage.Complete {
+			return notApplied(action.ID), coreError("policy_refused")
+		}
+		if !normalTarget(current, action.ElementRef) || !hasAdvertisedAction(current, action.ElementRef, action.Kind) {
+			return notApplied(action.ID), coreError("element_stale")
+		}
+		nativeState = binding.nativeState
+		observedAt = current.ObservedAt
 	}
 	doctor, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
@@ -172,7 +211,11 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	if !doctor.Capabilities.Input || !doctor.Capabilities.QualifiedInput {
 		return notApplied(action.ID), coreError("policy_refused")
 	}
-	if !qualifiedActionKind(doctor.Capabilities, action.Kind) {
+	qualified := qualifiedActionKind(doctor.Capabilities, action.Kind)
+	if raw {
+		qualified = qualifiedDeveloperActionKind(doctor.Capabilities, action.Kind)
+	}
+	if !qualified {
 		return notApplied(action.ID), coreError("unsupported")
 	}
 	if s.approvalProvider == nil {
@@ -245,7 +288,6 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	}
 	s.actionsUsed++
 	s.mu.Unlock()
-	observedAt := current.ObservedAt
 	request := ApprovalRequest{
 		SessionID:     s.sessionID,
 		Action:        action,
@@ -292,14 +334,13 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	}
 
 	nativeAction := action
-	nativeAction.StateID = binding.nativeState
+	nativeAction.StateID = nativeState
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
 	s.mu.Lock()
 	s.actionSequence = saturatingAdd(s.actionSequence, 1)
 	s.mu.Unlock()
-	s.account(callCtx, CounterActions, 1)
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
 	if executeErr != nil {
 		s.invalidateOnBackendError(executeErr)
@@ -416,7 +457,15 @@ func finishLease(lease *writer.Lease, ticket *writer.Ticket, action Action, resu
 	case ExecutionPartiallyApplied:
 		outcome = writer.OutcomePartial
 	}
-	return lease.FinishWithMetadata(ticket, outcome, actionMetadata(action, result, code))
+	metadata := actionMetadata(action, result, code)
+	// The writer's frozen value-free metadata vocabulary predates raw developer
+	// operations. Their exact canonical Action remains in the durable binding;
+	// leave the optional descriptive label empty until that vocabulary is
+	// extended, rather than recording a false semantic action kind.
+	if isDeveloperActionKind(action.Kind) {
+		metadata.Action = ""
+	}
+	return lease.FinishWithMetadata(ticket, outcome, metadata)
 }
 
 func writerCallError(ctx context.Context, err error) error {

@@ -132,6 +132,11 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 		}
 		actionResult = &actionOutcome
 		result = actionOutcome
+	case OperationClick, OperationTypeText, OperationPressKey, OperationScroll, OperationDrag, OperationFocusWindow:
+		actionOutcome, invokeErr := s.runDeveloperAction(ctx, request)
+		err = invokeErr
+		actionResult = &actionOutcome
+		result = actionOutcome
 	default:
 		err = coreError("invalid_request")
 	}
@@ -147,8 +152,6 @@ func (s *Session) ledgerCall() *CallSnapshot {
 
 func unsupportedOperation(operation Operation) bool {
 	switch operation {
-	case OperationClick, OperationTypeText, OperationPressKey, OperationScroll, OperationDrag, OperationFocusWindow:
-		return true
 	default:
 		return false
 	}
@@ -236,7 +239,7 @@ func finishCall(s *Session, call *CallSnapshot, operation Operation, result, obs
 			metadata.Method = &actionResult.Method
 		}
 	}
-	if operation == OperationClickElement || operation == OperationElementAction || operation == OperationWriteElement || operation == OperationScrollElement {
+	if requestMutationOperation(operation) {
 		if metadata.ActionID == nil {
 			metadata.ActionID = mutationActionID(operation, result)
 		}
@@ -266,10 +269,21 @@ func finishCall(s *Session, call *CallSnapshot, operation Operation, result, obs
 
 func mutationActionID(operation Operation, result any) *string {
 	switch operation {
-	case OperationClickElement, OperationElementAction, OperationWriteElement, OperationScrollElement:
+	case OperationClickElement, OperationElementAction, OperationWriteElement, OperationScrollElement,
+		OperationClick, OperationTypeText, OperationPressKey, OperationScroll, OperationDrag, OperationFocusWindow:
 		if p, ok := result.(ActionResult); ok {
 			return &p.ActionID
 		}
 	}
 	return nil
+}
+
+func requestMutationOperation(operation Operation) bool {
+	switch operation {
+	case OperationClickElement, OperationElementAction, OperationWriteElement, OperationScrollElement,
+		OperationClick, OperationTypeText, OperationPressKey, OperationScroll, OperationDrag, OperationFocusWindow:
+		return true
+	default:
+		return false
+	}
 }
