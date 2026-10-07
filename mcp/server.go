@@ -5,63 +5,104 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
-	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sirerun/comuse"
-	"github.com/sirerun/comuse/internal/jsonwire"
 )
 
 const (
-	serverName       = "comuse"
-	serverVersion    = "0.1.0-dev"
-	maxArgumentBytes = 16 * 1024
-	// Max inbound JSON-RPC frame: 16 KiB arguments plus initialize/list overhead.
-	maxFrameBytes = 64 * 1024
-	// Core permits at most 4 MiB of semantic JSON; MCP carries both text and
-	// structured content, so leave room for their enclosing JSON escaping.
+	serverName            = "comuse"
+	serverVersion         = "0.1.0-dev"
+	maxArgumentBytes      = 16 * 1024
+	maxFrameBytes         = 64 * 1024
 	maxOutboundFrameBytes = 16 * 1024 * 1024
-	maxWait               = 30 * time.Second
 )
 
 var errOutboundFrameTooLarge = errors.New("outbound MCP frame exceeds configured maximum")
 
-// NewServer constructs the read-only semantic MCP server for one host-owned
-// session. Approval and policy remain inside the trusted host session.
-func NewServer(session *comuse.Session) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	server.AddTool(tool("computer_state", "Read current scoped session and permission state.", nil, nil, doctorResultSchema()), handler(session, stateTool))
-	server.AddTool(tool("computer_windows", "List scoped windows in the current session.", nil, nil, arraySchema(windowSchema())), handler(session, windowsTool))
-	server.AddTool(tool("computer_a11y", "Read a bounded semantic snapshot for a scoped window.", map[string]any{
-		"window_ref": stringProperty(128),
-	}, []string{"window_ref"}, observationSchema()), handler(session, a11yTool))
-	server.AddTool(tool("computer_read_element", "Read text from a scoped element using its current semantic state identifier.", map[string]any{
-		"window_ref":  stringProperty(128),
-		"element_ref": stringProperty(128),
-		"state_id":    stringProperty(128),
-	}, []string{"window_ref", "element_ref", "state_id"}, elementContentSchema()), handler(session, readElementTool))
-	server.AddTool(tool("computer_wait", "Wait for a bounded semantic observation update for a scoped window.", map[string]any{
-		"window_ref": stringProperty(128),
-		"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": int(maxWait / time.Millisecond)},
-	}, []string{"window_ref", "timeout_ms"}, observationSchema()), handler(session, waitTool))
+type route struct {
+	operation   comuse.Operation
+	request     string
+	description string
+}
+
+var readonlyRoutes = []route{
+	{comuse.OperationState, "EmptyRequest", "Read current scoped session and permission state."},
+	{comuse.OperationWindows, "EmptyRequest", "List scoped windows in the current session."},
+	{comuse.OperationObserve, "ObserveRequest", "Read a bounded semantic snapshot for a scoped window."},
+	{comuse.OperationReadElement, "ReadElementRequest", "Read text from a scoped element using its current semantic state identifier."},
+	{comuse.OperationWait, "WaitRequest", "Wait for a bounded semantic observation update or condition."},
+}
+
+var semanticRoutes = []route{
+	{comuse.OperationClickElement, "ClickElementRequest", "Press a currently observed semantic element."},
+	{comuse.OperationElementAction, "ElementActionRequest", "Perform one qualified semantic element action."},
+	{comuse.OperationWriteElement, "WriteElementRequest", "Replace or insert text in a currently observed semantic element."},
+	{comuse.OperationScrollElement, "ScrollElementRequest", "Scroll one qualified semantic element by one bounded unit."},
+}
+
+var knownSemanticNames = map[string]comuse.Operation{
+	"computer_click_element":  comuse.OperationClickElement,
+	"computer_element_action": comuse.OperationElementAction,
+	"computer_write_element":  comuse.OperationWriteElement,
+	"computer_scroll_element": comuse.OperationScrollElement,
+}
+
+// NewServer returns the default read-only MCP surface and performs no
+// capability probe. Host mutation approval and policy remain in Session.
+func NewServer(session *comuse.Session) *sdk.Server {
+	return newServer(session, readonlyRoutes)
+}
+
+// NewServerForHost adds only semantic action routes qualified by the trusted
+// host session. It never exposes developer coordinate or keyboard routes.
+func NewServerForHost(ctx context.Context, session *comuse.Session) (*sdk.Server, error) {
+	if ctx == nil || session == nil {
+		return nil, errors.New("invalid MCP host session")
+	}
+	qualified, err := session.SemanticOperations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[comuse.Operation]bool, len(qualified))
+	for _, operation := range qualified {
+		allowed[operation] = true
+	}
+	routes := append([]route(nil), readonlyRoutes...)
+	for _, candidate := range semanticRoutes {
+		if allowed[candidate.operation] {
+			routes = append(routes, candidate)
+		}
+	}
+	return newServer(session, routes), nil
+}
+
+func newServer(session *comuse.Session, routes []route) *sdk.Server {
+	server := sdk.NewServer(&sdk.Implementation{Name: serverName, Version: serverVersion}, nil)
+	for _, item := range routes {
+		item := item
+		name := toolName(item.operation)
+		server.AddTool(&sdk.Tool{
+			Name:         name,
+			Description:  item.description,
+			InputSchema:  inputSchema(item.request),
+			OutputSchema: outputSchema(),
+		}, routeHandler(session, item.operation))
+	}
+	server.AddReceivingMiddleware(unsupportedSemanticMiddleware(session))
 	return server
 }
 
-// Serve runs a fresh official SDK server over the supplied stdio-like stream.
+// Serve runs the official SDK over an owned bounded stdio-like stream.
 func Serve(ctx context.Context, session *comuse.Session, stream io.ReadWriteCloser) error {
-	if ctx == nil {
-		return errors.New("nil context")
-	}
-	if session == nil {
-		return errors.New("nil session")
-	}
-	if stream == nil {
-		return errors.New("nil MCP stream")
+	if ctx == nil || session == nil || stream == nil {
+		return errors.New("invalid MCP serve configuration")
 	}
 	closeOnce := &streamClose{stream: stream}
-	transport := &mcp.IOTransport{
+	transport := &sdk.IOTransport{
 		Reader:        &ownedStreamReader{stream: stream, close: closeOnce},
 		Writer:        &boundedFrameWriter{stream: stream, close: closeOnce, maxBytes: maxOutboundFrameBytes},
 		MaxLineLength: maxFrameBytes,
@@ -108,291 +149,101 @@ func (w *boundedFrameWriter) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
-
 func (w *boundedFrameWriter) Close() error { return w.close.closeStream() }
 
-type toolHandler func(context.Context, *comuse.Session, json.RawMessage) (any, error)
-
-func handler(session *comuse.Session, run toolHandler) mcp.ToolHandler {
-	return func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func routeHandler(session *comuse.Session, operation comuse.Operation) sdk.ToolHandler {
+	return func(ctx context.Context, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		if request == nil || request.Params == nil {
-			return textResult(envelopeError("invalid_request")), nil
+			return rejectionResult("invalid_request")
 		}
-		if session == nil {
-			return textResult(envelopeError("session_closed")), nil
-		}
-		result, err := run(ctx, session, request.Params.Arguments)
-		if err != nil {
-			return textResult(envelopeError(errorCode(ctx, err))), nil
-		}
-		return textResult(comuse.Envelope{SchemaVersion: comuse.SchemaVersion, Status: "ok", Result: result}), nil
+		return dispatch(ctx, session, operation, request.Params.Arguments)
 	}
 }
 
-func stateTool(ctx context.Context, session *comuse.Session, raw json.RawMessage) (any, error) {
-	var args emptyArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, errInvalidRequest
-	}
-	return session.State(ctx)
-}
-
-func windowsTool(ctx context.Context, session *comuse.Session, raw json.RawMessage) (any, error) {
-	var args emptyArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, errInvalidRequest
-	}
-	return session.Windows(ctx)
-}
-
-func a11yTool(ctx context.Context, session *comuse.Session, raw json.RawMessage) (any, error) {
-	var args windowArgs
-	if err := decodeArgs(raw, &args); err != nil || args.WindowRef == "" {
-		return nil, errInvalidRequest
-	}
-	return session.Observe(ctx, args.WindowRef)
-}
-
-func readElementTool(ctx context.Context, session *comuse.Session, raw json.RawMessage) (any, error) {
-	var args readElementArgs
-	if err := decodeArgs(raw, &args); err != nil || args.WindowRef == "" || args.ElementRef == "" || args.StateID == "" {
-		return nil, errInvalidRequest
-	}
-	return session.ReadElement(ctx, args.WindowRef, args.ElementRef, args.StateID)
-}
-
-func waitTool(ctx context.Context, session *comuse.Session, raw json.RawMessage) (any, error) {
-	var args waitArgs
-	if err := decodeArgs(raw, &args); err != nil || args.WindowRef == "" || args.TimeoutMS < 1 || args.TimeoutMS > int64(maxWait/time.Millisecond) {
-		return nil, errInvalidRequest
-	}
-	return session.Wait(ctx, args.WindowRef, time.Duration(args.TimeoutMS)*time.Millisecond)
-}
-
-type emptyArgs struct{}
-type windowArgs struct {
-	WindowRef string `json:"window_ref"`
-}
-type readElementArgs struct {
-	WindowRef  string `json:"window_ref"`
-	ElementRef string `json:"element_ref"`
-	StateID    string `json:"state_id"`
-}
-type waitArgs struct {
-	WindowRef string `json:"window_ref"`
-	TimeoutMS int64  `json:"timeout_ms"`
-}
-
-var errInvalidRequest = errors.New("invalid_request")
-
-func errorCode(ctx context.Context, err error) string {
-	if errors.Is(err, errInvalidRequest) {
-		return "invalid_request"
-	}
-	if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
-		return "cancelled"
-	}
-	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return "budget_exceeded"
-	}
-	return comuse.ErrorCode(err)
-}
-
-func decodeArgs(raw json.RawMessage, dst any) error {
-	_, empty := dst.(*emptyArgs)
-	if len(raw) == 0 {
-		if empty {
-			return nil
-		}
-		return errInvalidRequest
-	}
-	if empty && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil
-	}
+func dispatch(ctx context.Context, session *comuse.Session, operation comuse.Operation, raw []byte) (*sdk.CallToolResult, error) {
 	if len(raw) > maxArgumentBytes {
-		return errInvalidRequest
+		return rejectionResult("invalid_request")
 	}
-	if err := jsonwire.Decode(bytes.NewReader(raw), maxArgumentBytes, dst); err != nil {
-		return errInvalidRequest
+	request, err := comuse.DecodeRequest(operation, raw)
+	if err != nil {
+		return rejectionResult("invalid_request")
 	}
-	return nil
-}
-
-func tool(name, description string, properties map[string]any, required []string, resultSchema map[string]any) *mcp.Tool {
-	if properties == nil {
-		properties = map[string]any{}
+	if session == nil {
+		return rejectionResult("session_closed")
 	}
-	if required == nil {
-		required = []string{}
+	envelope, _ := session.Call(ctx, request)
+	return envelopeResult(envelope)
+}
+
+func rejectionResult(code string) (*sdk.CallToolResult, error) {
+	envelope, err := comuse.RejectionEnvelope(code)
+	if err != nil {
+		return nil, fmt.Errorf("build MCP rejection envelope: %w", err)
 	}
-	return &mcp.Tool{
-		Name:        name,
-		Description: description,
-		InputSchema: map[string]any{
-			"type":                 "object",
-			"properties":           properties,
-			"required":             required,
-			"additionalProperties": false,
-		},
-		OutputSchema: sourceEnvelopeSchema(resultSchema),
-	}
+	return envelopeResult(envelope)
 }
 
-// sourceEnvelopeSchema describes the current shared source-phase envelope.
-// It intentionally does not claim the RFC release envelope's usage/duration
-// or compact-state fields, which remain unqualified.
-func sourceEnvelopeSchema(resultSchema map[string]any) map[string]any {
-	versionSchema := map[string]any{"type": "integer", "enum": []int{comuse.SchemaVersion}}
-	errorSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"code":    map[string]any{"type": "string", "enum": errorCodeVocabulary()},
-			"message": boundedString(128),
-		},
-		"required":             []string{"code", "message"},
-		"additionalProperties": false,
-	}
-	success := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"schema_version": versionSchema,
-			"status":         map[string]any{"type": "string", "enum": []string{"ok"}},
-			"result":         resultSchema,
-		},
-		"required":             []string{"schema_version", "status", "result"},
-		"additionalProperties": false,
-	}
-	failure := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"schema_version": versionSchema,
-			"status":         map[string]any{"type": "string", "enum": []string{"error"}},
-			"error":          errorSchema,
-		},
-		"required":             []string{"schema_version", "status", "error"},
-		"additionalProperties": false,
-	}
-	return map[string]any{"type": "object", "oneOf": []any{success, failure}}
-}
-
-func objectSchema(properties map[string]any, required ...string) map[string]any {
-	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
-}
-
-func boundedString(max int) map[string]any {
-	return map[string]any{"type": "string", "maxLength": max}
-}
-
-func arraySchema(items map[string]any) map[string]any {
-	return map[string]any{"type": "array", "items": items, "maxItems": 10000}
-}
-
-func doctorResultSchema() map[string]any {
-	capabilities := objectSchema(map[string]any{
-		"accessibility": boolSchema(), "input": boolSchema(), "screen_capture": boolSchema(),
-		"qualified_input": boolSchema(),
-	}, "accessibility", "input", "screen_capture", "qualified_input")
-	permissions := map[string]any{
-		"type":                 "object",
-		"maxProperties":        3,
-		"propertyNames":        map[string]any{"enum": []string{"accessibility", "input", "screen_capture"}},
-		"additionalProperties": map[string]any{"type": "string", "enum": []string{"granted", "denied", "not_determined", "unknown"}},
-	}
-	return objectSchema(map[string]any{"capabilities": capabilities, "permissions": permissions}, "capabilities", "permissions")
-}
-
-func windowSchema() map[string]any {
-	process := objectSchema(map[string]any{
-		"pid":       map[string]any{"type": "integer", "minimum": 1, "maximum": 2147483647},
-		"bundle_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[!-~]+$"},
-		"launch_id": boundedString(128),
-	}, "pid", "bundle_id", "launch_id")
-	return objectSchema(map[string]any{"ref": boundedString(128), "process": process, "title": boundedString(4 * 1024 * 1024)}, "ref", "process", "title")
-}
-
-func observationSchema() map[string]any {
-	element := objectSchema(map[string]any{
-		"ref": boundedString(128), "parent_ref": boundedString(128),
-		"order": map[string]any{"type": "integer", "minimum": 0},
-		"role":  boundedString(4 * 1024 * 1024), "label": boundedString(4 * 1024 * 1024),
-		"value": boundedString(4 * 1024 * 1024), "enabled": boolSchema(),
-		"actions":        map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"press", "replace", "insert"}}, "maxItems": 3},
-		"classification": map[string]any{"type": "string", "enum": []string{"normal"}},
-	}, "ref", "order", "role", "classification")
-	coverage := objectSchema(map[string]any{"complete": boolSchema(), "reason": map[string]any{
-		"type": "string", "enum": []string{"depth_limit", "node_limit", "byte_limit", "deadline", "unsupported", "permission_denied", "partial"},
-	}}, "complete")
-	return objectSchema(map[string]any{
-		"window_ref": boundedString(128), "state_id": boundedString(128),
-		"observed_at": map[string]any{"type": "string", "format": "date-time"},
-		"elements":    map[string]any{"type": "array", "items": element, "maxItems": 10000}, "coverage": coverage,
-	}, "window_ref", "state_id", "observed_at", "elements", "coverage")
-}
-
-func elementContentSchema() map[string]any {
-	return objectSchema(map[string]any{
-		"window_ref": boundedString(128), "element_ref": boundedString(128),
-		"state_id": boundedString(128), "text": boundedString(4 * 1024 * 1024),
-	}, "window_ref", "element_ref", "state_id", "text")
-}
-
-func boolSchema() map[string]any { return map[string]any{"type": "boolean"} }
-
-func errorCodeVocabulary() []string {
-	return []string{
-		"invalid_request", "policy_refused", "approval_required", "element_stale", "state_expired",
-		"permission_denied", "unsupported", "backend_unavailable", "desktop_busy", "rate_limited",
-		"budget_exceeded", "cancelled", "session_closed", "unknown_outcome", "internal_error",
-	}
-}
-
-func stringProperty(maxLength int) map[string]any {
-	return map[string]any{"type": "string", "minLength": 1, "maxLength": maxLength}
-}
-
-func envelopeError(code string) comuse.Envelope {
-	if _, ok := publicErrorCodes[code]; !ok {
-		code = "internal_error"
-	}
-	return comuse.Envelope{
-		SchemaVersion: comuse.SchemaVersion,
-		Status:        "error",
-		Error:         &comuse.Error{Code: code, Message: safeMessage(code)},
-	}
-}
-
-var publicErrorCodes = map[string]struct{}{
-	"invalid_request": {}, "policy_refused": {}, "approval_required": {}, "element_stale": {},
-	"state_expired": {}, "permission_denied": {}, "unsupported": {}, "backend_unavailable": {},
-	"desktop_busy": {}, "rate_limited": {}, "budget_exceeded": {}, "cancelled": {},
-	"session_closed": {}, "unknown_outcome": {}, "internal_error": {},
-}
-
-func safeMessage(code string) string {
-	messages := map[string]string{
-		"invalid_request": "The request is invalid.", "policy_refused": "The request was refused by policy.",
-		"approval_required": "Trusted host approval is required.", "element_stale": "The element reference is stale.",
-		"state_expired": "The semantic state has expired.", "permission_denied": "Required permission is unavailable.",
-		"unsupported": "The operation is unsupported.", "backend_unavailable": "The backend is unavailable.",
-		"desktop_busy": "The desktop is busy.", "rate_limited": "The request rate limit was reached.",
-		"budget_exceeded": "The operation exceeded its budget.", "cancelled": "The operation was cancelled.",
-		"session_closed": "The session is closed.", "unknown_outcome": "The operation outcome is unknown.",
-		"internal_error": "The operation failed.",
-	}
-	if message, ok := messages[code]; ok {
-		return message
-	}
-	return "The operation failed."
-}
-
-func textResult(envelope comuse.Envelope) *mcp.CallToolResult {
+func envelopeResult(envelope comuse.ResultEnvelope) (*sdk.CallToolResult, error) {
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		encoded = []byte(`{"schema_version":1,"status":"error","error":{"code":"internal_error","message":"The operation failed."}}`)
+		return nil, fmt.Errorf("encode canonical MCP envelope: %w", err)
 	}
-	return &mcp.CallToolResult{
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
-		StructuredContent: envelope,
-		IsError:           envelope.Status == "error",
+	var structured any
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&structured); err != nil {
+		return nil, fmt.Errorf("decode canonical MCP envelope: %w", err)
 	}
+	return &sdk.CallToolResult{
+		Content:           []sdk.Content{&sdk.TextContent{Text: string(encoded)}},
+		StructuredContent: structured,
+		IsError:           !envelope.OK,
+	}, nil
+}
+
+func unsupportedSemanticMiddleware(session *comuse.Session) sdk.Middleware {
+	return func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, request sdk.Request) (sdk.Result, error) {
+			if method != "tools/call" {
+				return next(ctx, method, request)
+			}
+			call, ok := request.(*sdk.CallToolRequest)
+			if !ok || call.Params == nil {
+				return next(ctx, method, request)
+			}
+			operation, known := knownSemanticNames[call.Params.Name]
+			if !known {
+				return next(ctx, method, request)
+			}
+			result, err := dispatch(ctx, session, operation, call.Params.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+	}
+}
+
+func toolName(operation comuse.Operation) string {
+	if operation == comuse.OperationState {
+		return "computer_state"
+	}
+	return "computer_" + string(operation)
+}
+
+func inputSchema(definition string) map[string]any {
+	var contract map[string]any
+	if err := json.Unmarshal(comuse.ResponseSchema(), &contract); err != nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+	}
+	defs, _ := contract["$defs"].(map[string]any)
+	return map[string]any{"$schema": "https://json-schema.org/draft/2020-12/schema", "$defs": defs, "$ref": "#/$defs/" + definition, "type": "object"}
+}
+
+func outputSchema() map[string]any {
+	var schema map[string]any
+	if err := json.Unmarshal(comuse.ResponseSchema(), &schema); err != nil {
+		return map[string]any{"type": "object"}
+	}
+	return schema
 }
