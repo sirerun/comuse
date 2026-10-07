@@ -85,11 +85,13 @@ type Coverage struct {
 	Reason   string `json:"reason,omitempty"`
 }
 type Snapshot struct {
-	WindowRef  string    `json:"window_ref"`
-	StateID    string    `json:"state_id"`
-	ObservedAt time.Time `json:"observed_at"`
-	Elements   []Element `json:"elements"`
-	Coverage   Coverage  `json:"coverage"`
+	ScopeID        string    `json:"-"`
+	ActionSequence uint64    `json:"-"`
+	WindowRef      string    `json:"window_ref"`
+	StateID        string    `json:"state_id"`
+	ObservedAt     time.Time `json:"observed_at"`
+	Elements       []Element `json:"elements"`
+	Coverage       Coverage  `json:"coverage"`
 }
 type ElementContent struct {
 	ObservedAt time.Time `json:"-"`
