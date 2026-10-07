@@ -46,7 +46,7 @@ func (f *fakeBackend) Doctor(context.Context) (DoctorReport, error) {
 	if !accessibility {
 		permission = "denied"
 	}
-	return DoctorReport{Capabilities: Capabilities{Accessibility: accessibility, Input: f.input, QualifiedInput: f.qualified}, Permissions: map[string]string{"accessibility": permission, "private-native-key": "secret"}}, nil
+	return DoctorReport{Capabilities: Capabilities{Accessibility: accessibility, Input: f.input, QualifiedInput: f.qualified, ActionKinds: []string{ActionPress, ActionPick, ActionFocus, ActionReplace, ActionInsert, ActionScroll}}, Permissions: map[string]string{"accessibility": permission, "private-native-key": "secret"}}, nil
 }
 
 func (f *fakeBackend) Windows(context.Context, Budget) ([]Window, error) {

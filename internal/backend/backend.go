@@ -52,6 +52,8 @@ type Config struct {
 	LibraryPath string `json:"library_path"`
 }
 type Capabilities struct {
+	// ActionKinds is trusted backend qualification evidence, never JSON authority.
+	ActionKinds    []string `json:"-"`
 	Accessibility  bool     `json:"accessibility"`
 	Input          bool     `json:"input"`
 	ScreenCapture  bool     `json:"screen_capture"`
