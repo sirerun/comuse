@@ -145,7 +145,8 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	epoch := s.currentPermissionEpoch()
 	contextEpoch := s.contextEpochNow()
 	s.mu.Lock()
-	_, exists := s.windows[windowRef]
+	window, exists := s.windows[windowRef]
+	hadContext := s.hasDesktopContext
 	s.mu.Unlock()
 	if !exists {
 		return Observation{}, coreError("element_stale")
@@ -155,7 +156,27 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	if callErr != nil {
 		return Observation{}, s.stableBackendError(callCtx, callErr)
 	}
-	if _, _, err := s.reconcileDesktopContextAt(native.DesktopContext, &contextEpoch); err != nil {
+	changed, _, contextErr := s.reconcileDesktopContextAt(native.DesktopContext, &contextEpoch)
+	if contextErr != nil {
+		return Observation{}, contextErr
+	}
+	if changed && !hadContext && native.DesktopContext != nil {
+		// A first fresh capture may supply previously unavailable context.
+		// Rotate/purge old authority, then bind only this freshly validated
+		// scoped window. Actual known-display transitions still fail below.
+		contextEpoch++
+		s.contextMu.Lock()
+		s.mu.Lock()
+		if s.permissionEpoch != epoch || s.contextEpoch != contextEpoch {
+			s.mu.Unlock()
+			s.contextMu.Unlock()
+			return Observation{}, snapshotEpochError(s, epoch, contextEpoch)
+		}
+		s.windows[windowRef] = window
+		s.mu.Unlock()
+		s.contextMu.Unlock()
+	}
+	if err := s.bindContextFocus(native.DesktopContext, epoch, contextEpoch); err != nil {
 		return Observation{}, err
 	}
 	if s.contextEpochNow() != contextEpoch {
