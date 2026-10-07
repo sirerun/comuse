@@ -120,7 +120,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if closeErr := s.Close(closeCtx); closeErr != nil {
-				callErr = &comuse.Error{Code: "backend_unavailable", Message: "session cleanup failed"}
+				callErr = closeErr
 			}
 		}()
 		switch command {

@@ -95,7 +95,7 @@ func runHello(ctx context.Context, library string) (response, error) {
 		if drainErr != nil {
 			return response{}, drainErr
 		}
-		if err := validateCompletionHandle(delivered, uint64(handle)); err != nil {
+		if err := validateCompletionHandle(delivered.handle, uint64(handle)); err != nil {
 			return response{}, err
 		}
 		if delivered.err != nil {
@@ -115,7 +115,7 @@ func runHello(ctx context.Context, library string) (response, error) {
 		if drainErr != nil {
 			return response{}, drainErr
 		}
-		if err := validateCompletionHandle(delivered, uint64(handle)); err != nil {
+		if err := validateCompletionHandle(delivered.handle, uint64(handle)); err != nil {
 			return response{}, err
 		}
 		if delivered.err != nil {
