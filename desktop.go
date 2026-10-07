@@ -2,9 +2,12 @@ package comuse
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/sirerun/comuse/internal/writer"
 )
@@ -12,9 +15,15 @@ import (
 const actionPolicyVersion uint64 = 1
 
 // Do admits one host-approved action against a fresh complete scoped snapshot.
-func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
-	if err := validateAction(action); err != nil {
-		return notApplied(action.ID), err
+func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, returnedErr error) {
+	var validationErr error
+	if isDeveloperActionKind(action.Kind) {
+		validationErr = validateDeveloperAction(action)
+	} else {
+		validationErr = validateAction(action)
+	}
+	if validationErr != nil {
+		return notApplied(action.ID), validationErr
 	}
 	if s == nil || !s.mutationEnabled {
 		return notApplied(action.ID), coreError("approval_required")
@@ -27,45 +36,183 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	s.actionMu.Lock()
 	defer s.actionMu.Unlock()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 
-	prior, ok := s.findSnapshot(action.WindowRef, action.StateID)
-	if !ok {
-		return notApplied(action.ID), coreError("state_expired")
+	callCtx, cancel := context.WithTimeout(callCtx, min(s.budget.Timeout, 10*time.Second))
+	defer cancel()
+	lease, acquireErr := writer.Acquire(callCtx, s.writerDirectory)
+	if acquireErr != nil {
+		return notApplied(action.ID), writerCallError(callCtx, acquireErr)
 	}
-	if !normalTarget(prior.public, action.ElementRef) || !hasAdvertisedAction(prior.public, action.ElementRef, action.Kind) {
-		return notApplied(action.ID), coreError("policy_refused")
+	admissionStarted := false
+	defer func() {
+		if !admissionStarted {
+			if closeErr := s.closeActionLease(lease); closeErr != nil {
+				result.Cleanup = CleanupUnknown
+				returnedErr = coreError("backend_unavailable")
+			}
+		}
+	}()
+	commitmentJSON, marshalErr := json.Marshal(action)
+	if marshalErr != nil {
+		return notApplied(action.ID), coreError("invalid_request")
 	}
-	window, ok := s.window(action.WindowRef)
-	if !ok || !scopeContains(s.scope, window.Process) {
-		return notApplied(action.ID), coreError("element_stale")
+	commitmentInput := sha256.Sum256(commitmentJSON)
+	commitment, commitmentErr := writer.BindingCommitment(s.writerKey, commitmentInput[:])
+	if commitmentErr != nil {
+		return notApplied(action.ID), coreError("internal_error")
+	}
+	priorOutcome, lookupErr := lease.Lookup(action.ID, commitment)
+	if lookupErr != nil {
+		switch {
+		case errors.Is(lookupErr, writer.ErrBindingMismatch):
+			return notApplied(action.ID), coreError("policy_refused")
+		case errors.Is(lookupErr, writer.ErrReplayExpired):
+			return notApplied(action.ID), coreError("replay_result_expired")
+		case errors.Is(lookupErr, writer.ErrDirty):
+			return unknownResult(action.ID), coreError("unknown_outcome")
+		default:
+			return notApplied(action.ID), writerCallError(callCtx, lookupErr)
+		}
+	}
+	if priorOutcome != nil {
+		result := replayResult(action.ID, *priorOutcome)
+		if priorOutcome.Metadata.ErrorCode != "" {
+			return result, coreError(priorOutcome.Metadata.ErrorCode)
+		}
+		if result.Execution == ExecutionUnknown || result.Cleanup != CleanupComplete {
+			return result, coreError("unknown_outcome")
+		}
+		return result, nil
 	}
 
-	// Refresh the observation and capability immediately before admission. A
-	// caller's public state hash remains stable across hidden native state, but
-	// the exact private native state ID is always passed to the backend.
-	nativeSnapshot, callErr := s.backend.Observe(callCtx, action.WindowRef, s.budget)
-	if callErr != nil {
-		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
+	// A well-formed new action admission is charged once after durable replay
+	// lookup, including later policy refusals and cancellation. Exact replays
+	// above do not consume another logical action.
+	s.account(callCtx, CounterActions, 1)
+	raw := isDeveloperActionKind(action.Kind)
+	var prior snapshotBinding
+	var window Window
+	var nativeState string
+	var observedAt time.Time
+	if raw {
+		windows, windowsErr := s.Windows(callCtx)
+		if windowsErr != nil {
+			return notApplied(action.ID), windowsErr
+		}
+		var found bool
+		for _, candidate := range windows {
+			if candidate.Ref == action.WindowRef {
+				window, found = candidate, true
+				break
+			}
+		}
+		if !found || !scopeContains(s.scope, window.Process) {
+			return notApplied(action.ID), coreError("element_stale")
+		}
+		observedAt = s.now()
+	} else {
+		var ok bool
+		prior, ok = s.findSnapshot(action.WindowRef, action.StateID)
+		if !ok {
+			return notApplied(action.ID), coreError("state_expired")
+		}
+		if !normalTarget(prior.public, action.ElementRef) || !hasAdvertisedAction(prior.public, action.ElementRef, action.Kind) {
+			return notApplied(action.ID), coreError("policy_refused")
+		}
+		window, ok = s.window(action.WindowRef)
+		if !ok || !scopeContains(s.scope, window.Process) {
+			return notApplied(action.ID), coreError("element_stale")
+		}
 	}
-	current, binding, normalizeErr := s.normalizeObservation(action.WindowRef, nativeSnapshot)
-	if normalizeErr != nil {
-		return notApplied(action.ID), normalizeErr
+
+	desktop, desktopErr := s.acquireDesktop(callCtx)
+	if desktopErr != nil {
+		if errors.Is(desktopErr, writer.ErrDirty) {
+			return unknownResult(action.ID), coreError("unknown_outcome")
+		}
+		if errors.Is(desktopErr, writer.ErrDesktopIdentityUnavailable) {
+			return notApplied(action.ID), coreError("unsupported")
+		}
+		return notApplied(action.ID), writerCallError(callCtx, desktopErr)
 	}
-	if !s.rememberSnapshotAtEpoch(binding, epoch) {
-		return notApplied(action.ID), coreError("permission_denied")
+	intentStarted := false
+	defer func() {
+		if intentStarted {
+			if result.Execution != ExecutionUnknown && result.Cleanup == CleanupComplete && !s.journalQuarantined(lease) {
+				if err := desktop.Complete(); err != nil {
+					// Native outcome is already durably recorded. Canonical-state
+					// persistence failure is operational; it cannot rewrite native cleanup.
+					returnedErr = coreError("backend_unavailable")
+					s.mu.Lock()
+					s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
+					s.mu.Unlock()
+					return
+				}
+			} else {
+				_ = desktop.MarkDirty()
+				s.mu.Lock()
+				s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
+				s.mu.Unlock()
+				return
+			}
+		}
+		if err := desktop.Close(); err != nil {
+			result.Cleanup = CleanupUnknown
+			returnedErr = coreError("backend_unavailable")
+			s.mu.Lock()
+			s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
+			s.mu.Unlock()
+		}
+	}()
+	journalBinding, bindingErr := s.journalBinding(s.writerDirectory, s.writerKey)
+	if bindingErr != nil {
+		return notApplied(action.ID), coreError("backend_unavailable")
 	}
-	if current.StateID != action.StateID {
-		return notApplied(action.ID), coreError("element_stale")
-	}
-	if !current.Coverage.Complete {
-		return notApplied(action.ID), coreError("policy_refused")
-	}
-	if !normalTarget(current, action.ElementRef) || !hasAdvertisedAction(current, action.ElementRef, action.Kind) {
-		return notApplied(action.ID), coreError("element_stale")
+
+	if !raw {
+		// Refresh the observation and capability immediately before admission.
+		// A caller's public state hash remains stable across hidden native state,
+		// but the exact private native state ID is always passed to the backend.
+		s.account(callCtx, CounterObservationA11y, 1)
+		nativeSnapshot, callErr := s.backend.Observe(callCtx, action.WindowRef, s.budget)
+		if callErr != nil {
+			return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
+		}
+		if _, _, contextErr := s.reconcileDesktopContextAt(nativeSnapshot.DesktopContext, &contextEpoch); contextErr != nil {
+			return notApplied(action.ID), contextErr
+		}
+		if s.contextEpochNow() != contextEpoch {
+			return notApplied(action.ID), coreError("state_expired")
+		}
+		current, binding, normalizeErr := s.normalizeObservation(action.WindowRef, nativeSnapshot)
+		if normalizeErr != nil {
+			return notApplied(action.ID), normalizeErr
+		}
+		if !s.rememberSnapshotAtEpoch(binding, epoch, contextEpoch) {
+			return notApplied(action.ID), snapshotEpochError(s, epoch, contextEpoch)
+		}
+		if current.StateID != action.StateID {
+			return notApplied(action.ID), coreError("element_stale")
+		}
+		if !current.Coverage.Complete {
+			return notApplied(action.ID), coreError("policy_refused")
+		}
+		if !normalTarget(current, action.ElementRef) || !hasAdvertisedAction(current, action.ElementRef, action.Kind) {
+			return notApplied(action.ID), coreError("element_stale")
+		}
+		nativeState = binding.nativeState
+		observedAt = current.ObservedAt
 	}
 	doctor, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
 		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
+	}
+	if _, _, contextErr := s.reconcileDesktopContextAt(doctor.DesktopContext, &contextEpoch); contextErr != nil {
+		return notApplied(action.ID), contextErr
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return notApplied(action.ID), coreError("state_expired")
 	}
 	s.invalidateIfPermissionDenied(doctor)
 	if !doctor.Capabilities.Accessibility {
@@ -77,27 +224,17 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	if !doctor.Capabilities.Input || !doctor.Capabilities.QualifiedInput {
 		return notApplied(action.ID), coreError("policy_refused")
 	}
+	qualified := qualifiedActionKind(doctor.Capabilities, action.Kind)
+	if raw {
+		qualified = qualifiedDeveloperActionKind(doctor.Capabilities, action.Kind)
+	}
+	if !qualified {
+		return notApplied(action.ID), coreError("unsupported")
+	}
 	if s.approvalProvider == nil {
 		return notApplied(action.ID), coreError("approval_required")
 	}
 
-	callCtx, cancel := context.WithTimeout(callCtx, s.budget.Timeout)
-	defer cancel()
-	lease, acquireErr := writer.Acquire(callCtx, s.writerDirectory)
-	if acquireErr != nil {
-		return notApplied(action.ID), writerCallError(callCtx, acquireErr)
-	}
-	commitmentJSON, marshalErr := json.Marshal(action)
-	if marshalErr != nil {
-		_ = s.closeActionLease(lease)
-		return notApplied(action.ID), coreError("invalid_request")
-	}
-	commitmentInput := sha256.Sum256(commitmentJSON)
-	commitment, commitmentErr := writer.BindingCommitment(s.writerKey, commitmentInput[:])
-	if commitmentErr != nil {
-		_ = s.closeActionLease(lease)
-		return notApplied(action.ID), coreError("internal_error")
-	}
 	ticket, previous, beginErr := lease.Begin(action.ID, commitment)
 	if beginErr != nil {
 		_ = s.closeActionLease(lease)
@@ -124,6 +261,32 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		return result, nil
 	}
 
+	admissionStarted = true
+	if err := desktop.Begin(journalBinding); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+	}
+	intentStarted = true
+	// Each NEW durable intent gets a unique admission commitment, so changing
+	// journal/key cannot deduplicate distinct native attempts in the UID quota.
+	var admission [32]byte
+	if _, err := rand.Read(admission[:]); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+	}
+	if quotaErr := s.reserveQuota(callCtx, admission); quotaErr != nil {
+		code := "backend_unavailable"
+		if errors.Is(quotaErr, writer.ErrQuotaExhausted) {
+			code = "rate_limited"
+		}
+		result := notApplied(action.ID)
+		if err := finishLease(lease, ticket, action, result, code); err != nil {
+			return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+		}
+		if err := s.closeActionLease(lease); err != nil {
+			return result, coreError("backend_unavailable")
+		}
+		return result, coreError(code)
+	}
+
 	s.mu.Lock()
 	if s.actionsUsed >= s.maxActions {
 		s.mu.Unlock()
@@ -138,7 +301,6 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	}
 	s.actionsUsed++
 	s.mu.Unlock()
-	observedAt := current.ObservedAt
 	request := ApprovalRequest{
 		SessionID:     s.sessionID,
 		Action:        action,
@@ -168,6 +330,9 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
+	if s.contextEpochNow() != contextEpoch {
+		return s.finishContextChangedAction(lease, ticket, action)
+	}
 	if err := callCtx.Err(); err != nil {
 		result := notApplied(action.ID)
 		callError := stableCallError(err)
@@ -185,11 +350,23 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	}
 
 	nativeAction := action
-	nativeAction.StateID = binding.nativeState
+	nativeAction.StateID = nativeState
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
+	if s.contextEpochNow() != contextEpoch {
+		return s.finishContextChangedAction(lease, ticket, action)
+	}
+	s.mu.Lock()
+	s.actionSequence = saturatingAdd(s.actionSequence, 1)
+	s.mu.Unlock()
+	s.contextMu.Lock()
+	if s.contextEpochNow() != contextEpoch {
+		s.contextMu.Unlock()
+		return s.finishContextChangedAction(lease, ticket, action)
+	}
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
+	s.contextMu.Unlock()
 	if executeErr != nil {
 		s.invalidateOnBackendError(executeErr)
 		unknown := unknownResult(action.ID)
@@ -199,6 +376,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		unknown := unknownResult(action.ID)
 		return s.persistUnknownBeforeTerminal(lease, ticket, action, unknown, "native_outcome_unknown")
 	}
+	result.CompletedSteps = append([]string(nil), result.CompletedSteps...)
 	result.Verification.Reason = safeVerificationReason(result.Verification.Reason)
 	if result.Execution == ExecutionUnknown || result.Cleanup != CleanupComplete {
 		return s.persistUnknownBeforeTerminal(lease, ticket, action, result, "native_outcome_unknown")
@@ -221,6 +399,17 @@ func (s *Session) finishPermissionDeniedAction(lease *writer.Lease, ticket *writ
 		return result, coreError("backend_unavailable")
 	}
 	return result, coreError("permission_denied")
+}
+
+func (s *Session) finishContextChangedAction(lease *writer.Lease, ticket *writer.Ticket, action Action) (ActionResult, error) {
+	result := notApplied(action.ID)
+	if err := finishLease(lease, ticket, action, result, "state_expired"); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+	}
+	if err := s.closeActionLease(lease); err != nil {
+		return result, coreError("backend_unavailable")
+	}
+	return result, coreError("state_expired")
 }
 
 func (s *Session) closeActionLease(lease *writer.Lease) error {
@@ -304,7 +493,8 @@ func finishLease(lease *writer.Lease, ticket *writer.Ticket, action Action, resu
 	case ExecutionPartiallyApplied:
 		outcome = writer.OutcomePartial
 	}
-	return lease.FinishWithMetadata(ticket, outcome, actionMetadata(action, result, code))
+	metadata := actionMetadata(action, result, code)
+	return lease.FinishWithMetadata(ticket, outcome, metadata)
 }
 
 func writerCallError(ctx context.Context, err error) error {
@@ -352,6 +542,11 @@ func replayResult(actionID string, prior writer.PriorOutcome) ActionResult {
 	case "unknown":
 		result.Execution = ExecutionUnknown
 	}
+	result.Method = metadata.Method
+	if metadata.CompletedSteps != "" {
+		result.CompletedSteps = strings.Split(metadata.CompletedSteps, ",")
+	}
+	result.Verification.Reason = safeVerificationReason(metadata.VerificationReason)
 	if metadata.Verification != "" {
 		result.Verification.Status = VerificationStatus(metadata.Verification)
 	}

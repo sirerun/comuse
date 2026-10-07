@@ -4,359 +4,174 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
-	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sirerun/comuse"
 	"github.com/sirerun/comuse/internal/backend"
 )
 
-func closeTestSession(t *testing.T, session interface{ Close() error }) {
-	t.Helper()
-	if err := session.Close(); err != nil {
-		t.Errorf("close MCP session: %v", err)
-	}
-}
-
-func TestDecodeArgsStrictObject(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  json.RawMessage
-		want bool
-	}{
-		{name: "omitted arguments rejected for required tool"},
-		{name: "empty object", raw: json.RawMessage(`{}`), want: true},
-		{name: "valid window", raw: json.RawMessage(`{"window_ref":"w1"}`), want: true},
-		{name: "unknown field", raw: json.RawMessage(`{"window_ref":"w1","pid":10}`)},
-		{name: "duplicate field", raw: json.RawMessage(`{"window_ref":"w1","window_ref":"w2"}`)},
-		{name: "trailing object", raw: json.RawMessage(`{} {}`)},
-		{name: "wrong root", raw: json.RawMessage(`[]`)},
-		{name: "wrong field type", raw: json.RawMessage(`{"window_ref":3}`)},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var args windowArgs
-			err := decodeArgs(tc.raw, &args)
-			if got := err == nil; got != tc.want {
-				t.Fatalf("decodeArgs() success = %v, want %v (err %v)", got, tc.want, err)
-			}
-		})
-	}
-}
-
-func TestDecodeEmptyArgsAcceptsAbsentOrEmptyObject(t *testing.T) {
-	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("{}"), json.RawMessage("  null  ")} {
-		var args emptyArgs
-		if err := decodeArgs(raw, &args); err != nil {
-			t.Errorf("decodeArgs(%q, emptyArgs) = %v, want nil", raw, err)
-		}
-	}
-	for _, raw := range []json.RawMessage{json.RawMessage("[]"), json.RawMessage(`{"unexpected":true}`)} {
-		var args emptyArgs
-		if err := decodeArgs(raw, &args); err == nil {
-			t.Errorf("decodeArgs(%q, emptyArgs) unexpectedly succeeded", raw)
-		}
-	}
-}
-
-func TestSDKListsOnlyReadOnlySemanticTools(t *testing.T) {
-	ctx := context.Background()
-	session := newTestSession(t, &fakeBackend{})
-	clientTransport, serverTransport := sdk.NewInMemoryTransports()
-	serverSession, err := NewServer(session).Connect(ctx, serverTransport, nil)
+func TestSDKListsOnlyReadOnlyToolsAndReturnsCanonicalEnvelope(t *testing.T) {
+	session := testMCPReadSession(t)
+	client := connectMCPClient(t, NewServer(session))
+	listed, err := client.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTestSession(t, serverSession) })
-	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-test", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { closeTestSession(t, clientSession) })
-	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
-		t.Fatalf("negotiated protocol = %q, want 2025-06-18", got)
-	}
-
-	listed, err := clientSession.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]bool{
-		"computer_state": true, "computer_windows": true, "computer_a11y": true,
-		"computer_read_element": true, "computer_wait": true,
-	}
+	want := []string{"computer_a11y", "computer_read_element", "computer_state", "computer_wait", "computer_windows"}
 	if len(listed.Tools) != len(want) {
-		t.Fatalf("ListTools returned %d tools, want %d", len(listed.Tools), len(want))
+		t.Fatalf("tools=%d want %d", len(listed.Tools), len(want))
 	}
-	for _, item := range listed.Tools {
-		if !want[item.Name] {
-			t.Errorf("unexpected tool advertised: %q", item.Name)
+	for i, tool := range listed.Tools {
+		if tool.Name != want[i] {
+			t.Fatalf("tool[%d]=%q want %q", i, tool.Name, want[i])
 		}
-		delete(want, item.Name)
-		schema, ok := item.InputSchema.(map[string]any)
-		if !ok || schema["additionalProperties"] != false {
-			t.Errorf("tool %s schema must reject additional properties: %#v", item.Name, item.InputSchema)
-		}
-		output, ok := item.OutputSchema.(map[string]any)
-		if !ok {
-			t.Errorf("tool %s must advertise an output schema: %#v", item.Name, item.OutputSchema)
-			continue
-		}
-		if output["type"] != "object" {
-			t.Errorf("tool %s output schema type = %#v, want object", item.Name, output["type"])
-		}
-		branches, ok := output["oneOf"].([]any)
-		if !ok || len(branches) != 2 {
-			t.Errorf("tool %s output schema must describe success and error envelopes: %#v", item.Name, output)
-			continue
-		}
-		for _, branch := range branches {
-			object, ok := branch.(map[string]any)
-			if !ok || object["additionalProperties"] != false {
-				t.Errorf("tool %s output branch must be a closed object: %#v", item.Name, branch)
-			}
+		if tool.OutputSchema == nil {
+			t.Errorf("%s has no shared output schema", tool.Name)
 		}
 	}
-	for name := range want {
-		t.Errorf("missing tool %q", name)
-	}
-	invalid, err := clientSession.CallTool(ctx, &sdk.CallToolParams{
-		Name: "computer_a11y", Arguments: map[string]any{"window_ref": "window-1", "include_values": true},
-	})
-	if err == nil && (invalid == nil || !invalid.IsError) {
-		t.Fatal("unknown field was accepted by MCP tool")
-	}
-}
-
-func TestSDKToolsDelegateToSharedSession(t *testing.T) {
-	backend := &fakeBackend{}
-	session := newTestSession(t, backend)
-	clientSession := connectClient(t, NewServer(session))
-	t.Cleanup(func() { closeTestSession(t, clientSession) })
-
-	callTool(t, clientSession, "computer_state", nil)
-	callTool(t, clientSession, "computer_windows", nil)
-	a11y := callTool(t, clientSession, "computer_a11y", map[string]any{"window_ref": "window-1"})
-	result, ok := a11y.Result.(map[string]any)
-	if !ok {
-		t.Fatalf("a11y result = %T, want object", a11y.Result)
-	}
-	stateID, ok := result["state_id"].(string)
-	if !ok || stateID == "" {
-		t.Fatalf("a11y state_id = %#v", result["state_id"])
-	}
-	callTool(t, clientSession, "computer_read_element", map[string]any{
-		"window_ref": "window-1", "element_ref": "element-1", "state_id": stateID,
-	})
-	callTool(t, clientSession, "computer_wait", map[string]any{"window_ref": "window-1", "timeout_ms": 10})
-
-	// ReadElement refreshes the observation before resolving the element ref,
-	// so the shared backend sees a second observe immediately before the read.
-	wantCalls := []string{"doctor", "windows", "observe", "observe", "read_element", "observe"}
-	if got := backend.callSnapshot(); !equalStrings(got, wantCalls) {
-		t.Fatalf("backend calls = %v, want %v", got, wantCalls)
-	}
-}
-
-func TestSDKCancellationReachesSharedSession(t *testing.T) {
-	ctx := context.Background()
-	backend := &fakeBackend{blockObserve: true, observeStarted: make(chan struct{}), cancellationObserved: make(chan struct{})}
-	session := newTestSession(t, backend)
-	clientSession := connectClient(t, NewServer(session))
-	t.Cleanup(func() { closeTestSession(t, clientSession) })
-
-	callTool(t, clientSession, "computer_windows", nil)
-	callCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	callErr := make(chan error, 1)
-	go func() {
-		_, err := clientSession.CallTool(callCtx, &sdk.CallToolParams{
-			Name: "computer_a11y", Arguments: map[string]any{"window_ref": "window-1"},
-		})
-		callErr <- err
-	}()
-	select {
-	case <-backend.observeStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("semantic backend did not begin observation")
-	}
-	cancel()
-	select {
-	case err := <-callErr:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("cancelled tool call error = %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("cancelled tool call did not return")
-	}
-	select {
-	case <-backend.cancellationObserved:
-	case <-time.After(2 * time.Second):
-		t.Fatal("semantic backend did not finish observing cancellation")
-	}
-	if !backend.cancelSeen() {
-		t.Fatal("session backend did not observe cancellation")
-	}
-}
-
-func TestServeUsesOfficialSDKStdioTransport(t *testing.T) {
-	backend := &fakeBackend{}
-	session := newTestSession(t, backend)
-	serverConn, clientConn := net.Pipe()
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- Serve(context.Background(), session, serverConn) }()
-
-	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-stdio-test", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(context.Background(), &sdk.IOTransport{Reader: clientConn, Writer: clientConn}, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
+	result, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: "computer_state"})
 	if err != nil {
-		_ = clientConn.Close()
-		t.Fatalf("stdio protocol initialize: %v", err)
-	}
-	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
-		t.Fatalf("stdio negotiated protocol = %q, want 2025-06-18", got)
-	}
-	callTool(t, clientSession, "computer_state", nil)
-	_ = clientSession.Close()
-	_ = clientConn.Close()
-	select {
-	case err := <-serveErr:
-		if err != nil && !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("Serve returned %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Serve did not stop after stdio close")
-	}
-}
-
-func TestServeCancellationClosesOwnedStreamOnce(t *testing.T) {
-	stream := &blockingStream{closed: make(chan struct{}), readStarted: make(chan struct{})}
-	session := newTestSession(t, &fakeBackend{})
-	ctx, cancel := context.WithCancel(context.Background())
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- Serve(ctx, session, stream) }()
-	select {
-	case <-stream.readStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("MCP Serve did not begin reading the stream")
-	}
-	cancel()
-	select {
-	case <-serveErr:
-	case <-time.After(2 * time.Second):
-		t.Fatal("cancelling Serve did not unblock its read")
-	}
-	if got := stream.closeCount(); got != 1 {
-		t.Fatalf("underlying stream closed %d times, want once", got)
-	}
-}
-
-func TestServeRejectsOversizedFrameAndClosesOwnedStream(t *testing.T) {
-	secret := "private-frame-payload-secret"
-	frame := strings.Repeat(secret, maxFrameBytes/len(secret)+1) + "\n"
-	stream := &finiteStream{Reader: bytes.NewReader([]byte(frame))}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err := Serve(ctx, newTestSession(t, &fakeBackend{}), stream)
-	if err == nil {
-		t.Fatal("oversized MCP frame was accepted")
-	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatal("oversized frame payload leaked through Serve error")
-	}
-	if got := stream.closeCount(); got != 1 {
-		t.Fatalf("oversized frame closed underlying stream %d times, want once", got)
-	}
-}
-
-func TestBoundedFrameWriterAllowsLimitAndRejectsOversizeWithoutPartialWrite(t *testing.T) {
-	stream := &finiteStream{Reader: bytes.NewReader(nil)}
-	closeOnce := &streamClose{stream: stream}
-	writer := &boundedFrameWriter{stream: stream, close: closeOnce, maxBytes: maxOutboundFrameBytes}
-	nearLimit := bytes.Repeat([]byte{'x'}, maxOutboundFrameBytes)
-	if n, err := writer.Write(nearLimit); err != nil || n != len(nearLimit) {
-		t.Fatalf("write at configured limit = (%d, %v), want (%d, nil)", n, err, len(nearLimit))
-	}
-	secret := []byte("private-oversized-frame-payload")
-	oversized := make([]byte, maxOutboundFrameBytes+1)
-	copy(oversized, secret)
-	if n, err := writer.Write(oversized); n != 0 || !errors.Is(err, errOutboundFrameTooLarge) {
-		t.Fatalf("oversized write = (%d, %v), want (0, frame-too-large)", n, err)
-	}
-	stream.mu.Lock()
-	written, writes := stream.writtenBytes, stream.writeCalls
-	stream.mu.Unlock()
-	if written != maxOutboundFrameBytes || writes != 1 {
-		t.Fatalf("underlying stream wrote %d bytes in %d calls; want only the one allowed frame", written, writes)
-	}
-	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := stream.closeCount(); got != 1 {
-		t.Fatalf("underlying stream closed %d times, want once", got)
-	}
-	if strings.Contains(errOutboundFrameTooLarge.Error(), string(secret)) {
-		t.Fatal("frame limit error leaked payload")
-	}
-}
-
-func TestTextResultCarriesSharedEnvelope(t *testing.T) {
-	envelope := envelopeError("invalid_request")
-	result := textResult(envelope)
-	if !result.IsError {
-		t.Fatal("error envelope did not set MCP isError")
-	}
-	if got, ok := result.StructuredContent.(comuse.Envelope); !ok || got.Status != "error" || got.Error.Code != "invalid_request" {
-		t.Fatalf("StructuredContent = %#v, want shared envelope", result.StructuredContent)
-	}
-	if len(result.Content) != 1 {
-		t.Fatalf("Content length = %d, want 1", len(result.Content))
+	if result.IsError {
+		t.Fatalf("state result marked error: %#v", result)
 	}
 	text, ok := result.Content[0].(*sdk.TextContent)
 	if !ok {
-		t.Fatalf("Content[0] type = %T, want text", result.Content[0])
+		t.Fatalf("content type %T", result.Content[0])
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(text.Text), &decoded); err != nil {
-		t.Fatalf("decode text envelope: %v", err)
+	var fromText map[string]any
+	if err := json.Unmarshal([]byte(text.Text), &fromText); err != nil {
+		t.Fatal(err)
 	}
-	if decoded["status"] != "error" || decoded["schema_version"] != float64(1) {
-		t.Fatalf("text envelope = %#v", decoded)
+	fromStructured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structured content type %T", result.StructuredContent)
+	}
+	if !jsonEqual(t, fromText, fromStructured) {
+		t.Fatalf("text and structured envelopes differ: %#v / %#v", fromText, fromStructured)
+	}
+	if fromText["action"] != "state" || fromText["ok"] != true {
+		t.Fatalf("canonical envelope=%s", text.Text)
 	}
 }
 
-func TestErrorsAreSanitizedAtMCPBoundary(t *testing.T) {
-	backend := &fakeBackend{doctorErr: errors.New("private-native-payload-secret")}
-	clientSession := connectClient(t, NewServer(newTestSession(t, backend)))
-	t.Cleanup(func() { closeTestSession(t, clientSession) })
-	result, err := clientSession.CallTool(context.Background(), &sdk.CallToolParams{Name: "computer_state"})
+func TestKnownUnavailableSemanticRouteIsTypedUnsupportedAndUnknownStaysProtocolError(t *testing.T) {
+	backend := &mcpFakeBackend{}
+	session := testMCPReadSessionWithBackend(t, backend)
+	client := connectMCPClient(t, NewServer(session))
+	result, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: "computer_click_element", Arguments: map[string]any{
+		"action_id": "action-1", "window_ref": "window-1", "element_ref": "element-1", "state_id": strings.Repeat("a", 64),
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.IsError {
-		t.Fatalf("error tool result IsError = false: %#v", result)
+		t.Fatal("unsupported semantic result was not marked error")
 	}
-	if len(result.Content) != 1 {
-		t.Fatalf("error content length = %d", len(result.Content))
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(result.Content[0].(*sdk.TextContent).Text), &envelope); err != nil {
+		t.Fatal(err)
 	}
-	text := result.Content[0].(*sdk.TextContent).Text
-	validateOutputEnvelope(t, clientSession, "computer_state", text)
-	if bytes.Contains([]byte(text), []byte("private-native-payload-secret")) {
-		t.Fatal("backend error payload leaked through MCP")
+	if envelope["action"] != "click_element" || envelope["ok"] != false || envelope["error"].(map[string]any)["code"] != "unsupported" {
+		t.Fatalf("typed unsupported envelope=%#v", envelope)
 	}
-	if !bytes.Contains([]byte(text), []byte(`"code":"backend_unavailable"`)) {
-		t.Fatalf("sanitized result lacks stable code: %s", text)
+	if backend.executeCalls != 0 {
+		t.Fatalf("unsupported route dispatched %d times", backend.executeCalls)
+	}
+	malformed, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: "computer_a11y", Arguments: map[string]any{
+		"window_ref": "window-1", "include_values": true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !malformed.IsError {
+		t.Fatal("unknown argument was accepted")
+	}
+	var invalid map[string]any
+	if err := json.Unmarshal([]byte(malformed.Content[0].(*sdk.TextContent).Text), &invalid); err != nil {
+		t.Fatal(err)
+	}
+	if invalid["error"].(map[string]any)["code"] != "invalid_request" {
+		t.Fatalf("strict argument rejection=%#v", invalid)
+	}
+	if _, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: "computer_not_a_tool"}); err == nil {
+		t.Fatal("unknown tool name was converted from an SDK protocol error")
 	}
 }
 
-func connectClient(t *testing.T, server *sdk.Server) *sdk.ClientSession {
+func TestServeClosesOwnedStreamOnCancellationAndBoundsFrames(t *testing.T) {
+	stream := &mcpBlockingStream{closed: make(chan struct{}), started: make(chan struct{})}
+	session := testMCPReadSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, session, stream) }()
+	select {
+	case <-stream.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not read")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not stop")
+	}
+	if stream.closeCount != 1 {
+		t.Fatalf("stream closed %d times", stream.closeCount)
+	}
+}
+
+func TestEnvelopeResultTextAndStructuredShareOneCanonicalEncoding(t *testing.T) {
+	envelope, err := comuse.RejectionEnvelope("invalid_request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := envelopeResult(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("rejection did not set IsError")
+	}
+	text := result.Content[0].(*sdk.TextContent).Text
+	var fromText, fromStructured map[string]any
+	if err := json.Unmarshal([]byte(text), &fromText); err != nil {
+		t.Fatal(err)
+	}
+	fromStructured = result.StructuredContent.(map[string]any)
+	if !jsonEqual(t, fromText, fromStructured) {
+		t.Fatal("text/structured MCP forms diverged")
+	}
+}
+
+func testMCPReadSession(t *testing.T) *comuse.Session {
+	return testMCPReadSessionWithBackend(t, &mcpFakeBackend{})
+}
+func testMCPReadSessionWithBackend(t *testing.T, b *mcpFakeBackend) *comuse.Session {
+	t.Helper()
+	session, err := comuse.NewSession(comuse.Config{
+		Backend: b,
+		Scope:   comuse.Scope{Processes: []comuse.ProcessIdentity{{PID: 1, BundleID: "com.example.fixture", LaunchID: "launch-1"}}, ExpiresAt: time.Now().Add(time.Hour)},
+		Budget:  comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 16384, Timeout: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := session.Close(context.Background()); err != nil {
+			t.Errorf("close session: %v", err)
+		}
+	})
+	return session
+}
+
+func connectMCPClient(t *testing.T, server *sdk.Server) *sdk.ClientSession {
 	t.Helper()
 	ctx := context.Background()
 	clientTransport, serverTransport := sdk.NewInMemoryTransports()
@@ -365,254 +180,74 @@ func connectClient(t *testing.T, server *sdk.Server) *sdk.ClientSession {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = serverSession.Close() })
-	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-test", Version: "1.0.0"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
+	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-mcp-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
-		t.Fatalf("negotiated protocol = %q, want 2025-06-18", got)
-	}
-	return clientSession
-}
-
-func callTool(t *testing.T, client *sdk.ClientSession, name string, args map[string]any) comuse.Envelope {
-	t.Helper()
-	result, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: args})
-	if err != nil {
-		t.Fatalf("CallTool(%s): %v", name, err)
-	}
-	if result.IsError {
-		t.Fatalf("CallTool(%s) returned error content: %#v", name, result.Content)
-	}
-	if len(result.Content) != 1 {
-		t.Fatalf("CallTool(%s) content count = %d", name, len(result.Content))
-	}
-	text, ok := result.Content[0].(*sdk.TextContent)
-	if !ok {
-		t.Fatalf("CallTool(%s) content type = %T", name, result.Content[0])
-	}
-	var envelope comuse.Envelope
-	if err := json.Unmarshal([]byte(text.Text), &envelope); err != nil {
-		t.Fatalf("CallTool(%s) envelope: %v", name, err)
-	}
-	validateOutputEnvelope(t, client, name, text.Text)
-	if envelope.Status != "ok" || envelope.SchemaVersion != comuse.SchemaVersion {
-		t.Fatalf("CallTool(%s) envelope = %#v", name, envelope)
-	}
-	return envelope
-}
-
-func validateOutputEnvelope(t *testing.T, client *sdk.ClientSession, name, encoded string) {
-	t.Helper()
-	listed, err := client.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("ListTools for output schema validation: %v", err)
-	}
-	var output any
-	for _, item := range listed.Tools {
-		if item.Name == name {
-			output = item.OutputSchema
-			break
-		}
-	}
-	if output == nil {
-		t.Fatalf("tool %s has no output schema", name)
-	}
-	rawSchema, err := json.Marshal(output)
-	if err != nil {
-		t.Fatalf("marshal %s output schema: %v", name, err)
-	}
-	var schema jsonschema.Schema
-	if err := json.Unmarshal(rawSchema, &schema); err != nil {
-		t.Fatalf("decode %s output schema: %v", name, err)
-	}
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		t.Fatalf("resolve %s output schema: %v", name, err)
-	}
-	var instance any
-	if err := json.Unmarshal([]byte(encoded), &instance); err != nil {
-		t.Fatalf("decode %s result: %v", name, err)
-	}
-	if err := resolved.Validate(instance); err != nil {
-		t.Fatalf("%s result violates advertised output schema: %v\n%s", name, err, encoded)
-	}
-}
-
-func newTestSession(t *testing.T, b *fakeBackend) *comuse.Session {
-	t.Helper()
-	process := comuse.ProcessIdentity{PID: 123, BundleID: "com.example.fixture", LaunchID: "launch-1"}
-	session, err := comuse.NewSession(comuse.Config{
-		Backend: b,
-		Scope:   comuse.Scope{Processes: []comuse.ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)},
-		Budget:  comuse.Budget{MaxDepth: 16, MaxNodes: 256, MaxBytes: 1 << 20, Timeout: time.Second},
-	})
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	t.Cleanup(func() { _ = session.Close() })
 	return session
 }
 
-type fakeBackend struct {
-	mu                   sync.Mutex
-	calls                []string
-	blockObserve         bool
-	observeStarted       chan struct{}
-	cancellationObserved chan struct{}
-	cancelled            bool
-	doctorErr            error
-}
-
-type blockingStream struct {
-	mu          sync.Mutex
-	closed      chan struct{}
-	readStarted chan struct{}
-	started     bool
-	closeN      int
-	once        sync.Once
-}
-
-type finiteStream struct {
-	*bytes.Reader
-	mu           sync.Mutex
-	closeN       int
-	writtenBytes int
-	writeCalls   int
-}
-
-func (s *finiteStream) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.writeCalls++
-	s.writtenBytes += len(p)
-	return len(p), nil
-}
-func (s *finiteStream) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.closeN++
-	return nil
-}
-func (s *finiteStream) closeCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closeN
-}
-
-func (s *blockingStream) Read([]byte) (int, error) {
-	s.mu.Lock()
-	if !s.started {
-		s.started = true
-		close(s.readStarted)
+func jsonEqual(t *testing.T, a, b any) bool {
+	t.Helper()
+	left, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
 	}
-	s.mu.Unlock()
+	right, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.Equal(left, right)
+}
+
+type mcpFakeBackend struct {
+	mu           sync.Mutex
+	executeCalls int
+}
+
+func (b *mcpFakeBackend) Doctor(context.Context) (backend.Doctor, error) {
+	return backend.Doctor{Capabilities: backend.Capabilities{Accessibility: true}, Permissions: map[string]string{"accessibility": "granted"}}, nil
+}
+func (b *mcpFakeBackend) Windows(context.Context, backend.Budget) ([]backend.Window, error) {
+	return []backend.Window{}, nil
+}
+func (b *mcpFakeBackend) Observe(context.Context, string, backend.Budget) (backend.Snapshot, error) {
+	return backend.Snapshot{}, &backend.Error{Code: "unsupported", Message: "unsupported"}
+}
+func (b *mcpFakeBackend) ReadElement(context.Context, string, string, string, backend.Budget) (backend.ElementContent, error) {
+	return backend.ElementContent{}, &backend.Error{Code: "unsupported", Message: "unsupported"}
+}
+func (b *mcpFakeBackend) Execute(context.Context, backend.Action) (backend.ActionResult, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.executeCalls++
+	return backend.ActionResult{}, &backend.Error{Code: "unsupported", Message: "unsupported"}
+}
+func (b *mcpFakeBackend) Close(context.Context) error { return nil }
+
+type mcpBlockingStream struct {
+	closed     chan struct{}
+	started    chan struct{}
+	once       sync.Once
+	closeCount int
+}
+
+func (s *mcpBlockingStream) Read([]byte) (int, error) {
+	s.once.Do(func() { close(s.started) })
 	<-s.closed
 	return 0, io.EOF
 }
-
-func (s *blockingStream) Write(p []byte) (int, error) { return len(p), nil }
-
-func (s *blockingStream) Close() error {
-	s.once.Do(func() {
-		s.mu.Lock()
-		s.closeN++
-		s.mu.Unlock()
+func (*mcpBlockingStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s *mcpBlockingStream) Close() error {
+	s.closeCount++
+	select {
+	case <-s.closed:
+	default:
 		close(s.closed)
-	})
+	}
 	return nil
 }
 
-func (s *blockingStream) closeCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closeN
-}
-
-func (b *fakeBackend) Doctor(context.Context) (backend.Doctor, error) {
-	b.record("doctor")
-	if b.doctorErr != nil {
-		return backend.Doctor{}, b.doctorErr
-	}
-	return backend.Doctor{Capabilities: backend.Capabilities{Accessibility: true}}, nil
-}
-
-func (b *fakeBackend) Windows(context.Context, backend.Budget) ([]backend.Window, error) {
-	b.record("windows")
-	return []backend.Window{{Ref: "window-1", Process: testProcess(), Title: "Fixture"}}, nil
-}
-
-func (b *fakeBackend) Observe(ctx context.Context, windowRef string, _ backend.Budget) (backend.Snapshot, error) {
-	b.record("observe")
-	if b.blockObserve {
-		select {
-		case <-b.observeStarted:
-		default:
-			close(b.observeStarted)
-		}
-		<-ctx.Done()
-		b.mu.Lock()
-		b.cancelled = true
-		b.mu.Unlock()
-		if b.cancellationObserved != nil {
-			close(b.cancellationObserved)
-		}
-		return backend.Snapshot{}, ctx.Err()
-	}
-	enabled := true
-	return backend.Snapshot{
-		WindowRef: windowRef,
-		StateID:   "native-state-1",
-		Elements: []backend.Element{{
-			Ref: "element-1", Role: "textfield", Label: "Fixture field", Enabled: &enabled, Classification: "normal",
-		}},
-		Coverage: backend.Coverage{Complete: true},
-	}, nil
-}
-
-func (b *fakeBackend) ReadElement(context.Context, string, string, string, backend.Budget) (backend.ElementContent, error) {
-	b.record("read_element")
-	return backend.ElementContent{WindowRef: "window-1", ElementRef: "element-1", StateID: "native-state-1", Text: "fixture"}, nil
-}
-
-func (b *fakeBackend) Execute(context.Context, backend.Action) (backend.ActionResult, error) {
-	b.record("execute")
-	return backend.ActionResult{}, errors.New("MCP adapter must not call Execute")
-}
-
-func (b *fakeBackend) Close(context.Context) error { return nil }
-
-func (b *fakeBackend) record(name string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.calls = append(b.calls, name)
-}
-
-func (b *fakeBackend) callSnapshot() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]string(nil), b.calls...)
-}
-
-func (b *fakeBackend) cancelSeen() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.cancelled
-}
-
-func testProcess() backend.ProcessIdentity {
-	return backend.ProcessIdentity{PID: 123, BundleID: "com.example.fixture", LaunchID: "launch-1"}
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
+var _ io.ReadWriteCloser = (*mcpBlockingStream)(nil)

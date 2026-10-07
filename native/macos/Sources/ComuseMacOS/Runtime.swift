@@ -9,6 +9,8 @@ let comuseMaximumRequestBytes = 32 * 1024
 let comuseMaximumResponseBytes = 64 * 1024
 let comuseMaximumScopeProcesses = 32
 
+func nativeWindowTitleEvidence(_ value: Any?) -> String? { value as? String }
+
 public typealias Completion = @convention(c) (UInt64, UInt64, Int32, UnsafePointer<UInt8>?, Int) -> Void
 
 struct NativeProcess: Codable, Sendable, Equatable {
@@ -49,19 +51,52 @@ struct NativeAction: Decodable, Sendable {
     var stateID: String
     var kind: String
     var text: String
+    var direction: String
+    var amount: String
+    var x: Double
+    var y: Double
+    var endX: Double
+    var endY: Double
+    var button: String
+    var count: Int
+    var holdMS: Int
+    var delayMS: Int
+    var keys: String
+    var dx: Int
+    var dy: Int
+    var steps: Int
+    var durationMS: Int
     enum CodingKeys: String, CodingKey {
         case id; case windowRef = "window_ref"; case elementRef = "element_ref"
-        case stateID = "state_id"; case kind; case text
+        case stateID = "state_id"; case kind; case text; case direction; case amount
+        case x; case y; case endX = "end_x"; case endY = "end_y"; case button
+        case count; case holdMS = "hold_ms"; case delayMS = "delay_ms"; case keys
+        case dx; case dy; case steps; case durationMS = "duration_ms"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
         windowRef = try values.decode(String.self, forKey: .windowRef)
-        elementRef = try values.decode(String.self, forKey: .elementRef)
-        stateID = try values.decode(String.self, forKey: .stateID)
+        elementRef = try values.decodeIfPresent(String.self, forKey: .elementRef) ?? ""
+        stateID = try values.decodeIfPresent(String.self, forKey: .stateID) ?? ""
         kind = try values.decode(String.self, forKey: .kind)
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
+        direction = try values.decodeIfPresent(String.self, forKey: .direction) ?? ""
+        amount = try values.decodeIfPresent(String.self, forKey: .amount) ?? ""
+        x = try values.decodeIfPresent(Double.self, forKey: .x) ?? 0
+        y = try values.decodeIfPresent(Double.self, forKey: .y) ?? 0
+        endX = try values.decodeIfPresent(Double.self, forKey: .endX) ?? 0
+        endY = try values.decodeIfPresent(Double.self, forKey: .endY) ?? 0
+        button = try values.decodeIfPresent(String.self, forKey: .button) ?? ""
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        holdMS = try values.decodeIfPresent(Int.self, forKey: .holdMS) ?? 0
+        delayMS = try values.decodeIfPresent(Int.self, forKey: .delayMS) ?? 0
+        keys = try values.decodeIfPresent(String.self, forKey: .keys) ?? ""
+        dx = try values.decodeIfPresent(Int.self, forKey: .dx) ?? 0
+        dy = try values.decodeIfPresent(Int.self, forKey: .dy) ?? 0
+        steps = try values.decodeIfPresent(Int.self, forKey: .steps) ?? 0
+        durationMS = try values.decodeIfPresent(Int.self, forKey: .durationMS) ?? 0
     }
 }
 
@@ -181,11 +216,13 @@ final class NativeRuntime {
     let processes: [NativeProcess]
     var requestTasks: [UInt64: Task<Void, Never>] = [:]
     var lastProjectionDigest: String?
+    var desktopTracker: DesktopContextTracker
 
     init(id: UInt64, config: NativeConfig, processes: [NativeProcess]) {
         self.id = id
         self.config = config
         self.processes = processes
+        self.desktopTracker = DesktopContextTracker(displayID: UUID().uuidString.lowercased())
     }
 
     func dispatch(requestID: UInt64, callbackID: UInt64, completion: Completion, data: Data) {
@@ -227,16 +264,19 @@ final class NativeRuntime {
 
     private func handle(_ data: Data, nativeRequestID: UInt64) -> Data {
         do {
-            let decoder = JSONDecoder()
-            let request = try decoder.decode(NativeRequest.self, from: data)
-            guard request.schemaVersion == 1, validRequestID(request.requestID),
-                  !isCancelled(nativeRequestID),
-                  config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000) else {
-                throw ProbeFailure(code: isCancelled(nativeRequestID) ? "cancelled" : "invalid_request")
+            let request = try decodeNativeRequest(data)
+            guard request.schemaVersion == 1, validRequestID(request.requestID) else {
+                throw ProbeFailure(code: "invalid_request")
+            }
+            guard !isCancelled(nativeRequestID) else { throw ProbeFailure(code: "cancelled") }
+            guard config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000) else {
+                invalidateAccessibilityState()
+                desktopTracker.invalidate()
+                throw ProbeFailure(code: "invalid_request")
             }
             let result: Any
             switch request.operation {
-            case "doctor": result = doctor()
+            case "doctor": result = try doctor(requestID: nativeRequestID)
             case "windows": result = try windows(request, requestID: nativeRequestID)
             case "observe": result = try observe(request, requestID: nativeRequestID)
             case "read_element": result = try readElement(request, requestID: nativeRequestID)
@@ -248,14 +288,16 @@ final class NativeRuntime {
             guard response.count <= comuseMaximumResponseBytes else { throw ProbeFailure(code: "budget_exceeded") }
             return response
         } catch {
-            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode(for: error))
+            return nativeErrorEnvelope(requestID: extractRequestID(from: data), error: error)
         }
     }
 
-    private func doctor() -> [String: Any] {
+    private func doctor(requestID: UInt64) throws -> [String: Any] {
+        let deadline = ProcessInfo.processInfo.systemUptime + 1.0
+        try checkDeadline(requestID, deadline: deadline)
         let accessibility = AXIsProcessTrusted()
         if !accessibility { invalidateAccessibilityState() }
-        return [
+        var result: [String: Any] = [
             "capabilities": [
                 "accessibility": accessibility,
                 "input": false,
@@ -268,23 +310,25 @@ final class NativeRuntime {
                 "event_posting": CGPreflightPostEventAccess() ? "granted" : "denied"
             ]
         ]
+        if let context = try desktopContextJSON(requestID: requestID, deadline: deadline) { result["desktop_context"] = context }
+        return result
     }
 
     private func windows(_ request: NativeRequest, requestID: UInt64) throws -> [[String: Any]] {
         try checkPermission()
+        let desktopGeneration = try refreshDesktopGeneration()
         var result: [[String: Any]] = []
-        let budget = boundedBudget(request.budget)
+        let budget = try boundedBudget(request.budget)
         let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
         var totalBytes = 0
         for process in processes {
             try checkDeadline(requestID, deadline: deadline)
             let app = try application(process)
             let applicationElement = AXUIElementCreateApplication(process.pid)
-            guard AXUIElementSetMessagingTimeout(applicationElement, Float(max(0.05, min(budget.timeout, 1.0)))) == .success else {
-                throw ProbeFailure(code: "backend_unavailable")
-            }
             var windowCount: CFIndex = 0
-            guard AXUIElementGetAttributeValueCount(applicationElement, kAXWindowsAttribute as CFString, &windowCount) == .success,
+            guard (try nativeAXDeadlineIPC(applicationElement, deadline: deadline) {
+                AXUIElementGetAttributeValueCount(applicationElement, kAXWindowsAttribute as CFString, &windowCount)
+            }) == .success,
                   windowCount >= 0 else { throw ProbeFailure(code: "backend_unavailable") }
             let remaining = min(budget.maxNodes - result.count, 128 - result.count)
             let bounds = boundedChildCount(Int(windowCount), limit: remaining)
@@ -293,7 +337,9 @@ final class NativeRuntime {
             guard !bounds.truncated else { throw ProbeFailure(code: "budget_exceeded") }
             var rawWindows: CFArray?
             if bounds.count > 0 {
-                guard AXUIElementCopyAttributeValues(applicationElement, kAXWindowsAttribute as CFString, 0, CFIndex(bounds.count), &rawWindows) == .success else {
+                guard (try nativeAXDeadlineIPC(applicationElement, deadline: deadline) {
+                    AXUIElementCopyAttributeValues(applicationElement, kAXWindowsAttribute as CFString, 0, CFIndex(bounds.count), &rawWindows)
+                }) == .success else {
                     throw ProbeFailure(code: "backend_unavailable")
                 }
             }
@@ -308,9 +354,13 @@ final class NativeRuntime {
             for window in values {
                 try checkDeadline(requestID, deadline: deadline)
                 guard result.count < min(budget.maxNodes, 128) else { throw ProbeFailure(code: "budget_exceeded") }
-                let ref = try retain(window, process: app.identity, windowRef: nil, kind: .window)
-                let rawTitle = stringAttribute(window, kAXTitleAttribute) ?? ""
-                let title = boundedUTF8Prefix(rawTitle, byteLimit: 1024)
+                let ref = try retain(window, process: app.identity, windowRef: nil, kind: .window, deadline: deadline)
+                guard let inspectedTitle = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String,
+                                                                                    deadline: deadline)) else {
+                    invalidateAccessibilityState()
+                    throw ProbeFailure(code: "backend_unavailable")
+                }
+                let title = boundedUTF8Prefix(inspectedTitle, byteLimit: 1024)
                 guard !title.truncated else { throw ProbeFailure(code: "budget_exceeded") }
                 let row: [String: Any] = ["ref": ref, "process": processJSON(app.identity), "title": title.text]
                 let bytes = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]).count
@@ -320,12 +370,18 @@ final class NativeRuntime {
             }
             guard try application(process).identity == app.identity else { throw ProbeFailure(code: "element_stale") }
         }
+        guard try refreshDesktopGeneration() == desktopGeneration else {
+            invalidateAccessibilityState()
+            throw ProbeFailure(code: "state_expired")
+        }
         return result
     }
 
     // AX implementation is defined in Accessibility.swift.
     func observe(_ request: NativeRequest, requestID: UInt64) throws -> [String: Any] {
-        try observeWindow(request, requestID: requestID)
+        let budget = try boundedBudget(request.budget)
+        return try observeWindow(request, requestID: requestID,
+                                 deadline: ProcessInfo.processInfo.systemUptime + budget.timeout)
     }
     func readElement(_ request: NativeRequest, requestID: UInt64) throws -> [String: Any] {
         try readScopedElement(request, requestID: requestID)
@@ -406,7 +462,7 @@ func extractRequestID(from data: Data) -> String {
 
 private let nativeErrorCodes: Set<String> = [
     "invalid_request", "policy_refused", "element_stale", "state_expired", "permission_denied",
-    "unsupported", "backend_unavailable", "budget_exceeded", "cancelled", "internal_error"
+    "unsupported", "backend_unavailable", "budget_exceeded", "cancelled", "unknown_outcome", "internal_error"
 ]
 
 private func nativeErrorCode(_ code: String) -> String {
@@ -419,6 +475,10 @@ func nativeErrorCode(for error: Error) -> String {
     }
     if error is DecodingError { return "invalid_request" }
     return "internal_error"
+}
+
+func nativeErrorEnvelope(requestID: String, error: Error) -> Data {
+    envelope(requestID: requestID, error: nativeErrorCode(for: error))
 }
 
 private func envelope(requestID: String, result: Data? = nil, error: String? = nil) -> Data {
@@ -468,8 +528,7 @@ public func comuseRuntimeOpen(_ configBytes: UnsafePointer<UInt8>?, _ configLeng
           let runtimeOut, let resolvedScopeOut, let resolvedScopeLengthOut,
           resolvedScopeCapacity > 0 else { return 1 }
     do {
-        let decoder = JSONDecoder()
-        let config = try decoder.decode(NativeConfig.self, from: Data(bytes: configBytes, count: configLength))
+        let config = try decodeNativeConfig(Data(bytes: configBytes, count: configLength))
         guard config.schemaVersion == 1, !config.scope.processes.isEmpty,
               config.scope.processes.count <= comuseMaximumScopeProcesses,
               config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000),

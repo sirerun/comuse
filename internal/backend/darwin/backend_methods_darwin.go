@@ -48,8 +48,13 @@ func (native *nativeBackend) invoke(ctx context.Context, operation, windowRef, e
 	}
 	defer native.inflight.Add(-1)
 	requestID := formatRequestID(requestSequence.Add(1))
+	var actionWire *nativeAction
+	if action != nil {
+		projected := actionTransport(*action)
+		actionWire = &projected
+	}
 	request := nativeRequest{SchemaVersion: abiVersion, RequestID: requestID, Operation: operation,
-		WindowRef: windowRef, ElementRef: elementRef, StateID: stateID, Budget: budget, Action: action}
+		WindowRef: windowRef, ElementRef: elementRef, StateID: stateID, Budget: budget, Action: actionWire}
 	data, err := json.Marshal(request)
 	if err != nil || len(data) == 0 || len(data) > maxNativeRequest {
 		return backendError("invalid_request")
@@ -170,25 +175,23 @@ func (native *nativeBackend) ReadElement(ctx context.Context, windowRef, element
 }
 
 func (native *nativeBackend) Execute(ctx context.Context, action backend.Action) (backend.ActionResult, error) {
-	if action.ID == "" || !validOpaque(action.ID) || !validOpaque(action.WindowRef) ||
-		!validOpaque(action.ElementRef) || !validOpaque(action.StateID) || len(action.Text) > maximumTextBytes {
+	if !validateNativeAction(action) {
 		return backend.ActionResult{}, backendError("invalid_request")
 	}
-	switch action.Kind {
-	case backend.ActionPress:
-		if action.Text != "" {
-			return backend.ActionResult{}, backendError("invalid_request")
-		}
-	case backend.ActionReplace:
-	case backend.ActionInsert:
-		if action.Text == "" {
-			return backend.ActionResult{}, backendError("invalid_request")
-		}
-	default:
-		return backend.ActionResult{}, backendError("invalid_request")
+	// There is no public config, environment, or API path to set this private
+	// admission bit. Production construction leaves it false until the live gate.
+	if !native.qualifiedInput {
+		return backend.ActionResult{}, backendError("unsupported")
 	}
-	// Native mutation remains source-only and compile-closed until separately qualified.
-	return backend.ActionResult{}, backendError("unsupported")
+	var wire nativeActionResult
+	if err := native.invoke(ctx, "execute", action.WindowRef, action.ElementRef, action.StateID, nil, &action, &wire); err != nil {
+		return backend.ActionResult{}, err
+	}
+	result, err := decodeActionResult(wire, action)
+	if err != nil {
+		return backend.ActionResult{}, err
+	}
+	return result, nil
 }
 
 func (native *nativeBackend) Close(ctx context.Context) error { return native.requestClose(ctx) }

@@ -2,13 +2,13 @@ package comuse
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sirerun/comuse/internal/semantic"
 )
 
 type snapshotBinding struct {
@@ -19,24 +19,6 @@ type snapshotBinding struct {
 	storageSize int
 }
 
-type canonicalObservation struct {
-	SchemaVersion int                `json:"schema_version"`
-	WindowRef     string             `json:"window_ref"`
-	Elements      []canonicalElement `json:"elements"`
-	Coverage      Coverage           `json:"coverage"`
-}
-
-type canonicalElement struct {
-	Ref       string   `json:"ref"`
-	ParentRef string   `json:"parent_ref,omitempty"`
-	Order     int      `json:"order"`
-	Role      string   `json:"role"`
-	Label     string   `json:"label,omitempty"`
-	Value     *string  `json:"value,omitempty"`
-	Enabled   *bool    `json:"enabled,omitempty"`
-	Actions   []string `json:"actions,omitempty"`
-}
-
 // Doctor returns bounded, sanitized backend capability and permission status.
 func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	callCtx, done, err := s.enter(ctx)
@@ -44,13 +26,27 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 		return DoctorReport{}, err
 	}
 	defer done()
+	if observed, _ := callCtx.Value(stateAccountingKey{}).(bool); observed {
+		s.account(callCtx, CounterObservationState, 1)
+	}
+	permissionEpoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	report, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
 		return DoctorReport{}, s.stableBackendError(callCtx, callErr)
 	}
+	changed, _, err := s.reconcileDesktopContextAt(report.DesktopContext, &contextEpoch)
+	if err != nil {
+		return DoctorReport{}, err
+	}
+	if changed {
+		contextEpoch++
+	}
+	report.DesktopContext = cloneDesktopContext(report.DesktopContext)
 	// Reasons and permission values are implementation diagnostics. Retain only
 	// the closed capability booleans and known, stable permission statuses.
 	report.Capabilities.Reasons = nil
+	report.Capabilities.ActionKinds = allowedActions(report.Capabilities.ActionKinds)
 	permissions := make(map[string]string)
 	for name, state := range report.Permissions {
 		if !knownPermission(name) {
@@ -62,11 +58,21 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	}
 	report.Permissions = permissions
 	s.invalidateIfPermissionDenied(report)
+	if report.Capabilities.Accessibility && report.Permissions["accessibility"] != "denied" {
+		if err := s.bindContextFocus(report.DesktopContext, permissionEpoch, contextEpoch); err != nil {
+			return DoctorReport{}, err
+		}
+	}
 	return report, nil
 }
 
 // State returns the same bounded runtime status as Doctor.
-func (s *Session) State(ctx context.Context) (DoctorReport, error) { return s.Doctor(ctx) }
+func (s *Session) State(ctx context.Context) (DoctorReport, error) {
+	if ctx == nil {
+		return DoctorReport{}, coreError("invalid_request")
+	}
+	return s.Doctor(context.WithValue(ctx, stateAccountingKey{}, true))
+}
 
 // Windows lists only windows whose exact process identity is in the session scope.
 func (s *Session) Windows(ctx context.Context) ([]Window, error) {
@@ -75,7 +81,18 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 		return nil, err
 	}
 	defer done()
+	// Establish inspected context before retaining enumeration references. A
+	// first Observe must not rotate away the window it was just given.
+	report, doctorErr := s.Doctor(context.WithValue(callCtx, stateAccountingKey{}, true))
+	if doctorErr != nil {
+		return nil, doctorErr
+	}
+	if !report.Capabilities.Accessibility || report.Permissions["accessibility"] == "denied" {
+		return nil, coreError("permission_denied")
+	}
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
+	s.account(callCtx, CounterObservationState, 1)
 	windows, callErr := s.backend.Windows(callCtx, s.budget)
 	if callErr != nil {
 		return nil, s.stableBackendError(callCtx, callErr)
@@ -103,6 +120,10 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 		s.mu.Unlock()
 		return nil, coreError("permission_denied")
 	}
+	if s.contextEpoch != contextEpoch {
+		s.mu.Unlock()
+		return nil, coreError("state_expired")
+	}
 	s.windows = make(map[string]Window, len(filtered))
 	for _, window := range filtered {
 		s.windows[window.Ref] = window
@@ -122,15 +143,44 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	}
 	defer done()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	s.mu.Lock()
-	_, exists := s.windows[windowRef]
+	window, exists := s.windows[windowRef]
+	hadContext := s.hasDesktopContext
 	s.mu.Unlock()
 	if !exists {
 		return Observation{}, coreError("element_stale")
 	}
+	s.account(callCtx, CounterObservationA11y, 1)
 	native, callErr := s.backend.Observe(callCtx, windowRef, s.budget)
 	if callErr != nil {
 		return Observation{}, s.stableBackendError(callCtx, callErr)
+	}
+	changed, _, contextErr := s.reconcileDesktopContextAt(native.DesktopContext, &contextEpoch)
+	if contextErr != nil {
+		return Observation{}, contextErr
+	}
+	if changed && !hadContext && native.DesktopContext != nil {
+		// A first fresh capture may supply previously unavailable context.
+		// Rotate/purge old authority, then bind only this freshly validated
+		// scoped window. Actual known-display transitions still fail below.
+		contextEpoch++
+		s.contextMu.Lock()
+		s.mu.Lock()
+		if s.permissionEpoch != epoch || s.contextEpoch != contextEpoch {
+			s.mu.Unlock()
+			s.contextMu.Unlock()
+			return Observation{}, snapshotEpochError(s, epoch, contextEpoch)
+		}
+		s.windows[windowRef] = window
+		s.mu.Unlock()
+		s.contextMu.Unlock()
+	}
+	if err := s.bindContextFocus(native.DesktopContext, epoch, contextEpoch); err != nil {
+		return Observation{}, err
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return Observation{}, coreError("state_expired")
 	}
 	projection, binding, normalizeErr := s.normalizeObservation(windowRef, native)
 	if normalizeErr != nil {
@@ -139,8 +189,13 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	if exceedsJSONBudget(projection, s.budget.MaxBytes) {
 		return Observation{}, coreError("budget_exceeded")
 	}
-	if !s.rememberSnapshotAtEpoch(binding, epoch) {
-		return Observation{}, coreError("permission_denied")
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	if s.contextEpochNow() != contextEpoch {
+		return Observation{}, coreError("state_expired")
+	}
+	if !s.rememberSnapshotAtEpoch(binding, epoch, contextEpoch) {
+		return Observation{}, snapshotEpochError(s, epoch, contextEpoch)
 	}
 	return cloneObservation(projection), nil
 }
@@ -156,6 +211,7 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	}
 	defer done()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	prior, ok := s.findSnapshot(windowRef, stateID)
 	if !ok {
 		return ElementContent{}, coreError("state_expired")
@@ -166,19 +222,32 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	if _, ok := s.window(windowRef); !ok {
 		return ElementContent{}, coreError("element_stale")
 	}
+	s.account(callCtx, CounterObservationA11y, 1)
 	current, callErr := s.backend.Observe(callCtx, windowRef, s.budget)
 	if callErr != nil {
 		return ElementContent{}, s.stableBackendError(callCtx, callErr)
+	}
+	if _, _, contextErr := s.reconcileDesktopContextAt(current.DesktopContext, &contextEpoch); contextErr != nil {
+		return ElementContent{}, contextErr
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return ElementContent{}, coreError("state_expired")
 	}
 	projection, binding, normalizeErr := s.normalizeObservation(windowRef, current)
 	if normalizeErr != nil {
 		return ElementContent{}, normalizeErr
 	}
-	if !s.rememberSnapshotAtEpoch(binding, epoch) {
-		return ElementContent{}, coreError("permission_denied")
+	if !s.rememberSnapshotAtEpoch(binding, epoch, contextEpoch) {
+		return ElementContent{}, snapshotEpochError(s, epoch, contextEpoch)
 	}
-	if projection.StateID != stateID {
+	if projection.StateID != stateID || !normalTarget(projection, elementRef) {
 		return ElementContent{}, coreError("element_stale")
+	}
+	s.account(callCtx, CounterObservationA11y, 1)
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	if s.contextEpochNow() != contextEpoch {
+		return ElementContent{}, coreError("state_expired")
 	}
 	content, callErr := s.backend.ReadElement(callCtx, windowRef, elementRef, binding.nativeState, s.budget)
 	if callErr != nil {
@@ -187,14 +256,33 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	if s.currentPermissionEpoch() != epoch {
 		return ElementContent{}, coreError("permission_denied")
 	}
+	if s.contextEpochNow() != contextEpoch {
+		return ElementContent{}, coreError("state_expired")
+	}
 	if content.WindowRef != windowRef || content.ElementRef != elementRef || content.StateID != binding.nativeState || !validText(content.Text, s.budget.MaxBytes) {
 		return ElementContent{}, coreError("backend_unavailable")
 	}
 	content.StateID = projection.StateID
+	content.ObservedAt = projection.ObservedAt
+	if len(content.Text) > 8192 {
+		return ElementContent{}, coreError("budget_exceeded")
+	}
 	if exceedsJSONBudget(content, s.budget.MaxBytes) {
 		return ElementContent{}, coreError("budget_exceeded")
 	}
 	return content, nil
+}
+
+func snapshotEpochError(s *Session, permissionEpoch, contextEpoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.permissionEpoch != permissionEpoch {
+		return coreError("permission_denied")
+	}
+	if s.contextEpoch != contextEpoch {
+		return coreError("state_expired")
+	}
+	return coreError("backend_unavailable")
 }
 
 // Wait performs one fresh bounded observation within the requested timeout.
@@ -229,7 +317,7 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 			return Observation{}, snapshotBinding{}, coreError("backend_unavailable")
 		}
 		seen[element.Ref] = struct{}{}
-		copyElement := Element{Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order, Role: element.Role, Label: element.Label, Enabled: cloneBool(element.Enabled), Classification: "normal"}
+		copyElement := Element{Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order, Role: element.Role, Label: element.Label, Enabled: cloneBool(element.Enabled), Focused: cloneBool(element.Focused), Checked: cloneBool(element.Checked), Selected: cloneBool(element.Selected), Classification: "normal"}
 		if s.allowValues && element.Value != nil {
 			if !validText(*element.Value, s.budget.MaxBytes) {
 				return Observation{}, snapshotBinding{}, coreError("backend_unavailable")
@@ -248,36 +336,35 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 	if !native.Coverage.Complete {
 		coverage.Reason = safeCoverageReason(native.Coverage.Reason)
 	}
-	canonicalElements := make([]canonicalElement, 0, len(filtered))
-	for _, element := range filtered {
-		canonicalElements = append(canonicalElements, canonicalElement{
-			Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order,
-			Role: element.Role, Label: element.Label, Value: cloneString(element.Value),
-			Enabled: cloneBool(element.Enabled), Actions: append([]string(nil), element.Actions...),
-		})
+	public := Observation{WindowRef: windowRef, ObservedAt: s.now().UTC(), Elements: filtered, Coverage: coverage,
+		DesktopContext: cloneDesktopContext(native.DesktopContext)}
+	full, projectionErr := buildFullObservation(s, public)
+	if projectionErr != nil {
+		return Observation{}, snapshotBinding{}, projectionErr
 	}
-	canonical, err := json.Marshal(canonicalObservation{SchemaVersion: SchemaVersion, WindowRef: windowRef, Elements: canonicalElements, Coverage: coverage})
+	canonical, err := semantic.CanonicalBytes(full)
 	if err != nil || len(canonical) > s.budget.MaxBytes {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}
-	digest := sha256.Sum256(canonical)
-	public := Observation{WindowRef: windowRef, StateID: hex.EncodeToString(digest[:]), ObservedAt: s.now().UTC(), Elements: filtered, Coverage: coverage}
+	public.StateID = full.StateID
+	public.ScopeID = full.ScopeID
+	public.ActionSequence = full.ActionSequence
 	publicJSON, err := json.Marshal(public)
 	if err != nil || len(publicJSON) > s.budget.MaxBytes {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}
 	now := s.now()
-	storageSize := len(canonical) + len(native.StateID) + len(publicJSON)
+	storageSize := len(canonical) + len(publicJSON) + semantic.BindingCharge*(len(public.Elements)+2)
 	if storageSize > maxSnapshotStorage {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}
 	return public, snapshotBinding{public: public, nativeState: native.StateID, canonical: canonical, storedAt: now, storageSize: storageSize}, nil
 }
 
-func (s *Session) rememberSnapshotAtEpoch(binding snapshotBinding, epoch uint64) bool {
+func (s *Session) rememberSnapshotAtEpoch(binding snapshotBinding, epoch, contextEpoch uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.permissionEpoch != epoch {
+	if s.permissionEpoch != epoch || s.contextEpoch != contextEpoch {
 		return false
 	}
 	s.pruneSnapshotsLocked(s.now())
@@ -377,7 +464,7 @@ func allowedActions(actions []string) []string {
 	result := make([]string, 0, len(actions))
 	for _, action := range actions {
 		switch action {
-		case ActionPress, ActionReplace, ActionInsert:
+		case ActionPress, ActionReplace, ActionInsert, ActionScroll, ActionPick, ActionFocus:
 			if _, exists := seen[action]; exists {
 				continue
 			}
@@ -493,11 +580,15 @@ func cloneBool(value *bool) *bool {
 
 func cloneObservation(value Observation) Observation {
 	clone := value
+	clone.DesktopContext = cloneDesktopContext(value.DesktopContext)
 	clone.Elements = make([]Element, len(value.Elements))
 	for i, element := range value.Elements {
 		clone.Elements[i] = element
 		clone.Elements[i].Value = cloneString(element.Value)
 		clone.Elements[i].Enabled = cloneBool(element.Enabled)
+		clone.Elements[i].Focused = cloneBool(element.Focused)
+		clone.Elements[i].Checked = cloneBool(element.Checked)
+		clone.Elements[i].Selected = cloneBool(element.Selected)
 		clone.Elements[i].Actions = append([]string(nil), element.Actions...)
 	}
 	return clone

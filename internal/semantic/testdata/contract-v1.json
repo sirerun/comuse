@@ -1,0 +1,160 @@
+{
+  "baseline": {
+    "schema_version": 1,
+    "scope_id": "scope-fixture",
+    "window_ref": "window-fixture",
+    "observed_at": "2026-10-07T00:00:00Z",
+    "action_sequence": 0,
+    "coverage": {
+      "status": "complete",
+      "truncated": false,
+      "limitations": []
+    },
+    "context": {
+      "root_refs": [
+        "root"
+      ],
+      "focused_element_ref": null
+    },
+    "kind": "snapshot",
+    "historical": false,
+    "nodes": {
+      "root": {
+        "role": "group",
+        "classification": "normal",
+        "parent_ref": null,
+        "child_refs": [
+          "normal",
+          "secure"
+        ],
+        "actions": []
+      },
+      "normal": {
+        "role": "text_field",
+        "classification": "normal",
+        "parent_ref": "root",
+        "child_refs": [],
+        "actions": [
+          "replace"
+        ],
+        "value": "fixture old"
+      },
+      "secure": {
+        "role": "text_field",
+        "classification": "secure",
+        "parent_ref": "root",
+        "child_refs": [],
+        "actions": []
+      }
+    },
+    "state_id": "636e10ecc1007d87981a08a285e867a528ddfe8423385ef42d29a133f89357f5"
+  },
+  "current": {
+    "schema_version": 1,
+    "scope_id": "scope-fixture",
+    "window_ref": "window-fixture",
+    "observed_at": "2026-10-07T00:00:01Z",
+    "action_sequence": 1,
+    "coverage": {
+      "status": "complete",
+      "truncated": false,
+      "limitations": []
+    },
+    "context": {
+      "root_refs": [
+        "root"
+      ],
+      "focused_element_ref": null
+    },
+    "kind": "snapshot",
+    "historical": false,
+    "nodes": {
+      "root": {
+        "role": "group",
+        "classification": "normal",
+        "parent_ref": null,
+        "child_refs": [
+          "normal"
+        ],
+        "actions": []
+      },
+      "normal": {
+        "role": "text_field",
+        "classification": "normal",
+        "parent_ref": "root",
+        "child_refs": [],
+        "actions": [
+          "replace"
+        ],
+        "value": "fixture new"
+      }
+    },
+    "state_id": "1b0a4323f0249afdf14f42d2056a2494f9dbd2d46aaca7b3e284e06c0983ac2e"
+  },
+  "delta": {
+    "schema_version": 1,
+    "scope_id": "scope-fixture",
+    "window_ref": "window-fixture",
+    "observed_at": "2026-10-07T00:00:01Z",
+    "action_sequence": 1,
+    "coverage": {
+      "status": "complete",
+      "truncated": false,
+      "limitations": []
+    },
+    "context": {
+      "root_refs": [
+        "root"
+      ],
+      "focused_element_ref": null
+    },
+    "kind": "delta",
+    "state_id": "1b0a4323f0249afdf14f42d2056a2494f9dbd2d46aaca7b3e284e06c0983ac2e",
+    "base_state_id": "636e10ecc1007d87981a08a285e867a528ddfe8423385ef42d29a133f89357f5",
+    "upsert": {
+      "root": {
+        "role": "group",
+        "classification": "normal",
+        "parent_ref": null,
+        "child_refs": [
+          "normal"
+        ],
+        "actions": []
+      },
+      "normal": {
+        "role": "text_field",
+        "classification": "normal",
+        "parent_ref": "root",
+        "child_refs": [],
+        "actions": [
+          "replace"
+        ],
+        "value": "fixture new"
+      }
+    },
+    "removed": [
+      "secure"
+    ]
+  },
+  "unchanged": {
+    "schema_version": 1,
+    "scope_id": "scope-fixture",
+    "window_ref": "window-fixture",
+    "observed_at": "2026-10-07T00:00:02Z",
+    "action_sequence": 1,
+    "coverage": {
+      "status": "complete",
+      "truncated": false,
+      "limitations": []
+    },
+    "context": {
+      "root_refs": [
+        "root"
+      ],
+      "focused_element_ref": null
+    },
+    "kind": "unchanged",
+    "state_id": "1b0a4323f0249afdf14f42d2056a2494f9dbd2d46aaca7b3e284e06c0983ac2e",
+    "base_state_id": "1b0a4323f0249afdf14f42d2056a2494f9dbd2d46aaca7b3e284e06c0983ac2e"
+  }
+}

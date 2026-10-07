@@ -40,7 +40,35 @@ type nativeRequest struct {
 	ElementRef    string          `json:"element_ref,omitempty"`
 	StateID       string          `json:"state_id,omitempty"`
 	Budget        *backend.Budget `json:"budget,omitempty"`
-	Action        *backend.Action `json:"action,omitempty"`
+	Action        *nativeAction   `json:"action,omitempty"`
+}
+
+// nativeAction is the Darwin transport projection. It preserves required zero
+// values and an empty replace text while emitting only fields permitted for
+// the selected action kind; the shared backend DTO remains unchanged.
+type nativeAction map[string]any
+
+func actionTransport(action backend.Action) nativeAction {
+	value := nativeAction{"id": action.ID, "window_ref": action.WindowRef, "element_ref": action.ElementRef,
+		"state_id": action.StateID, "kind": action.Kind}
+	switch action.Kind {
+	case backend.ActionReplace, backend.ActionInsert:
+		value["text"] = action.Text
+	case backend.ActionScroll:
+		value["direction"], value["amount"] = action.Direction, action.Amount
+	case backend.ActionClick:
+		value["x"], value["y"], value["button"], value["count"], value["hold_ms"] = action.X, action.Y, action.Button, action.Count, action.HoldMS
+	case backend.ActionTypeText:
+		value["text"], value["delay_ms"] = action.Text, action.DelayMS
+	case backend.ActionPressKey:
+		value["keys"], value["hold_ms"] = action.Keys, action.HoldMS
+	case backend.ActionCoordinateScroll:
+		value["x"], value["y"], value["dx"], value["dy"] = action.X, action.Y, action.DX, action.DY
+	case backend.ActionDrag:
+		value["x"], value["y"], value["end_x"], value["end_y"] = action.X, action.Y, action.EndX, action.EndY
+		value["steps"], value["duration_ms"] = action.Steps, action.DurationMS
+	}
+	return value
 }
 
 type nativeEnvelope struct {
@@ -100,10 +128,11 @@ type runtimeOwner struct {
 }
 
 type nativeBackend struct {
-	owner       *runtimeOwner
-	boundScope  backend.Scope
-	allowValues bool
-	closing     atomic.Bool
-	closed      atomic.Bool
-	inflight    atomic.Int32
+	owner          *runtimeOwner
+	boundScope     backend.Scope
+	allowValues    bool
+	qualifiedInput bool // private admission; zero-valued in every production constructor
+	closing        atomic.Bool
+	closed         atomic.Bool
+	inflight       atomic.Int32
 }

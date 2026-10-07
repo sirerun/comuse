@@ -34,6 +34,7 @@ type Config struct {
 type Session struct {
 	mu                sync.Mutex
 	actionMu          sync.Mutex
+	contextMu         sync.Mutex
 	closeMu           sync.Mutex
 	changed           chan struct{}
 	active            int
@@ -42,25 +43,34 @@ type Session struct {
 	backendClosed     bool
 	terminalCloseCode string
 	permissionEpoch   uint64
+	contextEpoch      uint64
+	desktopContext    *DesktopContext
+	hasDesktopContext bool
 
-	backend          Backend
-	scope            Scope
-	budget           Budget
-	allowValues      bool
-	approvalProvider ApprovalProvider
-	writerDirectory  string
-	writerKey        []byte
-	maxActions       int
-	mutationEnabled  bool
-	sessionID        string
-	now              func() time.Time
+	ledger              *Ledger
+	acquireDesktop      func(context.Context) (desktopAuthority, error)
+	reserveQuota        func(context.Context, [32]byte) error
+	journalBinding      func(string, []byte) ([32]byte, error)
+	quarantinedDesktops []desktopAuthority
+	backend             Backend
+	scope               Scope
+	budget              Budget
+	allowValues         bool
+	approvalProvider    ApprovalProvider
+	writerDirectory     string
+	writerKey           []byte
+	maxActions          int
+	mutationEnabled     bool
+	sessionID           string
+	now                 func() time.Time
 
-	windows       map[string]Window
-	snapshots     map[string][]snapshotBinding
-	snapshotBytes int
-	actionsUsed   int
-	usedApprovals map[string]struct{}
-	quarantined   []*writer.Lease
+	windows        map[string]Window
+	snapshots      map[string][]snapshotBinding
+	snapshotBytes  int
+	actionsUsed    int
+	actionSequence uint64
+	usedApprovals  map[string]struct{}
+	quarantined    []*writer.Lease
 }
 
 func (s *Session) stableBackendError(ctx context.Context, err error) error {
@@ -89,9 +99,16 @@ func (s *Session) invalidateSemanticState() {
 
 func (s *Session) purgeSemanticStateLocked() {
 	s.permissionEpoch++
+	s.clearSemanticStateLocked()
+}
+
+func (s *Session) clearSemanticStateLocked() {
 	s.windows = make(map[string]Window)
 	s.snapshots = make(map[string][]snapshotBinding)
 	s.snapshotBytes = 0
+	if s.ledger != nil {
+		_ = s.ledger.SetRetainedBytes(0)
+	}
 }
 
 func (s *Session) currentPermissionEpoch() uint64 {
@@ -124,6 +141,10 @@ func NewSession(config Config) (*Session, error) {
 	config.WriterKey = append([]byte(nil), config.WriterKey...)
 	return &Session{
 		changed:          make(chan struct{}),
+		ledger:           NewLedger(),
+		acquireDesktop:   acquireDesktopAuthority,
+		reserveQuota:     reserveDesktopQuota,
+		journalBinding:   writer.DesktopJournalBinding,
 		backend:          config.Backend,
 		scope:            config.Scope,
 		budget:           config.Budget,
@@ -230,9 +251,25 @@ func (s *Session) Close(ctx context.Context) error {
 			closeErr = errors.Join(closeErr, err)
 		}
 	}
+	// The backend has drained before canonical desktop locks can be released.
 	s.mu.Lock()
+	desktops := append([]desktopAuthority(nil), s.quarantinedDesktops...)
+	s.mu.Unlock()
+	remainingDesktops := make([]desktopAuthority, 0, len(desktops))
+	for _, desktop := range desktops {
+		if len(remaining) > 0 {
+			remainingDesktops = append(remainingDesktops, desktop)
+			continue
+		}
+		if err := desktop.Close(); err != nil {
+			remainingDesktops = append(remainingDesktops, desktop)
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	s.mu.Lock()
+	s.quarantinedDesktops = remainingDesktops
 	s.quarantined = remaining
-	if closeErr == nil && len(remaining) == 0 {
+	if closeErr == nil && len(remaining) == 0 && len(remainingDesktops) == 0 {
 		s.closed = true
 		s.backend = nil
 		s.terminalCloseCode = terminalCloseCode

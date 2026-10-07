@@ -17,21 +17,22 @@ const (
 )
 
 var safeMessages = map[string]string{
-	"invalid_request":     "The request is invalid.",
-	"policy_refused":      "The request is not allowed by policy.",
-	"approval_required":   "Host approval is required.",
-	"element_stale":       "The element reference is stale.",
-	"state_expired":       "The observed state has expired.",
-	"permission_denied":   "Required permission was denied.",
-	"unsupported":         "The operation is not supported.",
-	"backend_unavailable": "The backend is unavailable.",
-	"desktop_busy":        "The desktop writer is busy.",
-	"rate_limited":        "The session action limit was reached.",
-	"budget_exceeded":     "The request exceeds its configured budget.",
-	"cancelled":           "The request was cancelled.",
-	"session_closed":      "The session is closed.",
-	"unknown_outcome":     "The action outcome is unknown.",
-	"internal_error":      "The operation failed.",
+	"invalid_request":       "invalid_request",
+	"policy_refused":        "policy_refused",
+	"approval_required":     "approval_required",
+	"element_stale":         "element_stale",
+	"state_expired":         "state_expired",
+	"permission_denied":     "permission_denied",
+	"unsupported":           "unsupported",
+	"backend_unavailable":   "backend_unavailable",
+	"desktop_busy":          "desktop_busy",
+	"rate_limited":          "rate_limited",
+	"budget_exceeded":       "budget_exceeded",
+	"cancelled":             "cancelled",
+	"session_closed":        "session_closed",
+	"unknown_outcome":       "unknown_outcome",
+	"internal_error":        "internal_error",
+	"replay_result_expired": "replay_result_expired",
 }
 
 func coreError(code string) error {
@@ -62,8 +63,11 @@ func validateAction(action Action) error {
 	if !utf8.ValidString(action.Text) || len(action.Text) > maxActionTextBytes {
 		return coreError("invalid_request")
 	}
+	if action.Kind != ActionScroll && (action.Direction != "" || action.Amount != "") {
+		return coreError("invalid_request")
+	}
 	switch action.Kind {
-	case ActionPress:
+	case ActionPress, ActionPick, ActionFocus:
 		if action.Text != "" {
 			return coreError("invalid_request")
 		}
@@ -71,6 +75,18 @@ func validateAction(action Action) error {
 		// An empty replacement deliberately clears the scoped field.
 	case ActionInsert:
 		if action.Text == "" {
+			return coreError("invalid_request")
+		}
+	case ActionScroll:
+		if action.Text != "" {
+			return coreError("invalid_request")
+		}
+		switch action.Direction {
+		case "up", "down", "left", "right":
+		default:
+			return coreError("invalid_request")
+		}
+		if action.Amount != "line" && action.Amount != "page" {
 			return coreError("invalid_request")
 		}
 	default:
@@ -183,17 +199,23 @@ func actionMetadata(action Action, result ActionResult, code string) writer.Safe
 		cleanup = "failed"
 	}
 	metadata := writer.SafeActionMetadata{
-		Action:       action.Kind,
-		Execution:    execution,
-		Verification: string(result.Verification.Status),
-		StateStatus:  string(result.StateStatus),
-		Cleanup:      cleanup,
-		ErrorCode:    code,
+		Action:             action.Kind,
+		Method:             result.Method,
+		CompletedSteps:     strings.Join(result.CompletedSteps, ","),
+		VerificationReason: safeVerificationReason(result.Verification.Reason),
+		Execution:          execution,
+		Verification:       string(result.Verification.Status),
+		StateStatus:        string(result.StateStatus),
+		Cleanup:            cleanup,
+		ErrorCode:          code,
 	}
 	return metadata
 }
 
 func validResult(actionID string, result ActionResult) bool {
+	if !safeDispatchMetadata(result) {
+		return false
+	}
 	if result.ActionID != actionID || result.ActionID == "" {
 		return false
 	}
@@ -227,4 +249,23 @@ func safeVerificationReason(reason string) string {
 	default:
 		return ""
 	}
+}
+
+func safeDispatchMetadata(r ActionResult) bool {
+	switch r.Method {
+	case "", "ax_press", "ax_pick", "ax_focus", "ax_set_value", "ax_scroll", "ax_focus_window", "cg_click", "cg_unicode", "cg_key", "cg_scroll", "cg_drag":
+	default:
+		return false
+	}
+	if len(r.CompletedSteps) > 128 {
+		return false
+	}
+	for _, p := range r.CompletedSteps {
+		switch p {
+		case "focus", "press", "pick", "set_value", "unicode", "key_down", "key_up", "mouse_down", "mouse_up", "mouse_move", "scroll", "cleanup":
+		default:
+			return false
+		}
+	}
+	return true
 }

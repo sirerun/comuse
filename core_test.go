@@ -46,7 +46,7 @@ func (f *fakeBackend) Doctor(context.Context) (DoctorReport, error) {
 	if !accessibility {
 		permission = "denied"
 	}
-	return DoctorReport{Capabilities: Capabilities{Accessibility: accessibility, Input: f.input, QualifiedInput: f.qualified}, Permissions: map[string]string{"accessibility": permission, "private-native-key": "secret"}}, nil
+	return DoctorReport{Capabilities: Capabilities{Accessibility: accessibility, Input: f.input, QualifiedInput: f.qualified, ActionKinds: []string{ActionPress, ActionPick, ActionFocus, ActionReplace, ActionInsert, ActionScroll}}, Permissions: map[string]string{"accessibility": permission, "private-native-key": "secret"}}, nil
 }
 
 func (f *fakeBackend) Windows(context.Context, Budget) ([]Window, error) {
@@ -173,7 +173,7 @@ func newTestSession(t *testing.T, backend *fakeBackend, mutation bool) *Session 
 		config.WriterKey = []byte(strings.Repeat("k", 32))
 		config.MaxActions = 2
 	}
-	session, err := NewSession(config)
+	session, err := newSyntheticSession(config)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestNewSessionReadonlyCopiesScopeAndCallsNoBackend(t *testing.T) {
 	process := testProcess()
 	backend := &fakeBackend{process: process, nativeState: "native-a", elements: testElements()}
 	config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget()}
-	session, err := NewSession(config)
+	session, err := newSyntheticSession(config)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestCloseClearsOwnedWriterSecrets(t *testing.T) {
 	process := testProcess()
 	backend := &fakeBackend{process: process, nativeState: "native-a"}
 	callerKey := []byte(strings.Repeat("k", 32))
-	session, err := NewSession(Config{
+	session, err := newSyntheticSession(Config{
 		Backend:          backend,
 		Scope:            Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)},
 		Budget:           testBudget(),
@@ -376,7 +376,7 @@ func TestUnknownActionRetainsInflightWhenJournalWritesFail(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(root, 0700) })
 	config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget(), ApprovalProvider: fixedApproval{}, WriterDirectory: root, WriterKey: []byte(strings.Repeat("k", 32)), MaxActions: 2}
-	session, err := NewSession(config)
+	session, err := newSyntheticSession(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestApprovalCancellationAndDeadlineCodesReplayExactly(t *testing.T) {
 			process := testProcess()
 			backend := &fakeBackend{process: process, nativeState: "native-action", elements: testElements(), input: true, qualified: true}
 			config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget(), ApprovalProvider: fixedApproval{err: tc.err}, WriterDirectory: filepath.Join(t.TempDir(), "state"), WriterKey: []byte(strings.Repeat("k", 32)), MaxActions: 2}
-			session, err := NewSession(config)
+			session, err := newSyntheticSession(config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -694,8 +694,8 @@ func TestDoPersistsPermissionRevocationAcrossBlockedApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	refreshed, err := session.Observe(context.Background(), "window-1")
-	if err != nil || refreshed.StateID != state.StateID {
-		t.Fatalf("fresh state for durable replay = (%+v, %v), want same canonical state %q", refreshed, err, state.StateID)
+	if err != nil || refreshed.StateID == state.StateID {
+		t.Fatalf("permission generation must change canonical identity = (%+v, %v), old state %q", refreshed, err, state.StateID)
 	}
 	replayed, err := session.Do(context.Background(), action)
 	if ErrorCode(err) != "permission_denied" || replayed.Execution != ExecutionNotApplied {
@@ -767,7 +767,7 @@ func TestSnapshotGenerationAndStorageRetentionLimits(t *testing.T) {
 	for i := 0; i < maxSnapshotGenerations+1; i++ {
 		backend.mu.Lock()
 		backend.nativeState = fmt.Sprintf("native-%d", i)
-		backend.elements[0].Order = i
+		backend.elements[0].Label = fmt.Sprintf("generation-%d", i)
 		backend.mu.Unlock()
 		state, err := session.Observe(context.Background(), "window-1")
 		if err != nil {
@@ -790,7 +790,7 @@ func TestSnapshotGenerationAndStorageRetentionLimits(t *testing.T) {
 func TestAllowValuesIsExplicitAndStillRedactsSecureElements(t *testing.T) {
 	backend := &fakeBackend{process: testProcess(), nativeState: "native-value", elements: testElements()}
 	config := Config{Backend: backend, Scope: Scope{Processes: []ProcessIdentity{backend.process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: testBudget(), AllowValues: true}
-	session, err := NewSession(config)
+	session, err := newSyntheticSession(config)
 	if err != nil {
 		t.Fatal(err)
 	}
