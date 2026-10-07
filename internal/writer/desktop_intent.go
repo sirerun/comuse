@@ -273,7 +273,7 @@ func verifyCanonicalJournalRoot(root string, uid uint32) error {
 		if !rootOwned && verifyUIDOwner(info, uid) != nil {
 			return errors.New("desktop journal ancestor owner is untrusted")
 		}
-		if info.Mode().Perm()&022 != 0 && !(rootOwned && info.Mode()&os.ModeSticky != 0) {
+		if info.Mode().Perm()&022 != 0 && (!rootOwned || info.Mode()&os.ModeSticky == 0) {
 			return errors.New("desktop journal ancestor is replaceable")
 		}
 
