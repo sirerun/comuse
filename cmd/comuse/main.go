@@ -120,7 +120,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if closeErr := s.Close(closeCtx); closeErr != nil {
-				callErr = closeErr
+				callErr = &comuse.Error{Code: "backend_unavailable", Message: "session cleanup failed"}
 			}
 		}()
 		switch command {
@@ -164,14 +164,26 @@ func loadConfig(path string) (hostConfig, error) {
 	if err != nil {
 		return c, err
 	}
-	defer f.Close()
-	if err = jsonwire.Decode(f, 32768, &c); err != nil {
+	if err = decodeConfig(f, &c); err != nil {
 		return c, err
 	}
 	if c.LibraryPath == "" || !filepath.IsAbs(c.LibraryPath) {
 		return c, fmt.Errorf("invalid library path")
 	}
 	return c, nil
+}
+
+func decodeConfig(f io.ReadCloser, c *hostConfig) error {
+	if err := jsonwire.Decode(f, 32768, c); err != nil {
+		if f.Close() != nil {
+			return errors.New("config close failed")
+		}
+		return err
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		return errors.New("config close failed")
+	}
+	return nil
 }
 func safeCode(code string) string {
 	switch code {
