@@ -187,8 +187,20 @@ func (native *nativeBackend) Execute(ctx context.Context, action backend.Action)
 	default:
 		return backend.ActionResult{}, backendError("invalid_request")
 	}
-	// Native mutation remains source-only and compile-closed until separately qualified.
-	return backend.ActionResult{}, backendError("unsupported")
+	// There is no public config, environment, or API path to set this private
+	// admission bit. Production construction leaves it false until the live gate.
+	if !native.qualifiedInput {
+		return backend.ActionResult{}, backendError("unsupported")
+	}
+	var wire nativeActionResult
+	if err := native.invoke(ctx, "execute", action.WindowRef, action.ElementRef, action.StateID, nil, &action, &wire); err != nil {
+		return backend.ActionResult{}, err
+	}
+	result, err := decodeActionResult(wire, action)
+	if err != nil {
+		return backend.ActionResult{}, err
+	}
+	return result, nil
 }
 
 func (native *nativeBackend) Close(ctx context.Context) error { return native.requestClose(ctx) }

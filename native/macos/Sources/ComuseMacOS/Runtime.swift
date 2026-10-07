@@ -406,7 +406,7 @@ func extractRequestID(from data: Data) -> String {
 
 private let nativeErrorCodes: Set<String> = [
     "invalid_request", "policy_refused", "element_stale", "state_expired", "permission_denied",
-    "unsupported", "backend_unavailable", "budget_exceeded", "cancelled", "internal_error"
+    "unsupported", "backend_unavailable", "budget_exceeded", "cancelled", "unknown_outcome", "internal_error"
 ]
 
 private func nativeErrorCode(_ code: String) -> String {
