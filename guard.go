@@ -17,21 +17,22 @@ const (
 )
 
 var safeMessages = map[string]string{
-	"invalid_request":     "The request is invalid.",
-	"policy_refused":      "The request is not allowed by policy.",
-	"approval_required":   "Host approval is required.",
-	"element_stale":       "The element reference is stale.",
-	"state_expired":       "The observed state has expired.",
-	"permission_denied":   "Required permission was denied.",
-	"unsupported":         "The operation is not supported.",
-	"backend_unavailable": "The backend is unavailable.",
-	"desktop_busy":        "The desktop writer is busy.",
-	"rate_limited":        "The session action limit was reached.",
-	"budget_exceeded":     "The request exceeds its configured budget.",
-	"cancelled":           "The request was cancelled.",
-	"session_closed":      "The session is closed.",
-	"unknown_outcome":     "The action outcome is unknown.",
-	"internal_error":      "The operation failed.",
+	"invalid_request":       "invalid_request",
+	"policy_refused":        "policy_refused",
+	"approval_required":     "approval_required",
+	"element_stale":         "element_stale",
+	"state_expired":         "state_expired",
+	"permission_denied":     "permission_denied",
+	"unsupported":           "unsupported",
+	"backend_unavailable":   "backend_unavailable",
+	"desktop_busy":          "desktop_busy",
+	"rate_limited":          "rate_limited",
+	"budget_exceeded":       "budget_exceeded",
+	"cancelled":             "cancelled",
+	"session_closed":        "session_closed",
+	"unknown_outcome":       "unknown_outcome",
+	"internal_error":        "internal_error",
+	"replay_result_expired": "replay_result_expired",
 }
 
 func coreError(code string) error {

@@ -13,7 +13,7 @@ import (
 const actionPolicyVersion uint64 = 1
 
 // Do admits one host-approved action against a fresh complete scoped snapshot.
-func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
+func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, returnedErr error) {
 	if err := validateAction(action); err != nil {
 		return notApplied(action.ID), err
 	}
@@ -39,6 +39,54 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 	window, ok := s.window(action.WindowRef)
 	if !ok || !scopeContains(s.scope, window.Process) {
 		return notApplied(action.ID), coreError("element_stale")
+	}
+
+	callCtx, cancel := context.WithTimeout(callCtx, s.budget.Timeout)
+	defer cancel()
+	lease, acquireErr := writer.Acquire(callCtx, s.writerDirectory)
+	if acquireErr != nil {
+		return notApplied(action.ID), writerCallError(callCtx, acquireErr)
+	}
+	admissionStarted := false
+	defer func() {
+		if !admissionStarted {
+			if closeErr := s.closeActionLease(lease); closeErr != nil {
+				result.Cleanup = CleanupUnknown
+				returnedErr = coreError("backend_unavailable")
+			}
+		}
+	}()
+	commitmentJSON, marshalErr := json.Marshal(action)
+	if marshalErr != nil {
+		return notApplied(action.ID), coreError("invalid_request")
+	}
+	commitmentInput := sha256.Sum256(commitmentJSON)
+	commitment, commitmentErr := writer.BindingCommitment(s.writerKey, commitmentInput[:])
+	if commitmentErr != nil {
+		return notApplied(action.ID), coreError("internal_error")
+	}
+	priorOutcome, lookupErr := lease.Lookup(action.ID, commitment)
+	if lookupErr != nil {
+		switch {
+		case errors.Is(lookupErr, writer.ErrBindingMismatch):
+			return notApplied(action.ID), coreError("policy_refused")
+		case errors.Is(lookupErr, writer.ErrReplayExpired):
+			return notApplied(action.ID), coreError("replay_result_expired")
+		case errors.Is(lookupErr, writer.ErrDirty):
+			return unknownResult(action.ID), coreError("unknown_outcome")
+		default:
+			return notApplied(action.ID), writerCallError(callCtx, lookupErr)
+		}
+	}
+	if priorOutcome != nil {
+		result := replayResult(action.ID, *priorOutcome)
+		if priorOutcome.Metadata.ErrorCode != "" {
+			return result, coreError(priorOutcome.Metadata.ErrorCode)
+		}
+		if result.Execution == ExecutionUnknown || result.Cleanup != CleanupComplete {
+			return result, coreError("unknown_outcome")
+		}
+		return result, nil
 	}
 
 	// Refresh the observation and capability immediately before admission. A
@@ -82,23 +130,6 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		return notApplied(action.ID), coreError("approval_required")
 	}
 
-	callCtx, cancel := context.WithTimeout(callCtx, s.budget.Timeout)
-	defer cancel()
-	lease, acquireErr := writer.Acquire(callCtx, s.writerDirectory)
-	if acquireErr != nil {
-		return notApplied(action.ID), writerCallError(callCtx, acquireErr)
-	}
-	commitmentJSON, marshalErr := json.Marshal(action)
-	if marshalErr != nil {
-		_ = s.closeActionLease(lease)
-		return notApplied(action.ID), coreError("invalid_request")
-	}
-	commitmentInput := sha256.Sum256(commitmentJSON)
-	commitment, commitmentErr := writer.BindingCommitment(s.writerKey, commitmentInput[:])
-	if commitmentErr != nil {
-		_ = s.closeActionLease(lease)
-		return notApplied(action.ID), coreError("internal_error")
-	}
 	ticket, previous, beginErr := lease.Begin(action.ID, commitment)
 	if beginErr != nil {
 		_ = s.closeActionLease(lease)
@@ -124,6 +155,8 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		}
 		return result, nil
 	}
+
+	admissionStarted = true
 
 	s.mu.Lock()
 	if s.actionsUsed >= s.maxActions {
