@@ -170,21 +170,7 @@ func (native *nativeBackend) ReadElement(ctx context.Context, windowRef, element
 }
 
 func (native *nativeBackend) Execute(ctx context.Context, action backend.Action) (backend.ActionResult, error) {
-	if action.ID == "" || !validOpaque(action.ID) || !validOpaque(action.WindowRef) ||
-		!validOpaque(action.ElementRef) || !validOpaque(action.StateID) || len(action.Text) > maximumTextBytes {
-		return backend.ActionResult{}, backendError("invalid_request")
-	}
-	switch action.Kind {
-	case backend.ActionPress:
-		if action.Text != "" {
-			return backend.ActionResult{}, backendError("invalid_request")
-		}
-	case backend.ActionReplace:
-	case backend.ActionInsert:
-		if action.Text == "" {
-			return backend.ActionResult{}, backendError("invalid_request")
-		}
-	default:
+	if !validateNativeAction(action) {
 		return backend.ActionResult{}, backendError("invalid_request")
 	}
 	// There is no public config, environment, or API path to set this private

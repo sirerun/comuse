@@ -49,19 +49,52 @@ struct NativeAction: Decodable, Sendable {
     var stateID: String
     var kind: String
     var text: String
+    var direction: String
+    var amount: String
+    var x: Double
+    var y: Double
+    var endX: Double
+    var endY: Double
+    var button: String
+    var count: Int
+    var holdMS: Int
+    var delayMS: Int
+    var keys: String
+    var dx: Int
+    var dy: Int
+    var steps: Int
+    var durationMS: Int
     enum CodingKeys: String, CodingKey {
         case id; case windowRef = "window_ref"; case elementRef = "element_ref"
-        case stateID = "state_id"; case kind; case text
+        case stateID = "state_id"; case kind; case text; case direction; case amount
+        case x; case y; case endX = "end_x"; case endY = "end_y"; case button
+        case count; case holdMS = "hold_ms"; case delayMS = "delay_ms"; case keys
+        case dx; case dy; case steps; case durationMS = "duration_ms"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
         windowRef = try values.decode(String.self, forKey: .windowRef)
-        elementRef = try values.decode(String.self, forKey: .elementRef)
-        stateID = try values.decode(String.self, forKey: .stateID)
+        elementRef = try values.decodeIfPresent(String.self, forKey: .elementRef) ?? ""
+        stateID = try values.decodeIfPresent(String.self, forKey: .stateID) ?? ""
         kind = try values.decode(String.self, forKey: .kind)
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
+        direction = try values.decodeIfPresent(String.self, forKey: .direction) ?? ""
+        amount = try values.decodeIfPresent(String.self, forKey: .amount) ?? ""
+        x = try values.decodeIfPresent(Double.self, forKey: .x) ?? 0
+        y = try values.decodeIfPresent(Double.self, forKey: .y) ?? 0
+        endX = try values.decodeIfPresent(Double.self, forKey: .endX) ?? 0
+        endY = try values.decodeIfPresent(Double.self, forKey: .endY) ?? 0
+        button = try values.decodeIfPresent(String.self, forKey: .button) ?? ""
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        holdMS = try values.decodeIfPresent(Int.self, forKey: .holdMS) ?? 0
+        delayMS = try values.decodeIfPresent(Int.self, forKey: .delayMS) ?? 0
+        keys = try values.decodeIfPresent(String.self, forKey: .keys) ?? ""
+        dx = try values.decodeIfPresent(Int.self, forKey: .dx) ?? 0
+        dy = try values.decodeIfPresent(Int.self, forKey: .dy) ?? 0
+        steps = try values.decodeIfPresent(Int.self, forKey: .steps) ?? 0
+        durationMS = try values.decodeIfPresent(Int.self, forKey: .durationMS) ?? 0
     }
 }
 
