@@ -69,6 +69,14 @@ func secureDesktopRoot(root string, uid uint32) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return errors.New("canonical desktop state path must contain real directories")
 		}
+		if info.Mode().Perm()&0o022 != 0 {
+			return errors.New("canonical desktop state ancestor is writable by another account")
+		}
+		if index < len(homeParts)-1 {
+			if err := verifyUIDOwner(info, 0); err != nil {
+				return err
+			}
+		}
 		if index >= len(homeParts)-1 {
 			if err := verifyUIDOwner(info, uid); err != nil {
 				return err
