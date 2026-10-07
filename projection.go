@@ -81,7 +81,7 @@ func projectLegacyObservation(value Observation) MetadataLegacySnapshot {
 	for _, element := range value.Elements {
 		elements = append(elements, MetadataLegacyElement{
 			Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order, Role: element.Role,
-			Label: element.Label, Value: cloneString(element.Value), Enabled: cloneBool(element.Enabled), Checked: cloneBool(element.Checked), Selected: cloneBool(element.Selected),
+			Label: element.Label, Value: cloneString(element.Value), Enabled: cloneBool(element.Enabled),
 			Actions: append([]string{}, element.Actions...), Classification: element.Classification,
 		})
 	}
