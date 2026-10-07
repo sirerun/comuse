@@ -62,8 +62,11 @@ func validateAction(action Action) error {
 	if !utf8.ValidString(action.Text) || len(action.Text) > maxActionTextBytes {
 		return coreError("invalid_request")
 	}
+	if action.Kind != ActionScroll && (action.Direction != "" || action.Amount != "") {
+		return coreError("invalid_request")
+	}
 	switch action.Kind {
-	case ActionPress:
+	case ActionPress, ActionPick, ActionFocus:
 		if action.Text != "" {
 			return coreError("invalid_request")
 		}
@@ -71,6 +74,18 @@ func validateAction(action Action) error {
 		// An empty replacement deliberately clears the scoped field.
 	case ActionInsert:
 		if action.Text == "" {
+			return coreError("invalid_request")
+		}
+	case ActionScroll:
+		if action.Text != "" {
+			return coreError("invalid_request")
+		}
+		switch action.Direction {
+		case "up", "down", "left", "right":
+		default:
+			return coreError("invalid_request")
+		}
+		if action.Amount != "line" && action.Amount != "page" {
 			return coreError("invalid_request")
 		}
 	default:

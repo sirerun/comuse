@@ -102,6 +102,8 @@ type Action struct {
 	StateID    string `json:"state_id"`
 	Kind       string `json:"kind"`
 	Text       string `json:"text,omitempty"`
+	Direction  string `json:"direction,omitempty"`
+	Amount     string `json:"amount,omitempty"`
 }
 
 // Closed result vocabulary follows RFC 0001 section 5.3.
@@ -126,6 +128,9 @@ const (
 	ActionPress                                  = "press"
 	ActionReplace                                = "replace"
 	ActionInsert                                 = "insert"
+	ActionScroll                                 = "scroll"
+	ActionPick                                   = "pick"
+	ActionFocus                                  = "focus"
 )
 
 type Verification struct {
@@ -133,11 +138,14 @@ type Verification struct {
 	Reason string             `json:"reason,omitempty"`
 }
 type ActionResult struct {
-	ActionID     string          `json:"action_id"`
-	Execution    ExecutionStatus `json:"execution"`
-	Verification Verification    `json:"verification"`
-	StateStatus  StateStatus     `json:"state_status"`
-	Cleanup      CleanupStatus   `json:"cleanup"`
+	ActionID string `json:"action_id"`
+	// Dispatch metadata is projected separately into the canonical envelope.
+	Method         string          `json:"-"`
+	CompletedSteps []string        `json:"-"`
+	Execution      ExecutionStatus `json:"execution"`
+	Verification   Verification    `json:"verification"`
+	StateStatus    StateStatus     `json:"state_status"`
+	Cleanup        CleanupStatus   `json:"cleanup"`
 }
 
 // Backend must freshly validate scope and references at every native operation.

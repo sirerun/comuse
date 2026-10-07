@@ -52,4 +52,12 @@ const (
 	ActionPress               = backend.ActionPress
 	ActionReplace             = backend.ActionReplace
 	ActionInsert              = backend.ActionInsert
+	ActionScroll              = backend.ActionScroll
+	ActionPick                = backend.ActionPick
+	ActionFocus               = backend.ActionFocus
 )
+
+// ScrollElement performs exactly one host-approved semantic scroll unit.
+func (s *Session) ScrollElement(ctx context.Context, actionID, windowRef, elementRef, stateID, direction, amount string) (ActionResult, error) {
+	return s.Do(ctx, Action{ID: actionID, WindowRef: windowRef, ElementRef: elementRef, StateID: stateID, Kind: ActionScroll, Direction: direction, Amount: amount})
+}
