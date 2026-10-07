@@ -18,7 +18,7 @@ final class DesktopContextTests: XCTestCase {
         XCTAssertNil(tracker.update(nil))
         XCTAssertFalse(tracker.proofAvailable)
         XCTAssertNil(tracker.update(facts(primary: 9)))
-        XCTAssertNil(tracker.update(facts(firstBounds: CGRect(x: 0, y: 0, width: .infinity, height: 800))))
+        XCTAssertNil(tracker.update(facts(firstBounds: CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 800))))
         XCTAssertNil(tracker.update(facts(firstScale: .nan)))
         XCTAssertNil(tracker.update(facts(second: 1))) // duplicate display identity
     }
