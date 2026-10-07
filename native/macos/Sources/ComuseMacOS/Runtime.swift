@@ -214,11 +214,13 @@ final class NativeRuntime {
     let processes: [NativeProcess]
     var requestTasks: [UInt64: Task<Void, Never>] = [:]
     var lastProjectionDigest: String?
+    var desktopTracker: DesktopContextTracker
 
     init(id: UInt64, config: NativeConfig, processes: [NativeProcess]) {
         self.id = id
         self.config = config
         self.processes = processes
+        self.desktopTracker = DesktopContextTracker(displayID: UUID().uuidString.lowercased())
     }
 
     func dispatch(requestID: UInt64, callbackID: UInt64, completion: Completion, data: Data) {
@@ -262,14 +264,18 @@ final class NativeRuntime {
         do {
             let decoder = JSONDecoder()
             let request = try decoder.decode(NativeRequest.self, from: data)
-            guard request.schemaVersion == 1, validRequestID(request.requestID),
-                  !isCancelled(nativeRequestID),
-                  config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000) else {
-                throw ProbeFailure(code: isCancelled(nativeRequestID) ? "cancelled" : "invalid_request")
+            guard request.schemaVersion == 1, validRequestID(request.requestID) else {
+                throw ProbeFailure(code: "invalid_request")
+            }
+            guard !isCancelled(nativeRequestID) else { throw ProbeFailure(code: "cancelled") }
+            guard config.scope.expiresAtUnixMilli > Int64(Date().timeIntervalSince1970 * 1000) else {
+                invalidateAccessibilityState()
+                desktopTracker.invalidate()
+                throw ProbeFailure(code: "invalid_request")
             }
             let result: Any
             switch request.operation {
-            case "doctor": result = doctor()
+            case "doctor": result = try doctor(requestID: nativeRequestID)
             case "windows": result = try windows(request, requestID: nativeRequestID)
             case "observe": result = try observe(request, requestID: nativeRequestID)
             case "read_element": result = try readElement(request, requestID: nativeRequestID)
@@ -285,10 +291,12 @@ final class NativeRuntime {
         }
     }
 
-    private func doctor() -> [String: Any] {
+    private func doctor(requestID: UInt64) throws -> [String: Any] {
+        let deadline = ProcessInfo.processInfo.systemUptime + 1.0
+        try checkDeadline(requestID, deadline: deadline)
         let accessibility = AXIsProcessTrusted()
         if !accessibility { invalidateAccessibilityState() }
-        return [
+        var result: [String: Any] = [
             "capabilities": [
                 "accessibility": accessibility,
                 "input": false,
@@ -301,10 +309,13 @@ final class NativeRuntime {
                 "event_posting": CGPreflightPostEventAccess() ? "granted" : "denied"
             ]
         ]
+        if let context = try desktopContextJSON(requestID: requestID, deadline: deadline) { result["desktop_context"] = context }
+        return result
     }
 
     private func windows(_ request: NativeRequest, requestID: UInt64) throws -> [[String: Any]] {
         try checkPermission()
+        let desktopGeneration = try refreshDesktopGeneration()
         var result: [[String: Any]] = []
         let budget = boundedBudget(request.budget)
         let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
@@ -352,6 +363,10 @@ final class NativeRuntime {
                 result.append(row)
             }
             guard try application(process).identity == app.identity else { throw ProbeFailure(code: "element_stale") }
+        }
+        guard try refreshDesktopGeneration() == desktopGeneration else {
+            invalidateAccessibilityState()
+            throw ProbeFailure(code: "state_expired")
         }
         return result
     }

@@ -14,6 +14,13 @@ struct NativeReference {
     let windowRef: String?
     let kind: NativeReferenceKind
     var lastSeen: TimeInterval
+    let desktopGeneration: UInt64
+
+    init(element: AXUIElement, process: NativeProcess, windowRef: String?, kind: NativeReferenceKind,
+         lastSeen: TimeInterval, desktopGeneration: UInt64 = 0) {
+        self.element = element; self.process = process; self.windowRef = windowRef
+        self.kind = kind; self.lastSeen = lastSeen; self.desktopGeneration = desktopGeneration
+    }
 }
 
 struct NativeSnapshot {
@@ -26,6 +33,15 @@ struct NativeSnapshot {
     let refs: Set<String>
     let createdAt: TimeInterval
     let byteCount: Int
+    let desktopGeneration: UInt64
+
+    init(stateID: String, windowRef: String, process: NativeProcess, digest: String, complete: Bool,
+         coverageReason: String, refs: Set<String>, createdAt: TimeInterval, byteCount: Int,
+         desktopGeneration: UInt64 = 0) {
+        self.stateID = stateID; self.windowRef = windowRef; self.process = process; self.digest = digest
+        self.complete = complete; self.coverageReason = coverageReason; self.refs = refs
+        self.createdAt = createdAt; self.byteCount = byteCount; self.desktopGeneration = desktopGeneration
+    }
 }
 
 private struct TraversalNode {
@@ -89,6 +105,7 @@ extension NativeRuntime {
     }
 
     func retain(_ element: AXUIElement, process: NativeProcess, windowRef: String?, kind: NativeReferenceKind) throws -> String {
+        let desktopGeneration = try refreshDesktopGeneration()
         var current = references
         let now = ProcessInfo.processInfo.systemUptime
         current = current.filter { now - $0.value.lastSeen <= 120 }
@@ -99,13 +116,16 @@ extension NativeRuntime {
         }
         guard current.count < 8192 else { references = current; throw ProbeFailure(code: "budget_exceeded") }
         let ref = UUID().uuidString.lowercased()
-        current[ref] = NativeReference(element: element, process: process, windowRef: windowRef, kind: kind, lastSeen: now)
+        current[ref] = NativeReference(element: element, process: process, windowRef: windowRef, kind: kind,
+                                       lastSeen: now, desktopGeneration: desktopGeneration)
         references = current
         return ref
     }
 
     func resolve(_ ref: String, kind: NativeReferenceKind, windowRef: String? = nil) throws -> NativeReference {
+        let desktopGeneration = try refreshDesktopGeneration()
         guard validOpaque(ref), let entry = references[ref], entry.kind == kind,
+              desktopReferenceIsCurrent(issued: entry.desktopGeneration, current: desktopGeneration),
               ProcessInfo.processInfo.systemUptime - entry.lastSeen <= 120,
               windowRef == nil || entry.windowRef == windowRef else { throw ProbeFailure(code: "state_expired") }
         let current = try matchingProcess(entry.process)
@@ -119,6 +139,7 @@ extension NativeRuntime {
 
     func observeWindow(_ request: NativeRequest, requestID: UInt64, retainSnapshot: Bool = true) throws -> [String: Any] {
         try checkPermission()
+        let desktopGeneration = try refreshDesktopGeneration()
         guard let windowRef = request.windowRef else { throw ProbeFailure(code: "invalid_request") }
         let root = try resolve(windowRef, kind: .window)
         let freshProcess = try matchingProcess(root.process)
@@ -225,6 +246,10 @@ extension NativeRuntime {
         }
         let endIdentity = try matchingProcess(freshProcess)
         guard endIdentity == freshProcess else { throw ProbeFailure(code: "element_stale") }
+        guard try refreshDesktopGeneration() == desktopGeneration else {
+            invalidateAccessibilityState()
+            throw ProbeFailure(code: "state_expired")
+        }
         if complete {
             // A complete traversal is the only evidence that an old element left the tree.
             let all = references.filter { ref, entry in entry.windowRef != windowRef || refs.contains(ref) }
@@ -233,9 +258,15 @@ extension NativeRuntime {
         let rows = output.sorted { $0.ref < $1.ref }.map(\.json)
         let digest = try projectionDigest(windowRef: windowRef, rows: rows, complete: complete, reason: reason)
         lastProjectionDigest = digest
+        let contextDeadline = min(deadline, ProcessInfo.processInfo.systemUptime + 1.0)
+        let desktopContext = try desktopContextJSON(requestID: requestID, deadline: contextDeadline)
+        let contextMatchesTraversal = desktopContext != nil && desktopTracker.proofAvailable &&
+            desktopTracker.generation == desktopGeneration
+        if !contextMatchesTraversal { invalidateAccessibilityState() }
         let stateID = UUID().uuidString.lowercased()
         let storedBytes = try JSONSerialization.data(withJSONObject: rows, options: [.fragmentsAllowed, .sortedKeys]).count
-        if retainSnapshot {
+        let retainUsableSnapshot = retainSnapshot && contextMatchesTraversal
+        if retainUsableSnapshot {
             var generations = snapshots.filter { ProcessInfo.processInfo.systemUptime - $0.value.createdAt <= 120 }
             while generations.values.filter({ $0.windowRef == windowRef }).count >= 8 ||
                     generations.values.reduce(0, { $0 + $1.byteCount }) + storedBytes > 4 * 1024 * 1024 {
@@ -246,16 +277,19 @@ extension NativeRuntime {
             }
             let snapshot = NativeSnapshot(stateID: stateID, windowRef: windowRef, process: freshProcess,
                                           digest: digest, complete: complete, coverageReason: reason, refs: refs,
-                                          createdAt: ProcessInfo.processInfo.systemUptime, byteCount: storedBytes)
+                                          createdAt: ProcessInfo.processInfo.systemUptime, byteCount: storedBytes,
+                                          desktopGeneration: desktopGeneration)
             generations[stateID] = snapshot
             snapshots = generations
         }
-        return [
-            "window_ref": windowRef, "state_id": retainSnapshot ? stateID : "",
+        var result: [String: Any] = [
+            "window_ref": windowRef, "state_id": retainUsableSnapshot ? stateID : "",
             "observed_at": ISO8601DateFormatter().string(from: Date()),
             "elements": rows,
             "coverage": ["complete": complete, "reason": reason]
         ]
+        if contextMatchesTraversal, let desktopContext { result["desktop_context"] = desktopContext }
+        return result
     }
 
     func readScopedElement(_ request: NativeRequest, requestID: UInt64) throws -> [String: Any] {
@@ -278,12 +312,18 @@ extension NativeRuntime {
     }
 
     func validateSnapshot(_ stateID: String, windowRef: String, requestID: UInt64, budget: NativeBudget?) throws -> NativeSnapshot {
+        let desktopGeneration = try refreshDesktopGeneration()
         guard validOpaque(stateID), let prior = snapshots[stateID], prior.windowRef == windowRef,
+              prior.desktopGeneration == desktopGeneration,
               ProcessInfo.processInfo.systemUptime - prior.createdAt <= 120 else { throw ProbeFailure(code: "state_expired") }
         let freshRequest = NativeRequest(schemaVersion: 1, requestID: "revalidate", operation: "observe",
                                          windowRef: windowRef, elementRef: nil, stateID: nil,
                                          budget: budget, action: nil)
         _ = try observeWindow(freshRequest, requestID: requestID, retainSnapshot: false)
+        guard try refreshDesktopGeneration() == prior.desktopGeneration else {
+            invalidateAccessibilityState()
+            throw ProbeFailure(code: "state_expired")
+        }
         guard let freshDigest = lastProjectionDigest, freshDigest == prior.digest else { throw ProbeFailure(code: "state_expired") }
         return prior
     }
