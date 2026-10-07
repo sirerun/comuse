@@ -98,6 +98,33 @@ func TestActualDomainEnvelopeConformanceVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Conformance must cover available inspected state, not only the legacy
+	// backend's unavailable compact-context branch.
+	contextBackend := &desktopContextBackend{fakeBackend: &fakeBackend{process: testProcess(), nativeState: "context-schema", elements: testElements()}}
+	contextBackend.setDesktop(testDesktopContext(testProcess()))
+	contextSession := newTestSession(t, contextBackend.fakeBackend, false)
+	contextSession.backend = contextBackend
+	appendContextVector := func(name string, request Request) {
+		t.Helper()
+		envelope, err := contextSession.Call(context.Background(), request)
+		if err != nil || envelope.StateStatus != string(StateAvailable) {
+			t.Fatalf("%s inspected context: status=%s err=%v", name, envelope.StateStatus, err)
+		}
+		vectors[name], err = json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendContextVector("doctor_inspected_context", Request{Operation: OperationDoctor})
+	appendContextVector("state_inspected_context", Request{Operation: OperationState})
+	if _, err := contextSession.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	appendContextVector("a11y_inspected_context", Request{Operation: OperationObserve, Observe: &ObserveParams{WindowRef: "window-1", Mode: "full"}})
+	noFocus := testDesktopContext(testProcess())
+	noFocus.FocusedWindow = nil
+	contextBackend.setDesktop(noFocus)
+	appendContextVector("state_inspected_no_focus", Request{Operation: OperationState})
 	if destination := os.Getenv("COMUSE_SCHEMA_FIXTURE_OUTPUT"); destination != "" {
 		body, err := json.Marshal(vectors)
 		if err != nil {
