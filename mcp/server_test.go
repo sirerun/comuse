@@ -22,7 +22,7 @@ func TestSDKListsOnlyReadOnlyToolsAndReturnsCanonicalEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"computer_state", "computer_windows", "computer_a11y", "computer_read_element", "computer_wait"}
+	want := []string{"computer_a11y", "computer_read_element", "computer_state", "computer_wait", "computer_windows"}
 	if len(listed.Tools) != len(want) {
 		t.Fatalf("tools=%d want %d", len(listed.Tools), len(want))
 	}
