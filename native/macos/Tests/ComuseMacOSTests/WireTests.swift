@@ -276,7 +276,7 @@ final class WireTests: XCTestCase {
             targetBounds: bounds, hitBounds: CGRect(x: 6, y: 6, width: 2, height: 2), exactWindow: true,
             targetRelated: true, exactTarget: false, requiresExactTarget: true)))
         XCTAssertFalse(validNativeCoordinateHit(NativeCoordinateHitFacts(point: point, expectedPID: 10, actualPID: 10,
-            targetBounds: bounds, hitBounds: CGRect(x: .infinity, y: 0, width: 1, height: 1), exactWindow: true,
+            targetBounds: bounds, hitBounds: CGRect(x: CGFloat.infinity, y: 0, width: 1, height: 1), exactWindow: true,
             targetRelated: true, exactTarget: true, requiresExactTarget: false)))
     }
 
