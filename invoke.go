@@ -62,11 +62,7 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 	case OperationWindows:
 		result, err = s.Windows(ctx)
 	case OperationLedger:
-		s.mu.Lock()
-		_ = s.ledger.SetRetainedBytes(uint64(max(s.snapshotBytes, 0)))
-		id := s.sessionID
-		s.mu.Unlock()
-		result = s.ledger.Snapshot(id)
+		result, err = s.ledgerView(ctx, false)
 	case OperationReadElement:
 		target := request.ReadElement
 		var content ElementContent
