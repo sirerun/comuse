@@ -24,7 +24,7 @@ func ErrorCode(err error) string {
 	var e *Error
 	if errors.As(err, &e) {
 		switch e.Code {
-		case "invalid_request", "policy_refused", "approval_required", "element_stale", "state_expired", "permission_denied", "unsupported", "backend_unavailable", "desktop_busy", "rate_limited", "budget_exceeded", "cancelled", "session_closed", "unknown_outcome":
+		case "invalid_request", "policy_refused", "approval_required", "element_stale", "state_expired", "permission_denied", "unsupported", "backend_unavailable", "desktop_busy", "rate_limited", "budget_exceeded", "cancelled", "session_closed", "unknown_outcome", "replay_result_expired":
 			return e.Code
 		}
 	}

@@ -33,6 +33,7 @@ const (
 var (
 	ErrUnsupportedLock   = errors.New("writer exclusion is unsupported on this platform")
 	ErrDirty             = errors.New("writer host state is dirty; trusted reconciliation is required")
+	ErrReplayExpired     = errors.New("replay result body expired; action must not be redispatched")
 	ErrBindingMismatch   = errors.New("action ID was already used with a different binding commitment")
 	ErrNoTicket          = errors.New("action is already recorded and cannot be dispatched again")
 	ErrTicketUsed        = errors.New("dispatch ticket has already been consumed")
@@ -267,6 +268,39 @@ func Acquire(ctx context.Context, root string) (*Lease, error) {
 		return nil, fmt.Errorf("persist replay state on acquire: %w", err)
 	}
 	return lease, nil
+}
+
+// Lookup inspects an exact binding without admitting intent or issuing a ticket.
+// Tombstones prevent redispatch but do not masquerade as retained result bodies.
+func (l *Lease) Lookup(actionID string, bindingCommitment [32]byte) (*PriorOutcome, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed || l.closing {
+		return nil, ErrClosed
+	}
+	if err := validateActionID(actionID); err != nil {
+		return nil, err
+	}
+	binding := base64.RawURLEncoding.EncodeToString(bindingCommitment[:])
+	if old, ok := l.state.Actions[actionID]; ok {
+		if old.Binding != binding {
+			return nil, ErrBindingMismatch
+		}
+		if old.Outcome == "inflight" {
+			return nil, ErrDirty
+		}
+		return &PriorOutcome{ActionID: actionID, Outcome: old.Outcome, UpdatedAt: old.Updated, Metadata: old.Metadata}, nil
+	}
+	if old, ok := l.state.Tombstones[actionID]; ok {
+		if old.Binding != binding {
+			return nil, ErrBindingMismatch
+		}
+		return nil, ErrReplayExpired
+	}
+	if l.state.Dirty {
+		return nil, ErrDirty
+	}
+	return nil, nil
 }
 
 // Begin durably admits one write intent. Existing IDs return their recorded

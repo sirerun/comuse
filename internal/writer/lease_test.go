@@ -5,6 +5,7 @@ package writer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -508,5 +509,53 @@ func TestWriterLockProcessHelper(t *testing.T) {
 		}
 	default:
 		t.Fatalf("unknown child role %q", role)
+	}
+}
+
+func TestLookupDoesNotAdmitAndExpiresTombstone(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "lookup")
+	lease, err := Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := lease.Close(context.Background()); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	}()
+	binding := sha256.Sum256([]byte("lookup-bound"))
+	if prior, err := lease.Lookup("a", binding); err != nil || prior != nil {
+		t.Fatalf("empty lookup: %v %v", prior, err)
+	}
+	if len(lease.state.Actions) != 0 {
+		t.Fatal("lookup admitted an action")
+	}
+	ticket, _, err := lease.Begin("a", binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = lease.Finish(ticket, OutcomeNotApplied); err != nil {
+		t.Fatal(err)
+	}
+	if prior, err := lease.Lookup("a", binding); err != nil || prior == nil || prior.Outcome != OutcomeNotApplied {
+		t.Fatalf("terminal lookup: %v %v", prior, err)
+	}
+	if _, err = lease.Lookup("a", sha256.Sum256([]byte("different"))); !errors.Is(err, ErrBindingMismatch) {
+		t.Fatal("wrong lookup binding accepted")
+	}
+	lease.mu.Lock()
+	old := lease.state.Actions["a"]
+	old.Updated = time.Now().Add(-terminalTTL - time.Hour)
+	lease.state.Actions["a"] = old
+	err = lease.pruneExpired(time.Now())
+	lease.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = lease.Lookup("a", binding); !errors.Is(err, ErrReplayExpired) {
+		t.Fatal("expired body returned as retained replay:", err)
+	}
+	if _, err = lease.Lookup("a", sha256.Sum256([]byte("different"))); !errors.Is(err, ErrBindingMismatch) {
+		t.Fatal("tombstone binding mismatch accepted")
 	}
 }
