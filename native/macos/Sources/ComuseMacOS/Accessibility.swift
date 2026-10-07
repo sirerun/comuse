@@ -491,13 +491,15 @@ private struct AXActionAccess: NativeActionAccess {
             : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef, deadline: deadline)
         switch kind {
         case "press":
+            guard target.role == "AXButton" else { return false }
             var names: CFArray?
-            return target.role == "AXButton" && (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementCopyActionNames(entry.element, &names) }) == .success &&
-                (names as? [String])?.contains(kAXPressAction as String) == true
+            let status = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementCopyActionNames(entry.element, &names) }
+            return status == .success && (names as? [String])?.contains(kAXPressAction as String) == true
         case "replace":
+            guard target.role == "AXTextField" else { return false }
             var settable = DarwinBoolean(false)
-            return target.role == "AXTextField" &&
-                (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementIsAttributeSettable(entry.element, kAXValueAttribute as CFString, &settable) }) == .success && settable.boolValue
+            let status = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementIsAttributeSettable(entry.element, kAXValueAttribute as CFString, &settable) }
+            return status == .success && settable.boolValue
         case "insert":
             guard textRole(target.role), target.focused, target.focusedClassification == "normal" else { return false }
             guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
