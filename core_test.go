@@ -694,8 +694,8 @@ func TestDoPersistsPermissionRevocationAcrossBlockedApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	refreshed, err := session.Observe(context.Background(), "window-1")
-	if err != nil || refreshed.StateID != state.StateID {
-		t.Fatalf("fresh state for durable replay = (%+v, %v), want same canonical state %q", refreshed, err, state.StateID)
+	if err != nil || refreshed.StateID == state.StateID {
+		t.Fatalf("permission generation must change canonical identity = (%+v, %v), old state %q", refreshed, err, state.StateID)
 	}
 	replayed, err := session.Do(context.Background(), action)
 	if ErrorCode(err) != "permission_denied" || replayed.Execution != ExecutionNotApplied {
@@ -767,7 +767,7 @@ func TestSnapshotGenerationAndStorageRetentionLimits(t *testing.T) {
 	for i := 0; i < maxSnapshotGenerations+1; i++ {
 		backend.mu.Lock()
 		backend.nativeState = fmt.Sprintf("native-%d", i)
-		backend.elements[0].Order = i
+		backend.elements[0].Label = fmt.Sprintf("generation-%d", i)
 		backend.mu.Unlock()
 		state, err := session.Observe(context.Background(), "window-1")
 		if err != nil {

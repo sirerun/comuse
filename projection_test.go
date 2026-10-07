@@ -57,8 +57,8 @@ func TestFullObservationUsesCanonicalRedactedIdentityAndActualMetadata(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if full.StateID == observed.StateID {
-		t.Fatal("canonical state ID retained the private legacy hash")
+	if full.StateID != observed.StateID {
+		t.Fatal("public core and canonical envelope state IDs diverged")
 	}
 	if full.ObservedAt != observed.ObservedAt || full.ActionSequence != 0 {
 		t.Fatalf("invented timestamp/action sequence: %+v", full.Metadata)

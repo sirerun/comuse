@@ -25,3 +25,23 @@ func TestHistoryExpiredHashCannotSubstituteFreshMetadata(t *testing.T) {
 		t.Fatal("expired lookup substituted a new record")
 	}
 }
+
+func TestCanonicalEmptyForestAndRemovalReconstruction(t *testing.T) {
+	base, _, _ := loadContractFixture(t)
+	empty := CloneSnapshot(base)
+	empty.StateID = ""
+	empty.Nodes = map[string]Node{}
+	empty.Context = Context{RootRefs: []string{}}
+	normalized, err := Normalize(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := Diff(base, normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Apply(base, delta)
+	if err != nil || result.StateID != normalized.StateID || len(result.Nodes) != 0 {
+		t.Fatalf("empty reconstruction=%+v err=%v", result, err)
+	}
+}

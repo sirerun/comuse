@@ -140,7 +140,7 @@ func TestSessionCallLegacyWaitKeepsSnapshotAndFullObservation(t *testing.T) {
 func TestSessionCallUnknownOperationIsRejected(t *testing.T) {
 	backend := &fakeBackend{process: testProcess(), nativeState: "native-a"}
 	session := newTestSession(t, backend, false)
-	if envelope, err := session.Call(context.Background(), Request{Operation: "future_operation"}); ErrorCode(err) != "invalid_request" || envelope.SchemaVersion != 0 {
+	if envelope, err := session.Call(context.Background(), Request{Operation: "future_operation"}); ErrorCode(err) != "invalid_request" || envelope.SchemaVersion != 1 || envelope.Action != "doctor" || envelope.ActionID != nil {
 		t.Fatalf("unknown operation response: envelope=%+v err=%v", envelope, err)
 	}
 	backend.mu.Lock()

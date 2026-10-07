@@ -2,13 +2,13 @@ package comuse
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sirerun/comuse/internal/semantic"
 )
 
 type snapshotBinding struct {
@@ -19,24 +19,6 @@ type snapshotBinding struct {
 	storageSize int
 }
 
-type canonicalObservation struct {
-	SchemaVersion int                `json:"schema_version"`
-	WindowRef     string             `json:"window_ref"`
-	Elements      []canonicalElement `json:"elements"`
-	Coverage      Coverage           `json:"coverage"`
-}
-
-type canonicalElement struct {
-	Ref       string   `json:"ref"`
-	ParentRef string   `json:"parent_ref,omitempty"`
-	Order     int      `json:"order"`
-	Role      string   `json:"role"`
-	Label     string   `json:"label,omitempty"`
-	Value     *string  `json:"value,omitempty"`
-	Enabled   *bool    `json:"enabled,omitempty"`
-	Actions   []string `json:"actions,omitempty"`
-}
-
 // Doctor returns bounded, sanitized backend capability and permission status.
 func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	callCtx, done, err := s.enter(ctx)
@@ -44,6 +26,9 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 		return DoctorReport{}, err
 	}
 	defer done()
+	if observed, _ := callCtx.Value(stateAccountingKey{}).(bool); observed {
+		s.account(callCtx, CounterObservationState, 1)
+	}
 	report, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
 		return DoctorReport{}, s.stableBackendError(callCtx, callErr)
@@ -66,7 +51,12 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 }
 
 // State returns the same bounded runtime status as Doctor.
-func (s *Session) State(ctx context.Context) (DoctorReport, error) { return s.Doctor(ctx) }
+func (s *Session) State(ctx context.Context) (DoctorReport, error) {
+	if ctx == nil {
+		return DoctorReport{}, coreError("invalid_request")
+	}
+	return s.Doctor(context.WithValue(ctx, stateAccountingKey{}, true))
+}
 
 // Windows lists only windows whose exact process identity is in the session scope.
 func (s *Session) Windows(ctx context.Context) ([]Window, error) {
@@ -76,6 +66,7 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 	}
 	defer done()
 	epoch := s.currentPermissionEpoch()
+	s.account(callCtx, CounterObservationState, 1)
 	windows, callErr := s.backend.Windows(callCtx, s.budget)
 	if callErr != nil {
 		return nil, s.stableBackendError(callCtx, callErr)
@@ -182,6 +173,7 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	if projection.StateID != stateID {
 		return ElementContent{}, coreError("element_stale")
 	}
+	s.account(callCtx, CounterObservationA11y, 1)
 	content, callErr := s.backend.ReadElement(callCtx, windowRef, elementRef, binding.nativeState, s.budget)
 	if callErr != nil {
 		return ElementContent{}, s.stableBackendError(callCtx, callErr)
@@ -250,26 +242,22 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 	if !native.Coverage.Complete {
 		coverage.Reason = safeCoverageReason(native.Coverage.Reason)
 	}
-	canonicalElements := make([]canonicalElement, 0, len(filtered))
-	for _, element := range filtered {
-		canonicalElements = append(canonicalElements, canonicalElement{
-			Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order,
-			Role: element.Role, Label: element.Label, Value: cloneString(element.Value),
-			Enabled: cloneBool(element.Enabled), Actions: append([]string(nil), element.Actions...),
-		})
+	public := Observation{WindowRef: windowRef, ObservedAt: s.now().UTC(), Elements: filtered, Coverage: coverage}
+	full, projectionErr := buildFullObservation(s, public)
+	if projectionErr != nil {
+		return Observation{}, snapshotBinding{}, projectionErr
 	}
-	canonical, err := json.Marshal(canonicalObservation{SchemaVersion: SchemaVersion, WindowRef: windowRef, Elements: canonicalElements, Coverage: coverage})
+	canonical, err := semantic.CanonicalBytes(full)
 	if err != nil || len(canonical) > s.budget.MaxBytes {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}
-	digest := sha256.Sum256(canonical)
-	public := Observation{WindowRef: windowRef, StateID: hex.EncodeToString(digest[:]), ObservedAt: s.now().UTC(), Elements: filtered, Coverage: coverage}
+	public.StateID = full.StateID
 	publicJSON, err := json.Marshal(public)
 	if err != nil || len(publicJSON) > s.budget.MaxBytes {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}
 	now := s.now()
-	storageSize := len(canonical) + len(native.StateID) + len(publicJSON)
+	storageSize := len(canonical) + len(publicJSON) + semantic.BindingCharge*(len(public.Elements)+2)
 	if storageSize > maxSnapshotStorage {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}

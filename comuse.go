@@ -98,6 +98,9 @@ func (s *Session) purgeSemanticStateLocked() {
 	s.windows = make(map[string]Window)
 	s.snapshots = make(map[string][]snapshotBinding)
 	s.snapshotBytes = 0
+	if s.ledger != nil {
+		_ = s.ledger.SetRetainedBytes(0)
+	}
 }
 
 func (s *Session) currentPermissionEpoch() uint64 {
