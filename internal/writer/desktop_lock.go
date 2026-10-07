@@ -9,10 +9,12 @@ import (
 )
 
 type DesktopLease struct {
-	identity desktopIdentity
-	root     string
-	lock     *os.File
-	closed   bool
+	identity    desktopIdentity
+	root        string
+	lock        *os.File
+	closed      bool
+	intent      *desktopIntent
+	beginFailed bool
 }
 
 // AcquireDesktop reserves this verified GUI login session independently of
@@ -33,6 +35,17 @@ func AcquireDesktop(ctx context.Context) (*DesktopLease, error) {
 }
 
 func acquireDesktopAt(ctx context.Context, identity desktopIdentity, root string) (*DesktopLease, error) {
+	return acquireDesktopAtMode(ctx, identity, root, false)
+}
+
+// acquireDesktopForRecoveryAt is intentionally private. Only trusted recovery
+// code may bypass the marker check, and it must validate the marker before
+// doing any recovery work.
+func acquireDesktopForRecoveryAt(ctx context.Context, identity desktopIdentity, root string) (*DesktopLease, error) {
+	return acquireDesktopAtMode(ctx, identity, root, true)
+}
+
+func acquireDesktopAtMode(ctx context.Context, identity desktopIdentity, root string, recovery bool) (*DesktopLease, error) {
 	if ctx == nil {
 		return nil, errors.New("desktop lock requires a context")
 	}
@@ -68,20 +81,25 @@ func acquireDesktopAt(ctx context.Context, identity desktopIdentity, root string
 		_ = file.Close()
 		return nil, err
 	}
-	dirtyPath := filepath.Join(root, "desktop-"+key+".dirty")
-	if err := verifyExistingRegular(dirtyPath, identity.uid); err != nil {
-		_ = releaseFileLock(file)
-		_ = file.Close()
-		return nil, err
-	}
-	if _, err := os.Lstat(dirtyPath); err == nil {
-		_ = releaseFileLock(file)
-		_ = file.Close()
-		return nil, ErrDirty
-	} else if !errors.Is(err, os.ErrNotExist) {
-		_ = releaseFileLock(file)
-		_ = file.Close()
-		return nil, fmt.Errorf("inspect canonical desktop dirty marker: %w", err)
+	for _, suffix := range []string{"dirty", "intent"} {
+		if recovery && suffix == "intent" {
+			continue
+		}
+		markerPath := filepath.Join(root, "desktop-"+key+"."+suffix)
+		if err := verifyExistingRegular(markerPath, identity.uid); err != nil {
+			_ = releaseFileLock(file)
+			_ = file.Close()
+			return nil, err
+		}
+		if _, err := os.Lstat(markerPath); err == nil {
+			_ = releaseFileLock(file)
+			_ = file.Close()
+			return nil, ErrDirty
+		} else if !errors.Is(err, os.ErrNotExist) {
+			_ = releaseFileLock(file)
+			_ = file.Close()
+			return nil, fmt.Errorf("inspect canonical desktop %s marker: %w", suffix, err)
+		}
 	}
 	return &DesktopLease{identity: identity, root: root, lock: file}, nil
 }
@@ -91,6 +109,17 @@ func (l *DesktopLease) MarkDirty() error {
 		return ErrClosed
 	}
 	key := fmt.Sprintf("%d-%d", l.identity.uid, l.identity.sessionID)
+	if l.intent != nil {
+		path := desktopIntentPath(l.root, l.identity)
+		marker, err := readDesktopIntent(path, l.identity.uid)
+		if err != nil {
+			return err
+		}
+		if marker != *l.intent {
+			return ErrDirty
+		}
+		return nil
+	}
 	path := filepath.Join(l.root, "desktop-"+key+".dirty")
 	if err := verifyExistingRegular(path, l.identity.uid); err != nil {
 		return err
@@ -100,7 +129,10 @@ func (l *DesktopLease) MarkDirty() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return atomicWrite(path, []byte("dirty-v1\n"))
+	if err := atomicWrite(path, []byte("dirty-v1\n")); err != nil {
+		return err
+	}
+	return syncDesktopDirectory(l.root)
 }
 
 func (l *DesktopLease) Close() error {
