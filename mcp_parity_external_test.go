@@ -384,7 +384,7 @@ var _ comuse.Backend = (*parityMCPBackend)(nil)
 type parityMCPApproval struct{}
 
 func (parityMCPApproval) Approve(_ context.Context, request comuse.ApprovalRequest) (comuse.Approval, error) {
-	return comuse.Approval{SessionID: request.SessionID, Action: request.Action, Process: request.Process, ObservedAt: request.ObservedAt, PolicyVersion: request.PolicyVersion, ExpiresAt: request.ExpiresAt}, nil
+	return comuse.Approval(request), nil
 }
 
 type parityMCPActionBackend struct {

@@ -203,7 +203,7 @@ func syncDesktopDirectory(root string) error {
 	return errors.Join(wrapSyncError(directory.Sync()), wrapCloseError(directory.Close()))
 }
 
-func readDesktopIntent(path string, uid uint32) (desktopIntent, error) {
+func readDesktopIntent(path string, uid uint32) (result desktopIntent, returnedErr error) {
 	var marker desktopIntent
 	if err := verifyExistingRegular(path, uid); err != nil {
 		return marker, err
@@ -212,7 +212,7 @@ func readDesktopIntent(path string, uid uint32) (desktopIntent, error) {
 	if err != nil {
 		return marker, fmt.Errorf("open desktop intent marker: %w", err)
 	}
-	defer file.Close()
+	defer func() { returnedErr = errors.Join(returnedErr, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil {
 		return marker, err

@@ -21,7 +21,7 @@ func TestDesktopLockHelperProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { if err := lease.Close(); err != nil { t.Error(err) } }()
 	if err := os.WriteFile(os.Getenv("COMUSE_DESKTOP_READY"), []byte("ready"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestDesktopLockSerializesSameVerifiedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { if err := first.Close(); err != nil { t.Error(err) } }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	if _, err := acquireDesktopAt(ctx, identity, root); err == nil {

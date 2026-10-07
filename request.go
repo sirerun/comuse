@@ -132,7 +132,7 @@ func stateIdentity(v string) bool {
 		return false
 	}
 	for _, c := range v {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -163,7 +163,7 @@ func validKeys(keys []string) bool {
 			continue
 		case "enter", "escape", "tab", "space", "backspace", "delete", "up", "down", "left", "right", "home", "end", "page_up", "page_down":
 		default:
-			if len(key) != 1 || !(key[0] >= 'a' && key[0] <= 'z' || key[0] >= '0' && key[0] <= '9') {
+			if len(key) != 1 || ((key[0] < 'a' || key[0] > 'z') && (key[0] < '0' || key[0] > '9')) {
 				return false
 			}
 		}
