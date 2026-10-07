@@ -384,6 +384,103 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(request.budget?.maxDepth, 8)
     }
 
+    func testProductionDecoderRejectsEveryBudgetOutsideSharedHostRange() throws {
+        let invalid: [(String, Int64)] = [
+            ("max_depth", 0), ("max_depth", -1), ("max_depth", 129),
+            ("max_nodes", 0), ("max_nodes", -1), ("max_nodes", 10_001),
+            ("max_bytes", 0), ("max_bytes", -1), ("max_bytes", 4 * 1024 * 1024 + 1),
+            ("timeout", 0), ("timeout", -1), ("timeout", 30_000_000_001)
+        ]
+        for (field, value) in invalid {
+            let budget: [String: Int64] = ["max_depth": 1, "max_nodes": 1, "max_bytes": 100,
+                                           "timeout": 1].merging([field: value]) { _, replacement in replacement }
+            let data = try Self.observeRequest(budget: budget)
+            XCTAssertThrowsError(try decodeNativeRequest(data), "\(field)=\(value)")
+        }
+    }
+
+    func testBoundedBudgetNeverRaisesTinyPositiveRequestAndNilUsesSafeDefaults() throws {
+        let request = try decodeNativeRequest(Self.observeRequest(
+            budget: ["max_depth": 1, "max_nodes": 1, "max_bytes": 100, "timeout": 1]))
+        let effective = try boundedBudget(request.budget)
+        XCTAssertLessThanOrEqual(effective.maxDepth, 1)
+        XCTAssertLessThanOrEqual(effective.maxNodes, 1)
+        XCTAssertLessThanOrEqual(effective.maxBytes, 100)
+        XCTAssertLessThanOrEqual(effective.timeout, 0.000_000_001)
+        XCTAssertGreaterThan(effective.timeout, 0)
+
+        let defaults = try boundedBudget(nil)
+        XCTAssertEqual(defaults.maxDepth, 16)
+        XCTAssertEqual(defaults.maxNodes, 256)
+        XCTAssertEqual(defaults.maxBytes, 32_768)
+        XCTAssertGreaterThan(defaults.timeout, 0)
+        XCTAssertLessThanOrEqual(defaults.timeout, 3)
+    }
+
+    func testMalformedJSONAlwaysClassifiesAsInvalidRequestAndEnvelopeCodeIsSafe() throws {
+        let malformed = [
+            #"{"schema_version":1,"request_id":"r","operation":doctor}"#,
+            #"{"schema_version":1,"request_id":"r","operation":true}"#,
+            #"{"schema_version":1,"request_id":"r","operation":01}"#,
+            #"{"schema_version":1,"request_id":"r","operation":"doctor","x":[[[[["#,
+            #"{"schema_version":1,"request_id":"r","operation":"doctor"} trailing"#
+        ]
+        for sample in malformed {
+            XCTAssertThrowsError(try decodeNativeRequest(Data(sample.utf8))) { error in
+                XCTAssertEqual(nativeErrorCode(for: error), "invalid_request", sample)
+            }
+            XCTAssertThrowsError(try decodeNativeConfig(Data(sample.utf8))) { error in
+                XCTAssertEqual(nativeErrorCode(for: error), "invalid_request", sample)
+            }
+        }
+        let invalidUTF8 = Data([0x7b, 0x22, 0x78, 0x22, 0x3a, 0xff, 0x7d])
+        XCTAssertThrowsError(try decodeNativeRequest(invalidUTF8)) { error in
+            XCTAssertEqual(nativeErrorCode(for: error), "invalid_request")
+        }
+        XCTAssertThrowsError(try decodeNativeConfig(invalidUTF8)) { error in
+            XCTAssertEqual(nativeErrorCode(for: error), "invalid_request")
+        }
+    }
+
+    func testPhysicalKeyLayoutChangeAtPerEventCheckpointRefusesDownAndCleansUpBeforeUp() async throws {
+        try await MainActor.run {
+            let action = try Self.decodeAction(json: #"{"id":"a1","window_ref":"w1","kind":"press_key","keys":"ctrl a"}"#)
+            let target = FakeNativeActionAccess().target.withFocusedInput(role: "AXTextField", classification: "normal")
+
+            let beforeDown = FakeNativeInputPoster()
+            var downCheckpoints = 0
+            let refused = beforeDown.sequencePost(action, target: target) { _ in
+                downCheckpoints += 1
+                if downCheckpoints == 2 { beforeDown.layoutIdentifier = "com.apple.keylayout.French" }
+            }
+            XCTAssertEqual(refused.method, "cg_press_key")
+            XCTAssertEqual(refused.execution, "not_applied")
+            XCTAssertEqual(refused.completedSteps, [])
+            XCTAssertEqual(refused.cleanup, "complete")
+            XCTAssertTrue(beforeDown.events.isEmpty)
+
+            let beforeUp = FakeNativeInputPoster()
+            var upCheckpoints = 0
+            let partial = beforeUp.sequencePost(action, target: target) { _ in
+                upCheckpoints += 1
+                if upCheckpoints == 3 { beforeUp.layoutIdentifier = "com.apple.keylayout.French" }
+            }
+            XCTAssertEqual(partial.method, "cg_press_key")
+            XCTAssertEqual(partial.execution, "partially_applied")
+            XCTAssertEqual(partial.completedSteps, ["key_down", "cleanup"])
+            XCTAssertEqual(partial.cleanup, "complete")
+            XCTAssertEqual(beforeUp.events, ["key_down", "key_up"])
+            XCTAssertEqual(beforeUp.deadlines.count, 2)
+            XCTAssertLessThan(beforeUp.deadlines[1], beforeUp.deadlines[0])
+        }
+    }
+
+    private static func observeRequest(budget: [String: Int64]) throws -> Data {
+        let envelope: [String: Any] = ["schema_version": 1, "request_id": "r", "operation": "observe",
+                                       "window_ref": "w", "budget": budget]
+        return try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+    }
+
     func testDecodeGoPressAndReplaceWithExplicitEmptyText() throws {
         let press = #"{"schema_version":1,"request_id":"r2","operation":"execute","action":{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"press"}}"#.data(using: .utf8)!
         let decodedPress = try decodeNativeRequest(press)
@@ -595,10 +692,16 @@ final class WireTests: XCTestCase {
     var failCleanup = false
     var afterFirstPost: (() -> Void)?
     var afterFirstKeyUp: (() -> Void)?
+    var deadlines: [TimeInterval] = []
     private var failed = false
     private let clock = FakeNativeActionClock()
 
     private lazy var sequence = QuartzInputPoster(sink: self, clock: clock, keyboardLayout: { self.layoutIdentifier })
+
+    func sequencePost(_ action: NativeAction, target: NativeActionTarget,
+                      checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch {
+        sequence.post(action, target: target, checkpoint: checkpoint)
+    }
 
     func post(_ action: NativeAction, target: NativeActionTarget,
               checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch {
@@ -607,6 +710,7 @@ final class WireTests: XCTestCase {
     }
 
     func post(_ event: NativeInputEvent, deadline: TimeInterval) throws {
+        deadlines.append(deadline)
         let name: String
         switch event.kind {
         case .keyDown: name = "key_down"
