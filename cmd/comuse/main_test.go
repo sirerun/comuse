@@ -45,6 +45,29 @@ func TestConfigStrictness(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+type configReadCloser struct {
+	io.Reader
+	closeErr error
+	closes   int
+}
+
+func (r *configReadCloser) Close() error {
+	r.closes++
+	return r.closeErr
+}
+
+func TestConfigCloseFailureIsReportedOnceAndSanitized(t *testing.T) {
+	r := &configReadCloser{Reader: strings.NewReader(`{"library_path":"/native/library"}`), closeErr: errors.New("private config payload")}
+	var cfg hostConfig
+	err := decodeConfig(r, &cfg)
+	if err == nil || err.Error() != "config close failed" {
+		t.Fatalf("decodeConfig error = %v, want sanitized close failure", err)
+	}
+	if r.closes != 1 {
+		t.Fatalf("config close calls = %d, want 1", r.closes)
+	}
+}
 func TestErrorEnvelopeAndExitCodes(t *testing.T) {
 	for _, tc := range []struct {
 		code string
@@ -73,7 +96,11 @@ func TestPersistentCLIReadSession(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close(context.Background())
+	t.Cleanup(func() {
+		if err := s.Close(context.Background()); err != nil {
+			t.Errorf("close CLI session: %v", err)
+		}
+	})
 	commands := `{"command":"windows"}` + "\n" + `{"command":"a11y","window_ref":"w1"}` + "\n" + `{"command":"a11y","window_ref":"w1","unknown":true}` + "\n"
 	var out bytes.Buffer
 	if e = serveCLI(context.Background(), s, strings.NewReader(commands), &out); e != nil {
@@ -123,7 +150,11 @@ func newCLISession(t *testing.T) *comuse.Session {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	t.Cleanup(func() {
+		if err := s.Close(context.Background()); err != nil {
+			t.Errorf("close CLI session: %v", err)
+		}
+	})
 	return s
 }
 func TestPersistentCLIFailedOutput(t *testing.T) {
@@ -141,7 +172,11 @@ func TestPersistentCLICancelClosesRead(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	raw, w := io.Pipe()
 	r := &observedReader{ReadCloser: raw, started: make(chan struct{}), closed: make(chan struct{})}
-	defer w.Close()
+	t.Cleanup(func() {
+		if err := w.Close(); err != nil {
+			t.Errorf("close pipe writer: %v", err)
+		}
+	})
 	done := make(chan error, 1)
 	go func() { done <- serveCLI(ctx, s, r, io.Discard) }()
 	select {
@@ -195,14 +230,16 @@ func (r *observedReader) Close() error {
 	return r.ReadCloser.Close()
 }
 
-func boolPointer(value bool) *bool { return &value }
-
 func TestInvokeExplicitReadUsesSessionState(t *testing.T) {
 	s, err := comuse.NewSession(comuse.Config{Backend: &cliBackend{}, Scope: comuse.Scope{Processes: []comuse.ProcessIdentity{{PID: 7, BundleID: "test.fixture", LaunchID: "launch-1"}}, ExpiresAt: time.Now().Add(time.Minute)}, Budget: comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 8192, Timeout: time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = s.Close(context.Background()) }()
+	t.Cleanup(func() {
+		if err := s.Close(context.Background()); err != nil {
+			t.Errorf("close CLI session: %v", err)
+		}
+	})
 	if _, err = invoke(context.Background(), s, request{Command: "windows"}); err != nil {
 		t.Fatal(err)
 	}

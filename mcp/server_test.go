@@ -18,6 +18,13 @@ import (
 	"github.com/sirerun/comuse/internal/backend"
 )
 
+func closeTestSession(t *testing.T, session interface{ Close() error }) {
+	t.Helper()
+	if err := session.Close(); err != nil {
+		t.Errorf("close MCP session: %v", err)
+	}
+}
+
 func TestDecodeArgsStrictObject(t *testing.T) {
 	tests := []struct {
 		name string
@@ -67,13 +74,13 @@ func TestSDKListsOnlyReadOnlySemanticTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer serverSession.Close()
+	t.Cleanup(func() { closeTestSession(t, serverSession) })
 	client := sdk.NewClient(&sdk.Implementation{Name: "comuse-test", Version: "1.0.0"}, nil)
 	clientSession, err := client.Connect(ctx, clientTransport, &sdk.ClientSessionOptions{ProtocolVersion: "2025-06-18"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientSession.Close()
+	t.Cleanup(func() { closeTestSession(t, clientSession) })
 	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-06-18" {
 		t.Fatalf("negotiated protocol = %q, want 2025-06-18", got)
 	}
@@ -133,7 +140,7 @@ func TestSDKToolsDelegateToSharedSession(t *testing.T) {
 	backend := &fakeBackend{}
 	session := newTestSession(t, backend)
 	clientSession := connectClient(t, NewServer(session))
-	defer clientSession.Close()
+	t.Cleanup(func() { closeTestSession(t, clientSession) })
 
 	callTool(t, clientSession, "computer_state", nil)
 	callTool(t, clientSession, "computer_windows", nil)
@@ -164,7 +171,7 @@ func TestSDKCancellationReachesSharedSession(t *testing.T) {
 	backend := &fakeBackend{blockObserve: true, observeStarted: make(chan struct{}), cancellationObserved: make(chan struct{})}
 	session := newTestSession(t, backend)
 	clientSession := connectClient(t, NewServer(session))
-	defer clientSession.Close()
+	t.Cleanup(func() { closeTestSession(t, clientSession) })
 
 	callTool(t, clientSession, "computer_windows", nil)
 	callCtx, cancel := context.WithCancel(ctx)
@@ -328,7 +335,7 @@ func TestTextResultCarriesSharedEnvelope(t *testing.T) {
 func TestErrorsAreSanitizedAtMCPBoundary(t *testing.T) {
 	backend := &fakeBackend{doctorErr: errors.New("private-native-payload-secret")}
 	clientSession := connectClient(t, NewServer(newTestSession(t, backend)))
-	defer clientSession.Close()
+	t.Cleanup(func() { closeTestSession(t, clientSession) })
 	result, err := clientSession.CallTool(context.Background(), &sdk.CallToolParams{Name: "computer_state"})
 	if err != nil {
 		t.Fatal(err)
