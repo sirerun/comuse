@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -27,6 +29,13 @@ func Decode(r io.Reader, maxBytes int64, dst any) error {
 	if err = unique(d, 0); err != nil {
 		return err
 	}
+	var shape any
+	if err = json.Unmarshal(b, &shape); err != nil {
+		return errors.New("invalid JSON")
+	}
+	if err = exactFields(shape, reflect.TypeOf(dst)); err != nil {
+		return err
+	}
 	if _, err = d.Token(); err != io.EOF {
 		return errors.New("extra JSON content")
 	}
@@ -37,6 +46,90 @@ func Decode(r io.Reader, maxBytes int64, dst any) error {
 	}
 	return nil
 }
+
+// exactFields compensates for encoding/json's case-insensitive struct-field
+// matching. It checks spelling only; required-field and null policy belongs
+// to the caller's schema.
+func exactFields(value any, typ reflect.Type) error {
+	if typ == nil {
+		return nil
+	}
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Interface {
+		typ = typ.Elem()
+	}
+	if typ == reflect.TypeOf(json.RawMessage{}) {
+		return nil
+	}
+	switch typ.Kind() {
+	case reflect.Struct:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return nil // The decoder below reports a shape/type mismatch.
+		}
+		fields := make(map[string]reflect.Type)
+		collectJSONFields(typ, fields, make(map[reflect.Type]bool))
+		for name, child := range obj {
+			fieldType, ok := fields[name]
+			if !ok {
+				return errors.New("invalid JSON field spelling")
+			}
+			if err := exactFields(child, fieldType); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if values, ok := value.([]any); ok {
+			for _, child := range values {
+				if err := exactFields(child, typ.Elem()); err != nil {
+					return err
+				}
+			}
+		}
+	case reflect.Map:
+		if values, ok := value.(map[string]any); ok {
+			for _, child := range values {
+				if err := exactFields(child, typ.Elem()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func collectJSONFields(typ reflect.Type, fields map[string]reflect.Type, seen map[reflect.Type]bool) {
+	if seen[typ] {
+		return
+	}
+	seen[typ] = true
+	defer delete(seen, typ)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		tag := field.Tag.Get("json")
+		name := strings.Split(tag, ",")[0]
+		if name == "-" {
+			continue
+		}
+		if field.Anonymous && name == "" {
+			embedded := field.Type
+			for embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				collectJSONFields(embedded, fields, seen)
+				continue
+			}
+		}
+		if field.PkgPath != "" { // unexported non-embedded field
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+}
+
 func unique(d *json.Decoder, depth int) error {
 	if depth > 64 {
 		return errors.New("JSON nesting exceeds limit")
