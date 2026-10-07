@@ -10,12 +10,12 @@
 
 ## In progress
 
-- Phase 1 source parity integration — coordinator, 2026-10-07. Core envelope/accounting, action/wait/read adapters, canonical desktop exclusion, durable replay/quota and native action inventory are implemented and locally checked. Native inspected context producer is running; affected independent review and complete final review remain open.
+- Phase 1 source parity integration — coordinator, 2026-10-07. Core envelope/accounting, action/wait/read adapters, canonical desktop exclusion, durable replay/quota and native action inventory are implemented and locally checked. Native inspected context and the accepted native review corrections are implemented and locally checked. Common context review is approved; verified native rereview and complete final candidate review remain open.
 - Pure semantic diff/history — source implemented and checked in the integration candidate. Public stored/auto/since composition begins after E2 source landing.
 
 ## In flight
 
-- No implementation PR open yet. The integration candidate remains unmerged while native context and independent review gates finish.
+- Draft PR #11 publishes verified source at36ba79e. It remains unmerged pending independent native rereview, complete final candidate review and landed verification.
 
 ## Planned
 
