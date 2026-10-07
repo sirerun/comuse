@@ -2,6 +2,7 @@ package comuse
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -28,18 +29,6 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	s.actionMu.Lock()
 	defer s.actionMu.Unlock()
 	epoch := s.currentPermissionEpoch()
-
-	prior, ok := s.findSnapshot(action.WindowRef, action.StateID)
-	if !ok {
-		return notApplied(action.ID), coreError("state_expired")
-	}
-	if !normalTarget(prior.public, action.ElementRef) || !hasAdvertisedAction(prior.public, action.ElementRef, action.Kind) {
-		return notApplied(action.ID), coreError("policy_refused")
-	}
-	window, ok := s.window(action.WindowRef)
-	if !ok || !scopeContains(s.scope, window.Process) {
-		return notApplied(action.ID), coreError("element_stale")
-	}
 
 	callCtx, cancel := context.WithTimeout(callCtx, s.budget.Timeout)
 	defer cancel()
@@ -87,6 +76,61 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 			return result, coreError("unknown_outcome")
 		}
 		return result, nil
+	}
+
+	prior, ok := s.findSnapshot(action.WindowRef, action.StateID)
+	if !ok {
+		return notApplied(action.ID), coreError("state_expired")
+	}
+	if !normalTarget(prior.public, action.ElementRef) || !hasAdvertisedAction(prior.public, action.ElementRef, action.Kind) {
+		return notApplied(action.ID), coreError("policy_refused")
+	}
+	window, ok := s.window(action.WindowRef)
+	if !ok || !scopeContains(s.scope, window.Process) {
+		return notApplied(action.ID), coreError("element_stale")
+	}
+
+	desktop, desktopErr := s.acquireDesktop(callCtx)
+	if desktopErr != nil {
+		if errors.Is(desktopErr, writer.ErrDirty) {
+			return unknownResult(action.ID), coreError("unknown_outcome")
+		}
+		if errors.Is(desktopErr, writer.ErrDesktopIdentityUnavailable) {
+			return notApplied(action.ID), coreError("unsupported")
+		}
+		return notApplied(action.ID), writerCallError(callCtx, desktopErr)
+	}
+	intentStarted := false
+	defer func() {
+		if intentStarted {
+			if result.Execution != ExecutionUnknown && result.Cleanup == CleanupComplete && !s.journalQuarantined(lease) {
+				if err := desktop.Complete(); err != nil {
+					result.Cleanup = CleanupUnknown
+					returnedErr = coreError("unknown_outcome")
+					s.mu.Lock()
+					s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
+					s.mu.Unlock()
+					return
+				}
+			} else {
+				_ = desktop.MarkDirty()
+				s.mu.Lock()
+				s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
+				s.mu.Unlock()
+				return
+			}
+		}
+		if err := desktop.Close(); err != nil {
+			result.Cleanup = CleanupUnknown
+			returnedErr = coreError("backend_unavailable")
+			s.mu.Lock()
+			s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
+			s.mu.Unlock()
+		}
+	}()
+	journalBinding, bindingErr := s.journalBinding(s.writerDirectory, s.writerKey)
+	if bindingErr != nil {
+		return notApplied(action.ID), coreError("backend_unavailable")
 	}
 
 	// Refresh the observation and capability immediately before admission. A
@@ -158,6 +202,30 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	}
 
 	admissionStarted = true
+	if err := desktop.Begin(journalBinding); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+	}
+	intentStarted = true
+	// Each NEW durable intent gets a unique admission commitment, so changing
+	// journal/key cannot deduplicate distinct native attempts in the UID quota.
+	var admission [32]byte
+	if _, err := rand.Read(admission[:]); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+	}
+	if quotaErr := s.reserveQuota(callCtx, admission); quotaErr != nil {
+		code := "backend_unavailable"
+		if errors.Is(quotaErr, writer.ErrQuotaExhausted) {
+			code = "rate_limited"
+		}
+		result := notApplied(action.ID)
+		if err := finishLease(lease, ticket, action, result, code); err != nil {
+			return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+		}
+		if err := s.closeActionLease(lease); err != nil {
+			return result, coreError("backend_unavailable")
+		}
+		return result, coreError(code)
+	}
 
 	s.mu.Lock()
 	if s.actionsUsed >= s.maxActions {
@@ -224,6 +292,9 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
+	s.mu.Lock()
+	s.actionSequence = saturatingAdd(s.actionSequence, 1)
+	s.mu.Unlock()
 	s.account(callCtx, CounterActions, 1)
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
 	if executeErr != nil {
