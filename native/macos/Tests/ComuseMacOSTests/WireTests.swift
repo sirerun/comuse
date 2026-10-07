@@ -717,7 +717,7 @@ final class WireTests: XCTestCase {
         dispatchedMethod = method
         if let failure { throw failure }
         if method.hasPrefix("cg_") {
-            return poster.post(action, target: target) { point in
+            return poster.post(action, target: target, deadline: ProcessInfo.processInfo.systemUptime + 10) { point in
                 try self.check(requestID: 0, deadline: ProcessInfo.processInfo.systemUptime + 10)
                 let current = try self.revalidate(action)
                 guard current == target else { throw ProbeFailure(code: "state_expired") }
@@ -747,13 +747,13 @@ final class WireTests: XCTestCase {
 
     func sequencePost(_ action: NativeAction, target: NativeActionTarget,
                       checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch {
-        sequence.post(action, target: target, checkpoint: checkpoint)
+        sequence.post(action, target: target, deadline: clock.now() + 10, checkpoint: checkpoint)
     }
 
-    func post(_ action: NativeAction, target: NativeActionTarget,
+    func post(_ action: NativeAction, target: NativeActionTarget, deadline: TimeInterval,
               checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch {
         if action.kind == "insert" || action.kind == "type_text" { values.append(action.text) }
-        return sequence.post(action, target: target, checkpoint: checkpoint)
+        return sequence.post(action, target: target, deadline: deadline, checkpoint: checkpoint)
     }
 
     func post(_ event: NativeInputEvent, deadline: TimeInterval) throws {

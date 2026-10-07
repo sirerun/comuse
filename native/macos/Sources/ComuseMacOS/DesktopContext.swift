@@ -133,7 +133,7 @@ extension NativeRuntime {
             return nil
         }
         let before = generation
-        let focus = inspectFocusedWindow()
+        let focus = inspectFocusedWindow(requestID: requestID, deadline: deadline)
         try checkDeadline(requestID, deadline: deadline)
         let evidence = desktopFocusEvidence(focus)
         guard evidence.known,
@@ -149,7 +149,9 @@ extension NativeRuntime {
         ]
     }
 
-    private func inspectFocusedWindow() -> DesktopFocusResult {
+    private func inspectFocusedWindow(requestID: UInt64, deadline: TimeInterval) -> DesktopFocusResult {
+        do { try checkDeadline(requestID, deadline: deadline) }
+        catch { return .unknown }
         guard let frontmost = NSWorkspace.shared.frontmostApplication else { return .unknown }
         let pid = frontmost.processIdentifier
         guard case .unknown = desktopFocusAuthorization(pid: pid, scopedPIDs: Set(processes.map(\.pid))) else {
@@ -159,16 +161,17 @@ extension NativeRuntime {
         guard let identity = try? matchingProcess(expected),
               identity.bundleID == frontmost.bundleIdentifier else { return .unknown }
         let application = AXUIElementCreateApplication(pid)
-        guard AXUIElementSetMessagingTimeout(application, 0.5) == .success else { return .unknown }
         var raw: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &raw)
+        guard let result = try? nativeAXDeadlineIPC(application, deadline: deadline, operation: {
+            AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &raw)
+        }) else { return .unknown }
         if result == .noValue { return .noAuthorizedWindow }
         guard result == .success else { return .unknown }
         guard let raw else { return .noAuthorizedWindow }
         guard CFGetTypeID(raw) == AXUIElementGetTypeID() else { return .unknown }
         let window = unsafeBitCast(raw, to: AXUIElement.self)
-        guard let ref = try? retain(window, process: identity, windowRef: nil, kind: .window),
-              let title = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String)) else { return .unknown }
+        guard let ref = try? retain(window, process: identity, windowRef: nil, kind: .window, deadline: deadline),
+              let title = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String, deadline: deadline)) else { return .unknown }
         let bounded = boundedUTF8Prefix(title, byteLimit: 4096)
         guard !bounded.truncated else { return .unknown }
         let process: [String: Any] = ["pid": identity.pid, "bundle_id": identity.bundleID, "launch_id": identity.launchID]

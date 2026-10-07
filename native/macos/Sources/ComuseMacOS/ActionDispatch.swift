@@ -79,6 +79,7 @@ func validNativeTextSelection(_ selection: NativeTextSelection) -> Bool {
 
 @MainActor protocol NativeInputPoster {
     func post(_ action: NativeAction, target: NativeActionTarget,
+              deadline: TimeInterval,
               checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch
 }
 
@@ -165,12 +166,12 @@ struct NativeInputEvent {
         self.keyboardLayout = keyboardLayout
     }
 
-    func post(_ action: NativeAction, target: NativeActionTarget,
+    func post(_ action: NativeAction, target: NativeActionTarget, deadline enclosingDeadline: TimeInterval,
               checkpoint: (CGPoint?) throws -> Void) -> NativeActionDispatch {
         guard let route = nativeActionRoute(action) else {
             return NativeActionDispatch(method: "", completedSteps: [], execution: "not_applied", cleanup: "complete")
         }
-        let deadline = clock.now() + 10
+        let deadline = min(enclosingDeadline, clock.now() + 10)
         var completed: [String] = []
         var held: [NativeInputEvent] = []
         var cleanup = "complete"

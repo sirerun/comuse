@@ -22,14 +22,19 @@ func nativeAXMessagingTimeout(remaining: TimeInterval) -> Float? {
     return timeout.isFinite && timeout > 0 && Double(timeout) <= remaining ? timeout : nil
 }
 
-func configureNativeAXMessagingTimeout(_ element: AXUIElement, deadline: TimeInterval) throws {
-    let remaining = deadline - ProcessInfo.processInfo.systemUptime
+/// Configures the exact AX object immediately before its synchronous IPC.
+/// The injected clock/configurer are also used by synthetic tests; production
+/// callers supply the system clock and AXUIElementSetMessagingTimeout.
+func nativeAXDeadlineIPC<T>(_ element: AXUIElement, deadline: TimeInterval,
+                            now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                            configure: (AXUIElement, Float) -> AXError = { AXUIElementSetMessagingTimeout($0, $1) },
+                            operation: () throws -> T) throws -> T {
+    let remaining = deadline - now()
     guard let timeout = nativeAXMessagingTimeout(remaining: remaining) else {
         throw ProbeFailure(code: "budget_exceeded")
     }
-    guard AXUIElementSetMessagingTimeout(element, timeout) == .success else {
-        throw ProbeFailure(code: "backend_unavailable")
-    }
+    guard configure(element, timeout) == .success else { throw ProbeFailure(code: "backend_unavailable") }
+    return try operation()
 }
 
 
@@ -134,17 +139,19 @@ extension NativeRuntime {
     }
 
     func retain(_ element: AXUIElement, process: NativeProcess, windowRef: String?, kind: NativeReferenceKind,
-                deadline: TimeInterval? = nil) throws -> String {
+                deadline: TimeInterval) throws -> String {
         let currentProcess = try matchingProcess(process)
         var actualPID: pid_t = 0
-        if let deadline { try configureNativeAXMessagingTimeout(element, deadline: deadline) }
         guard currentProcess == process,
-              AXUIElementGetPid(element, &actualPID) == .success,
+              (try nativeAXDeadlineIPC(element, deadline: deadline) {
+                  AXUIElementGetPid(element, &actualPID)
+              }) == .success,
               actualPID == process.pid,
               nativeElementIdentityIsCurrent(actualPID: Int32(actualPID), expected: process, current: currentProcess) else {
             throw ProbeFailure(code: "element_stale")
         }
         let desktopGeneration = try refreshDesktopGeneration()
+        guard ProcessInfo.processInfo.systemUptime < deadline else { throw ProbeFailure(code: "budget_exceeded") }
         var current = references
         let now = ProcessInfo.processInfo.systemUptime
         current = current.filter { now - $0.value.lastSeen <= 120 }
@@ -162,7 +169,7 @@ extension NativeRuntime {
     }
 
     func resolve(_ ref: String, kind: NativeReferenceKind, windowRef: String? = nil,
-                 deadline: TimeInterval? = nil) throws -> NativeReference {
+                 deadline: TimeInterval) throws -> NativeReference {
         let desktopGeneration = try refreshDesktopGeneration()
         guard validOpaque(ref), let entry = references[ref], entry.kind == kind,
               desktopReferenceIsCurrent(issued: entry.desktopGeneration, current: desktopGeneration),
@@ -171,19 +178,20 @@ extension NativeRuntime {
         let current = try matchingProcess(entry.process)
         guard current == entry.process else { throw ProbeFailure(code: "element_stale") }
         var pid: pid_t = 0
-        if let deadline { try configureNativeAXMessagingTimeout(entry.element, deadline: deadline) }
-        guard AXUIElementGetPid(entry.element, &pid) == .success, pid == entry.process.pid else { throw ProbeFailure(code: "element_stale") }
+        guard (try nativeAXDeadlineIPC(entry.element, deadline: deadline) {
+            AXUIElementGetPid(entry.element, &pid)
+        }) == .success, pid == entry.process.pid else { throw ProbeFailure(code: "element_stale") }
         var refreshed = entry; refreshed.lastSeen = ProcessInfo.processInfo.systemUptime
         var all = references; all[ref] = refreshed; references = all
         return refreshed
     }
 
-    func observeWindow(_ request: NativeRequest, requestID: UInt64, retainSnapshot: Bool = true) throws -> [String: Any] {
+    func observeWindow(_ request: NativeRequest, requestID: UInt64, retainSnapshot: Bool = true,
+                       deadline: TimeInterval) throws -> [String: Any] {
         try checkPermission()
         let desktopGeneration = try refreshDesktopGeneration()
         guard let windowRef = request.windowRef else { throw ProbeFailure(code: "invalid_request") }
         let budget = try boundedBudget(request.budget)
-        let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
         let root = try resolve(windowRef, kind: .window, deadline: deadline)
         let freshProcess = try matchingProcess(root.process)
         var output: [TraversalNode] = []
@@ -204,8 +212,9 @@ extension NativeRuntime {
             if visitedCount >= budget.maxNodes { complete = false; reason = "node_limit"; break }
             visitedCount += 1
             var pid: pid_t = 0
-            try configureNativeAXMessagingTimeout(element, deadline: deadline)
-            guard AXUIElementGetPid(element, &pid) == .success, pid == freshProcess.pid else {
+            guard (try nativeAXDeadlineIPC(element, deadline: deadline) {
+                AXUIElementGetPid(element, &pid)
+            }) == .success, pid == freshProcess.pid else {
                 complete = false; reason = "scope_changed"; break
             }
             if !depthIsIncluded(depth, maximum: budget.maxDepth) {
@@ -335,22 +344,26 @@ extension NativeRuntime {
         try checkPermission()
         guard let windowRef = request.windowRef, let elementRef = request.elementRef,
               let stateID = request.stateID else { throw ProbeFailure(code: "policy_refused") }
-        let snapshot = try validateSnapshot(stateID, windowRef: windowRef, requestID: requestID, budget: request.budget)
+        let budget = try boundedBudget(request.budget)
+        let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
+        let snapshot = try validateSnapshot(stateID, windowRef: windowRef, requestID: requestID,
+                                            budget: request.budget, deadline: deadline)
         guard snapshot.refs.contains(elementRef) else { throw ProbeFailure(code: "element_stale") }
-        let entry = try resolve(elementRef, kind: .element, windowRef: windowRef)
-        let role = stringAttribute(entry.element, kAXRoleAttribute) ?? ""
-        let subrole = stringAttribute(entry.element, kAXSubroleAttribute)
+        let entry = try resolve(elementRef, kind: .element, windowRef: windowRef, deadline: deadline)
+        let role = stringAttribute(entry.element, kAXRoleAttribute, deadline: deadline) ?? ""
+        let subrole = stringAttribute(entry.element, kAXSubroleAttribute, deadline: deadline)
         guard classify(role: role, subrole: subrole) == "normal", role == "AXTextField" else {
             throw ProbeFailure(code: "policy_refused")
         }
-        guard let bounded = allowedValue(entry.element, classification: "normal", role: role) else {
+        guard let bounded = allowedValue(entry.element, classification: "normal", role: role, deadline: deadline) else {
             throw ProbeFailure(code: "backend_unavailable")
         }
         guard !bounded.truncated else { throw ProbeFailure(code: "budget_exceeded") }
         return ["window_ref": windowRef, "element_ref": elementRef, "state_id": stateID, "text": bounded.text]
     }
 
-    func validateSnapshot(_ stateID: String, windowRef: String, requestID: UInt64, budget: NativeBudget?) throws -> NativeSnapshot {
+    func validateSnapshot(_ stateID: String, windowRef: String, requestID: UInt64, budget: NativeBudget?,
+                          deadline: TimeInterval) throws -> NativeSnapshot {
         let desktopGeneration = try refreshDesktopGeneration()
         guard validOpaque(stateID), let prior = snapshots[stateID], prior.windowRef == windowRef,
               prior.desktopGeneration == desktopGeneration,
@@ -358,7 +371,11 @@ extension NativeRuntime {
         let freshRequest = NativeRequest(schemaVersion: 1, requestID: "revalidate", operation: "observe",
                                          windowRef: windowRef, elementRef: nil, stateID: nil,
                                          budget: budget, action: nil)
-        _ = try observeWindow(freshRequest, requestID: requestID, retainSnapshot: false)
+        try checkDeadline(requestID, deadline: deadline)
+        let freshBudget = try boundedBudget(freshRequest.budget)
+        let freshDeadline = min(deadline, ProcessInfo.processInfo.systemUptime + freshBudget.timeout)
+        _ = try observeWindow(freshRequest, requestID: requestID, retainSnapshot: false, deadline: freshDeadline)
+        try checkDeadline(requestID, deadline: deadline)
         guard try refreshDesktopGeneration() == prior.desktopGeneration else {
             invalidateAccessibilityState()
             throw ProbeFailure(code: "state_expired")
@@ -403,34 +420,34 @@ private struct AXActionAccess: NativeActionAccess {
 
     func revalidate(_ action: NativeAction) throws -> NativeActionTarget {
         try check(requestID: requestID, deadline: deadline)
-        let window = try runtime.resolve(action.windowRef, kind: .window)
+        let window = try runtime.resolve(action.windowRef, kind: .window, deadline: deadline)
         let process = try runtime.matchingProcess(window.process)
         guard process == window.process else { throw ProbeFailure(code: "element_stale") }
         let semantic = !action.elementRef.isEmpty
         let element: NativeReference
         if semantic {
             let snapshot = try runtime.validateSnapshot(action.stateID, windowRef: action.windowRef,
-                                                        requestID: requestID, budget: nil)
+                                                        requestID: requestID, budget: nil, deadline: deadline)
             guard snapshot.complete, snapshot.process == process, snapshot.refs.contains(action.elementRef) else {
                 throw ProbeFailure(code: "state_expired")
             }
-            element = try runtime.resolve(action.elementRef, kind: .element, windowRef: action.windowRef)
+            element = try runtime.resolve(action.elementRef, kind: .element, windowRef: action.windowRef, deadline: deadline)
             guard element.process == process else { throw ProbeFailure(code: "element_stale") }
         } else {
             element = window
         }
-        let role = stringAttribute(element.element, kAXRoleAttribute) ?? ""
-        let subrole = stringAttribute(element.element, kAXSubroleAttribute)
+        let role = stringAttribute(element.element, kAXRoleAttribute, deadline: deadline) ?? ""
+        let subrole = stringAttribute(element.element, kAXSubroleAttribute, deadline: deadline)
         let classification = classify(role: role, subrole: subrole)
         guard classification == "normal" else {
             throw ProbeFailure(code: classification == "secure" ? "policy_refused" : "unsupported")
         }
         let application = AXUIElementCreateApplication(process.pid)
-        let focusedWindow = copyAttribute(application, kAXFocusedWindowAttribute as String)
+        let focusedWindow = copyAttribute(application, kAXFocusedWindowAttribute as String, deadline: deadline)
         if action.kind != "focus_window" {
             guard let focusedWindow, CFEqual(focusedWindow, window.element) else { throw ProbeFailure(code: "state_expired") }
         }
-        let focusedValue = copyAttribute(application, kAXFocusedUIElementAttribute as String)
+        let focusedValue = copyAttribute(application, kAXFocusedUIElementAttribute as String, deadline: deadline)
         let focusedElement: AXUIElement?
         if let focusedValue, CFGetTypeID(focusedValue) == AXUIElementGetTypeID() {
             focusedElement = unsafeBitCast(focusedValue, to: AXUIElement.self)
@@ -441,45 +458,46 @@ private struct AXActionAccess: NativeActionAccess {
         var focusedClassification: String?
         var focusedIdentity: String?
         if let focusedElement {
-            let focusedWindowValue = copyAttribute(focusedElement, kAXWindowAttribute as String)
+            let focusedWindowValue = copyAttribute(focusedElement, kAXWindowAttribute as String, deadline: deadline)
             if let focusedWindowValue, CFEqual(focusedWindowValue, window.element) {
-                focusedRole = stringAttribute(focusedElement, kAXRoleAttribute)
-                focusedClassification = classify(role: focusedRole ?? "", subrole: stringAttribute(focusedElement, kAXSubroleAttribute))
+                focusedRole = stringAttribute(focusedElement, kAXRoleAttribute, deadline: deadline)
+                focusedClassification = classify(role: focusedRole ?? "", subrole: stringAttribute(focusedElement, kAXSubroleAttribute, deadline: deadline))
                 if focusedClassification == "normal" {
                     focusedIdentity = try runtime.retain(focusedElement, process: process,
-                                                         windowRef: action.windowRef, kind: .element)
+                                                         windowRef: action.windowRef, kind: .element, deadline: deadline)
                 }
             }
         }
-        let windowBounds = axBounds(window.element)
+        let windowBounds = axBounds(window.element, deadline: deadline)
         let displayID = CGMainDisplayID()
         let displayBounds = CGDisplayBounds(displayID)
         return NativeActionTarget(actionID: action.id, windowRef: action.windowRef,
                                   elementRef: action.elementRef, stateID: action.stateID,
                                   process: process, role: role, classification: classification,
-                                  enabled: boolAttribute(element.element, kAXEnabledAttribute),
-                                  focused: boolAttribute(element.element, kAXFocusedAttribute) == true,
+                                  enabled: boolAttribute(element.element, kAXEnabledAttribute, deadline: deadline),
+                                  focused: boolAttribute(element.element, kAXFocusedAttribute, deadline: deadline) == true,
                                   windowFocused: focusedWindow.map { CFEqual($0, window.element) } ?? false,
                                   focusedRole: focusedRole, focusedClassification: focusedClassification,
                                   focusedIdentity: focusedIdentity,
-                                  windowBounds: windowBounds, elementBounds: axBounds(element.element),
+                                  windowBounds: windowBounds, elementBounds: axBounds(element.element, deadline: deadline),
                                   displayBounds: displayBounds, displayID: displayID)
     }
 
     func supports(_ kind: String, target: NativeActionTarget, point: CGPoint?) throws -> Bool {
+        try check(requestID: requestID, deadline: deadline)
         guard target.classification == "normal" else { return false }
         let entry = target.elementRef.isEmpty
-            ? try runtime.resolve(target.windowRef, kind: .window)
-            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
+            ? try runtime.resolve(target.windowRef, kind: .window, deadline: deadline)
+            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef, deadline: deadline)
         switch kind {
         case "press":
             var names: CFArray?
-            return target.role == "AXButton" && AXUIElementCopyActionNames(entry.element, &names) == .success &&
+            return target.role == "AXButton" && (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementCopyActionNames(entry.element, &names) }) == .success &&
                 (names as? [String])?.contains(kAXPressAction as String) == true
         case "replace":
             var settable = DarwinBoolean(false)
             return target.role == "AXTextField" &&
-                AXUIElementIsAttributeSettable(entry.element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+                (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementIsAttributeSettable(entry.element, kAXValueAttribute as CFString, &settable) }) == .success && settable.boolValue
         case "insert":
             guard textRole(target.role), target.focused, target.focusedClassification == "normal" else { return false }
             guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
@@ -487,18 +505,18 @@ private struct AXActionAccess: NativeActionAccess {
         case "click" where point == nil:
             if target.role == "AXButton" {
                 var names: CFArray?
-                return AXUIElementCopyActionNames(entry.element, &names) == .success &&
+                return (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementCopyActionNames(entry.element, &names) }) == .success &&
                     (names as? [String])?.contains(kAXPressAction as String) == true
             }
             return false
         case "pick":
             var names: CFArray?
-            guard AXUIElementCopyActionNames(entry.element, &names) == .success,
+            guard (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementCopyActionNames(entry.element, &names) }) == .success,
                   let actions = names as? [String] else { return false }
             return actions.contains("AXPick")
         case "focus":
             var settable = DarwinBoolean(false)
-            return AXUIElementIsAttributeSettable(entry.element, kAXFocusedAttribute as CFString, &settable) == .success && settable.boolValue
+            return (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementIsAttributeSettable(entry.element, kAXFocusedAttribute as CFString, &settable) }) == .success && settable.boolValue
         case "scroll":
             guard ["AXScrollArea", "AXWebArea", "AXList", "AXTable", "AXOutline", "AXTextArea", "AXTextView"].contains(target.role) else {
                 return false
@@ -507,11 +525,12 @@ private struct AXActionAccess: NativeActionAccess {
                   CGPreflightPostEventAccess(), CGEventSource(stateID: .hidSystemState) != nil else { return false }
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
             guard checkedPoint(Double(center.x), Double(center.y), target: target) != nil else { return false }
-            try validateCoordinateHit(center, target: target, runtime: runtime, requiresExactTarget: true)
+            try validateCoordinateHit(center, target: target, runtime: runtime, requestID: requestID,
+                                      deadline: deadline, requiresExactTarget: true)
             return true
         case "focus_window":
             var names: CFArray?
-            return AXUIElementCopyActionNames(entry.element, &names) == .success && (names as? [String])?.contains("AXRaise") == true
+            return (try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementCopyActionNames(entry.element, &names) }) == .success && (names as? [String])?.contains("AXRaise") == true
         case "type_text", "press_key":
             if target.focusedClassification == "secure" { throw ProbeFailure(code: "policy_refused") }
             guard target.focusedRole != nil, target.focusedClassification == "normal" else { return false }
@@ -520,23 +539,24 @@ private struct AXActionAccess: NativeActionAccess {
             return CGEventSource(stateID: .hidSystemState) != nil
         case "coordinate_scroll", "drag":
             guard let point, checkedPoint(Double(point.x), Double(point.y), target: target) != nil else { return false }
-            try validateCoordinateHit(point, target: target, runtime: runtime)
+            try validateCoordinateHit(point, target: target, runtime: runtime, requestID: requestID, deadline: deadline)
             return CGPreflightPostEventAccess() && CGEventSource(stateID: .hidSystemState) != nil
         case "click" where point != nil:
             guard let point, checkedPoint(Double(point.x), Double(point.y), target: target) != nil else { return false }
-            try validateCoordinateHit(point, target: target, runtime: runtime)
+            try validateCoordinateHit(point, target: target, runtime: runtime, requestID: requestID, deadline: deadline)
             return CGPreflightPostEventAccess() && CGEventSource(stateID: .hidSystemState) != nil
         default: return false
         }
     }
 
     func selection(target: NativeActionTarget) throws -> NativeTextSelection {
+        try check(requestID: requestID, deadline: deadline)
         let entry = target.elementRef.isEmpty
-            ? try runtime.resolve(target.windowRef, kind: .window)
-            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
-        guard let current = allowedValue(entry.element, classification: target.classification, role: target.role),
+            ? try runtime.resolve(target.windowRef, kind: .window, deadline: deadline)
+            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef, deadline: deadline)
+        guard let current = allowedValue(entry.element, classification: target.classification, role: target.role, deadline: deadline),
               !current.truncated,
-              let rawRange = copyAttribute(entry.element, kAXSelectedTextRangeAttribute as String) else {
+              let rawRange = copyAttribute(entry.element, kAXSelectedTextRangeAttribute as String, deadline: deadline) else {
             throw ProbeFailure(code: "unsupported")
         }
         var range = CFRange(location: 0, length: 0)
@@ -558,23 +578,24 @@ private struct AXActionAccess: NativeActionAccess {
             ? CGPoint(x: action.x, y: action.y) : nil
         guard try supports(action.kind, target: target, point: point) else { throw ProbeFailure(code: "unsupported") }
         let entry = target.elementRef.isEmpty
-            ? try runtime.resolve(target.windowRef, kind: .window)
-            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
+            ? try runtime.resolve(target.windowRef, kind: .window, deadline: deadline)
+            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef, deadline: deadline)
         guard try runtime.matchingProcess(target.process) == target.process,
               target.classification == "normal" else { throw ProbeFailure(code: "element_stale") }
         let error: AXError
+        try check(requestID: requestID, deadline: deadline)
         switch method {
-        case "ax_press": error = AXUIElementPerformAction(entry.element, kAXPressAction as CFString)
-        case "ax_set_value": error = AXUIElementSetAttributeValue(entry.element, kAXValueAttribute as CFString, action.text as CFString)
-        case "ax_pick": error = AXUIElementPerformAction(entry.element, "AXPick" as CFString)
-        case "ax_focus": error = AXUIElementSetAttributeValue(entry.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        case "ax_focus_window": error = AXUIElementPerformAction(entry.element, "AXRaise" as CFString)
+        case "ax_press": error = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementPerformAction(entry.element, kAXPressAction as CFString) }
+        case "ax_set_value": error = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementSetAttributeValue(entry.element, kAXValueAttribute as CFString, action.text as CFString) }
+        case "ax_pick": error = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementPerformAction(entry.element, "AXPick" as CFString) }
+        case "ax_focus": error = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementSetAttributeValue(entry.element, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
+        case "ax_focus_window": error = try nativeAXDeadlineIPC(entry.element, deadline: deadline) { AXUIElementPerformAction(entry.element, "AXRaise" as CFString) }
         case "ax_scroll": throw ProbeFailure(code: "unsupported")
         case "cg_unicode" where action.kind == "insert":
             _ = try selection(target: target) // Recheck immediately before the only event dispatch.
-            return poster.post(action, target: target) { point in try validateStep(action, target: target, point: point) }
+            return poster.post(action, target: target, deadline: deadline) { point in try validateStep(action, target: target, point: point) }
         case "cg_unicode", "cg_key", "cg_click", "cg_scroll", "cg_drag":
-            return poster.post(action, target: target) { point in try validateStep(action, target: target, point: point) }
+            return poster.post(action, target: target, deadline: deadline) { point in try validateStep(action, target: target, point: point) }
         default: throw ProbeFailure(code: "unsupported")
         }
         guard error == .success else {
@@ -599,9 +620,9 @@ private func textRole(_ role: String) -> Bool {
     ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox"].contains(role)
 }
 
-private func axBounds(_ element: AXUIElement) -> CGRect? {
-    guard let position = copyAttribute(element, kAXPositionAttribute as String),
-          let size = copyAttribute(element, kAXSizeAttribute as String),
+private func axBounds(_ element: AXUIElement, deadline: TimeInterval) -> CGRect? {
+    guard let position = copyAttribute(element, kAXPositionAttribute as String, deadline: deadline),
+          let size = copyAttribute(element, kAXSizeAttribute as String, deadline: deadline),
           let positionValue = nativeAXValue(position), let sizeValue = nativeAXValue(size) else { return nil }
     var point = CGPoint.zero
     var dimensions = CGSize.zero
@@ -615,48 +636,54 @@ private func axBounds(_ element: AXUIElement) -> CGRect? {
 
 @MainActor
 private func validateCoordinateHit(_ point: CGPoint, target: NativeActionTarget, runtime: NativeRuntime,
+                                   requestID: UInt64, deadline: TimeInterval,
                                    requiresExactTarget: Bool = false) throws {
-    guard let window = try? runtime.resolve(target.windowRef, kind: .window) else {
+    try runtime.checkDeadline(requestID, deadline: deadline)
+    guard let window = try? runtime.resolve(target.windowRef, kind: .window, deadline: deadline) else {
         throw ProbeFailure(code: "policy_refused")
     }
     let process = try runtime.matchingProcess(target.process)
     guard process == target.process else { throw ProbeFailure(code: "element_stale") }
     let app = AXUIElementCreateApplication(target.process.pid)
-    guard let focusedWindow = copyAttribute(app, kAXFocusedWindowAttribute as String), CFEqual(focusedWindow, window.element) else {
+    guard let focusedWindow = copyAttribute(app, kAXFocusedWindowAttribute as String, deadline: deadline), CFEqual(focusedWindow, window.element) else {
         throw ProbeFailure(code: "state_expired")
     }
     let scopedTarget: AXUIElement
     if target.elementRef.isEmpty {
         scopedTarget = window.element
     } else {
-        scopedTarget = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef).element
+        scopedTarget = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef, deadline: deadline).element
     }
     var hit: AXUIElement?
-    guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success,
+    guard (try nativeAXDeadlineIPC(app, deadline: deadline) {
+        AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit)
+    }) == .success,
           let hit else { throw ProbeFailure(code: "policy_refused") }
-    let role = stringAttribute(hit, kAXRoleAttribute) ?? ""
-    let classification = classify(role: role, subrole: stringAttribute(hit, kAXSubroleAttribute))
+    let role = stringAttribute(hit, kAXRoleAttribute, deadline: deadline) ?? ""
+    let classification = classify(role: role, subrole: stringAttribute(hit, kAXSubroleAttribute, deadline: deadline))
     var hitPID: pid_t = 0
-    let exactWindow = copyAttribute(hit, kAXWindowAttribute as String).map { CFEqual($0, window.element) } ?? false
+    let exactWindow = copyAttribute(hit, kAXWindowAttribute as String, deadline: deadline).map { CFEqual($0, window.element) } ?? false
     let exactTarget = CFEqual(hit, scopedTarget)
-    let targetRelated = exactTarget || axDescendant(hit, of: scopedTarget, maximumParents: 32)
+    let targetRelated = exactTarget || axDescendant(hit, of: scopedTarget, maximumParents: 32, deadline: deadline)
     var targetPID: pid_t = 0
     guard classification == "normal",
-          AXUIElementGetPid(hit, &hitPID) == .success,
-          AXUIElementGetPid(scopedTarget, &targetPID) == .success,
+          (try nativeAXDeadlineIPC(hit, deadline: deadline) { AXUIElementGetPid(hit, &hitPID) }) == .success,
+          (try nativeAXDeadlineIPC(scopedTarget, deadline: deadline) { AXUIElementGetPid(scopedTarget, &targetPID) }) == .success,
           targetPID == target.process.pid,
           validNativeCoordinateHit(NativeCoordinateHitFacts(
             point: point, expectedPID: target.process.pid, actualPID: Int32(hitPID),
-            targetBounds: axBounds(scopedTarget), hitBounds: axBounds(hit), exactWindow: exactWindow,
+            targetBounds: axBounds(scopedTarget, deadline: deadline), hitBounds: axBounds(hit, deadline: deadline), exactWindow: exactWindow,
             targetRelated: targetRelated, exactTarget: exactTarget, requiresExactTarget: requiresExactTarget)) else {
         throw ProbeFailure(code: "policy_refused")
     }
+    try runtime.checkDeadline(requestID, deadline: deadline)
 }
 
-private func axDescendant(_ candidate: AXUIElement, of ancestor: AXUIElement, maximumParents: Int) -> Bool {
+private func axDescendant(_ candidate: AXUIElement, of ancestor: AXUIElement, maximumParents: Int,
+                          deadline: TimeInterval) -> Bool {
     var current = candidate
     for _ in 0..<maximumParents {
-        guard let value = copyAttribute(current, kAXParentAttribute as String),
+        guard let value = copyAttribute(current, kAXParentAttribute as String, deadline: deadline),
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return false }
         let parent = unsafeBitCast(value, to: AXUIElement.self)
         if CFEqual(parent, ancestor) { return true }
@@ -682,27 +709,28 @@ private func classify(role: String, subrole: String?) -> String {
     return expected[role]?.contains(subrole) == true ? "normal" : "unknown"
 }
 
-func copyAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> CFTypeRef? {
-    if let deadline, (try? configureNativeAXMessagingTimeout(element, deadline: deadline)) == nil { return nil }
+func copyAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval) -> CFTypeRef? {
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+    guard (try? nativeAXDeadlineIPC(element, deadline: deadline) {
+        AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+    }) == .success else { return nil }
     return value
 }
 
-func stringAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> String? {
+func stringAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval) -> String? {
     guard let value = copyAttribute(element, attribute, deadline: deadline) else { return nil }
     if let string = value as? String { return string }
     if let string = value as? NSAttributedString { return string.string }
     return nil
 }
 
-private func boolAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> Bool? {
+private func boolAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval) -> Bool? {
     guard let value = copyAttribute(element, attribute, deadline: deadline), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
     return (value as! NSNumber).boolValue
 }
 
 private func allowedValue(_ element: AXUIElement, classification: String, role: String,
-                          deadline: TimeInterval? = nil) -> BoundedText? {
+                          deadline: TimeInterval) -> BoundedText? {
     guard classification == "normal",
           ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField"].contains(role),
           let value = copyAttribute(element, kAXValueAttribute as String, deadline: deadline) else { return nil }
@@ -721,17 +749,19 @@ func depthIsIncluded(_ depth: Int, maximum: Int) -> Bool {
 }
 
 private func children(of element: AXUIElement, limit: Int, deadline: TimeInterval) -> (values: [AXUIElement], failed: Bool, truncated: Bool) {
-    guard (try? configureNativeAXMessagingTimeout(element, deadline: deadline)) != nil else { return ([], true, false) }
     var total: CFIndex = 0
     let attribute = kAXChildrenAttribute as CFString
-    let countStatus = AXUIElementGetAttributeValueCount(element, attribute, &total)
+    guard let countStatus = try? nativeAXDeadlineIPC(element, deadline: deadline, operation: {
+        AXUIElementGetAttributeValueCount(element, attribute, &total)
+    }) else { return ([], true, false) }
     if countStatus == .noValue || countStatus == .attributeUnsupported { return ([], false, false) }
     guard countStatus == .success, total >= 0 else { return ([], true, false) }
     let bounds = boundedChildCount(Int(total), limit: limit)
     guard bounds.count > 0 else { return ([], false, bounds.truncated) }
-    guard (try? configureNativeAXMessagingTimeout(element, deadline: deadline)) != nil else { return ([], true, bounds.truncated) }
     var raw: CFArray?
-    let status = AXUIElementCopyAttributeValues(element, attribute, 0, CFIndex(bounds.count), &raw)
+    guard let status = try? nativeAXDeadlineIPC(element, deadline: deadline, operation: {
+        AXUIElementCopyAttributeValues(element, attribute, 0, CFIndex(bounds.count), &raw)
+    }) else { return ([], true, bounds.truncated) }
     guard status == .success, let values = raw as? [AXUIElement] else { return ([], true, bounds.truncated) }
     return (values, false, bounds.truncated)
 }

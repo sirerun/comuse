@@ -326,8 +326,9 @@ final class NativeRuntime {
             let app = try application(process)
             let applicationElement = AXUIElementCreateApplication(process.pid)
             var windowCount: CFIndex = 0
-            try configureNativeAXMessagingTimeout(applicationElement, deadline: deadline)
-            guard AXUIElementGetAttributeValueCount(applicationElement, kAXWindowsAttribute as CFString, &windowCount) == .success,
+            guard (try nativeAXDeadlineIPC(applicationElement, deadline: deadline) {
+                AXUIElementGetAttributeValueCount(applicationElement, kAXWindowsAttribute as CFString, &windowCount)
+            }) == .success,
                   windowCount >= 0 else { throw ProbeFailure(code: "backend_unavailable") }
             let remaining = min(budget.maxNodes - result.count, 128 - result.count)
             let bounds = boundedChildCount(Int(windowCount), limit: remaining)
@@ -336,8 +337,9 @@ final class NativeRuntime {
             guard !bounds.truncated else { throw ProbeFailure(code: "budget_exceeded") }
             var rawWindows: CFArray?
             if bounds.count > 0 {
-                try configureNativeAXMessagingTimeout(applicationElement, deadline: deadline)
-                guard AXUIElementCopyAttributeValues(applicationElement, kAXWindowsAttribute as CFString, 0, CFIndex(bounds.count), &rawWindows) == .success else {
+                guard (try nativeAXDeadlineIPC(applicationElement, deadline: deadline) {
+                    AXUIElementCopyAttributeValues(applicationElement, kAXWindowsAttribute as CFString, 0, CFIndex(bounds.count), &rawWindows)
+                }) == .success else {
                     throw ProbeFailure(code: "backend_unavailable")
                 }
             }
@@ -377,7 +379,9 @@ final class NativeRuntime {
 
     // AX implementation is defined in Accessibility.swift.
     func observe(_ request: NativeRequest, requestID: UInt64) throws -> [String: Any] {
-        try observeWindow(request, requestID: requestID)
+        let budget = try boundedBudget(request.budget)
+        return try observeWindow(request, requestID: requestID,
+                                 deadline: ProcessInfo.processInfo.systemUptime + budget.timeout)
     }
     func readElement(_ request: NativeRequest, requestID: UInt64) throws -> [String: Any] {
         try readScopedElement(request, requestID: requestID)
