@@ -49,3 +49,24 @@ func TestInvalidMutationUsesInertTransportDiscriminator(t *testing.T) {
 		t.Fatalf("envelope=%+v err=%v", envelope, err)
 	}
 }
+
+func TestSharedExplicitReadReturnsOneFreshAuthorizedRecord(t *testing.T) {
+	backend := &fakeBackend{process: testProcess(), nativeState: "native", elements: testElements()}
+	session := newTestSession(t, backend, false)
+	_, _ = session.Windows(t.Context())
+	observed, err := session.Observe(t.Context(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := session.Call(t.Context(), Request{Operation: OperationReadElement, ReadElement: &ReadElementParams{WindowRef: "window-1", ElementRef: "normal-1", StateID: observed.StateID}})
+	if err != nil || string(response.Result.encoded) != string(response.Observation.encoded) || response.Usage.Observations.A11y != 2 {
+		t.Fatalf("read=%+v err=%v", response, err)
+	}
+	var read MetadataElementContent
+	if err := json.Unmarshal(response.Result.encoded, &read); err != nil {
+		t.Fatal(err)
+	}
+	if read.Text != "explicit value" || read.ObservedAt == "" || read.Truncated || read.StateID != observed.StateID {
+		t.Fatalf("read=%+v", read)
+	}
+}

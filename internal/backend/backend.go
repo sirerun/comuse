@@ -92,10 +92,11 @@ type Snapshot struct {
 	Coverage   Coverage  `json:"coverage"`
 }
 type ElementContent struct {
-	WindowRef  string `json:"window_ref"`
-	ElementRef string `json:"element_ref"`
-	StateID    string `json:"state_id"`
-	Text       string `json:"text"`
+	ObservedAt time.Time `json:"-"`
+	WindowRef  string    `json:"window_ref"`
+	ElementRef string    `json:"element_ref"`
+	StateID    string    `json:"state_id"`
+	Text       string    `json:"text"`
 }
 type Action struct {
 	ID         string `json:"id"`
