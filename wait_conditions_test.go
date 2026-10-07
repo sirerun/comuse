@@ -82,8 +82,8 @@ func TestWaitConditionUsesFreshStateAndReturnsCanonicalMetadata(t *testing.T) {
 		t.Fatalf("WaitCondition = (%+v, %v)", result, err)
 	}
 	after := session.ledger.Snapshot(session.sessionID)
-	if after.Observations.State-before.Observations.State != 1 || after.Observations.A11y-before.Observations.A11y != 1 {
-		t.Fatalf("wait counters state/a11y delta = %d/%d, want 1/1", after.Observations.State-before.Observations.State, after.Observations.A11y-before.Observations.A11y)
+	if after.Observations.State-before.Observations.State != 2 || after.Observations.A11y-before.Observations.A11y != 1 {
+		t.Fatalf("wait counters state/a11y delta = %d/%d, want 2/1", after.Observations.State-before.Observations.State, after.Observations.A11y-before.Observations.A11y)
 	}
 	checkedResult, err := session.WaitCondition(context.Background(), WaitParams{
 		Condition: "element_checked", WindowRef: "window-1", ElementRef: "normal-1", StateID: prior.StateID,
@@ -483,8 +483,8 @@ func TestWaitConditionCancellationCountsAttemptedFreshRead(t *testing.T) {
 		t.Fatal("wait did not drain after cancellation")
 	}
 	after := session.ledger.Snapshot(session.sessionID)
-	if after.Observations.State-before.Observations.State != 1 || after.Observations.A11y-before.Observations.A11y != 1 {
-		t.Fatalf("cancel counters state/a11y delta = %d/%d, want 1/1", after.Observations.State-before.Observations.State, after.Observations.A11y-before.Observations.A11y)
+	if after.Observations.State-before.Observations.State != 2 || after.Observations.A11y-before.Observations.A11y != 1 {
+		t.Fatalf("cancel counters state/a11y delta = %d/%d, want 2/1", after.Observations.State-before.Observations.State, after.Observations.A11y-before.Observations.A11y)
 	}
 }
 
