@@ -166,13 +166,20 @@ func projectFullObservation(session *Session, observation Observation) (semantic
 func buildFullObservation(session *Session, observation Observation) (semantic.Snapshot, error) {
 	session.mu.Lock()
 	metadata := projectionBinding{SessionID: session.sessionID, Scope: session.scope, Budget: session.budget, AllowValues: session.allowValues, PolicyVersion: actionPolicyVersion, Epoch: session.permissionEpoch}
-	actionSequence := session.actionSequence
+	actionSequence := observation.ActionSequence
+	if observation.ScopeID == "" {
+		actionSequence = session.actionSequence
+	}
 	session.mu.Unlock()
 	trusted, err := json.Marshal(metadata)
 	if err != nil {
 		return semantic.Snapshot{}, coreError("internal_error")
 	}
 	scopeHash := sha256.Sum256(trusted)
+	scopeID := hex.EncodeToString(scopeHash[:])
+	if observation.ScopeID != "" {
+		scopeID = observation.ScopeID
+	}
 	nodes := make(map[string]semantic.Node, len(observation.Elements))
 	type orderedRef struct {
 		ref   string
@@ -220,7 +227,7 @@ func buildFullObservation(session *Session, observation Observation) (semantic.S
 			coverage.Limitations = append(coverage.Limitations, observation.Coverage.Reason)
 		}
 	}
-	candidate := semantic.Snapshot{Metadata: semantic.Metadata{SchemaVersion: semantic.SchemaVersion, ScopeID: hex.EncodeToString(scopeHash[:]),
+	candidate := semantic.Snapshot{Metadata: semantic.Metadata{SchemaVersion: semantic.SchemaVersion, ScopeID: scopeID,
 		WindowRef: observation.WindowRef, ObservedAt: observation.ObservedAt, ActionSequence: actionSequence,
 		Coverage: coverage, Context: semantic.Context{RootRefs: rootRefs}}, Kind: "snapshot", Nodes: nodes, Historical: false}
 	normalized, err := semantic.Normalize(candidate)

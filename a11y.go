@@ -257,6 +257,8 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
 	}
 	public.StateID = full.StateID
+	public.ScopeID = full.ScopeID
+	public.ActionSequence = full.ActionSequence
 	publicJSON, err := json.Marshal(public)
 	if err != nil || len(publicJSON) > s.budget.MaxBytes {
 		return Observation{}, snapshotBinding{}, coreError("budget_exceeded")
