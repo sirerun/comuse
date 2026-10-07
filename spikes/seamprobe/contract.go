@@ -6,11 +6,6 @@ import (
 	"fmt"
 )
 
-type request struct {
-	SchemaVersion int    `json:"schema_version"`
-	RequestID     string `json:"request_id"`
-	Op            string `json:"op"`
-}
 type response struct {
 	SchemaVersion int     `json:"schema_version"`
 	RequestID     string  `json:"request_id"`
@@ -19,15 +14,9 @@ type response struct {
 	Error         *string `json:"error,omitempty"`
 }
 
-type completion struct {
-	handle uint64
-	bytes  []byte
-	err    error
-}
-
-func validateCompletionHandle(delivered completion, expected uint64) error {
-	if delivered.handle != expected {
-		return fmt.Errorf("native callback handle mismatch: want %d, got %d", expected, delivered.handle)
+func validateCompletionHandle(delivered, expected uint64) error {
+	if delivered != expected {
+		return fmt.Errorf("native callback handle mismatch: want %d, got %d", expected, delivered)
 	}
 	return nil
 }
