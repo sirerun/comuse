@@ -54,12 +54,15 @@ const (
 // SafeActionMetadata is a compact, value-free replay summary. Its fields are
 // closed enums so callers cannot persist native response text or secrets.
 type SafeActionMetadata struct {
-	Action       string `json:"action,omitempty"`
-	Execution    string `json:"execution,omitempty"`
-	Verification string `json:"verification,omitempty"`
-	StateStatus  string `json:"state_status,omitempty"`
-	Cleanup      string `json:"cleanup,omitempty"`
-	ErrorCode    string `json:"error_code,omitempty"`
+	Action             string `json:"action,omitempty"`
+	Method             string `json:"method,omitempty"`
+	CompletedSteps     string `json:"completed_steps,omitempty"`
+	VerificationReason string `json:"verification_reason,omitempty"`
+	Execution          string `json:"execution,omitempty"`
+	Verification       string `json:"verification,omitempty"`
+	StateStatus        string `json:"state_status,omitempty"`
+	Cleanup            string `json:"cleanup,omitempty"`
+	ErrorCode          string `json:"error_code,omitempty"`
 }
 
 type HeldStatus string
@@ -824,6 +827,9 @@ func validSafeActionMetadata(value SafeActionMetadata) bool {
 	if value == (SafeActionMetadata{}) {
 		return true
 	}
+	if !validRecordedMethod(value.Method) || !validRecordedSteps(value.CompletedSteps) || !validRecordedVerificationReason(value.VerificationReason) {
+		return false
+	}
 	switch value.Action {
 	case "", "read_value", "replace", "insert", "press", "pick", "focus", "scroll":
 	default:
@@ -884,4 +890,36 @@ func BindingCommitment(key, opaqueBinding []byte) ([32]byte, error) {
 	var result [32]byte
 	copy(result[:], mac.Sum(nil))
 	return result, nil
+}
+
+func validRecordedMethod(v string) bool {
+	switch v {
+	case "", "ax_press", "ax_pick", "ax_focus", "ax_set_value", "ax_scroll", "ax_focus_window", "cg_click", "cg_unicode", "cg_key", "cg_scroll", "cg_drag":
+		return true
+	}
+	return false
+}
+func validRecordedSteps(v string) bool {
+	if v == "" {
+		return true
+	}
+	parts := strings.Split(v, ",")
+	if len(parts) > 128 {
+		return false
+	}
+	for _, p := range parts {
+		switch p {
+		case "focus", "press", "pick", "set_value", "unicode", "key_down", "key_up", "mouse_down", "mouse_up", "mouse_move", "scroll", "cleanup":
+		default:
+			return false
+		}
+	}
+	return true
+}
+func validRecordedVerificationReason(v string) bool {
+	switch v {
+	case "", "postcondition_met", "postcondition_failed", "state_changed", "target_missing", "state_unavailable", "verification_unavailable":
+		return true
+	}
+	return false
 }
