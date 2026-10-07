@@ -587,6 +587,7 @@ final class WireTests: XCTestCase {
 }
 
 @MainActor private final class FakeNativeInputPoster: NativeInputPoster, NativeEventSink {
+    var layoutIdentifier: String? = "com.apple.keylayout.US"
     var values: [String] = []
     var events: [String] = []
     var failAfterDown = false
