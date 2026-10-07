@@ -228,5 +228,3 @@ func safeVerificationReason(reason string) string {
 		return ""
 	}
 }
-
-func invalidResultError() error { return coreError("backend_unavailable") }

@@ -41,7 +41,7 @@ func TestValidateActionSourcePhaseOperations(t *testing.T) {
 func TestApprovalBindingIsExactAndExpires(t *testing.T) {
 	now := time.Now().UTC()
 	request := ApprovalRequest{SessionID: "session", Action: Action{ID: "action", Kind: ActionPress}, Process: testProcess(), ObservedAt: now.Add(-time.Second), PolicyVersion: 1, ExpiresAt: now.Add(time.Minute)}
-	approval := Approval{SessionID: request.SessionID, Action: request.Action, Process: request.Process, ObservedAt: request.ObservedAt, PolicyVersion: request.PolicyVersion, ExpiresAt: request.ExpiresAt}
+	approval := Approval(request)
 	if err := validateApprovalBinding(request, approval, now); err != nil {
 		t.Fatalf("valid approval rejected: %v", err)
 	}

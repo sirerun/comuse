@@ -129,7 +129,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		s.mu.Unlock()
 		result := notApplied(action.ID)
 		if err := finishLease(lease, ticket, action, result, "rate_limited"); err != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
+			return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
 		}
 		if err := s.closeActionLease(lease); err != nil {
 			return result, coreError("backend_unavailable")
@@ -158,7 +158,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		approvalCode := approvalErrorCode(approvalErr)
 		result := notApplied(action.ID)
 		if err := finishLease(lease, ticket, action, result, approvalCode); err != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
+			return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
 		}
 		if err := s.closeActionLease(lease); err != nil {
 			return result, coreError("backend_unavailable")
@@ -176,7 +176,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 			code = "budget_exceeded"
 		}
 		if finishErr := finishLease(lease, ticket, action, result, code); finishErr != nil {
-			return s.quarantineLease(lease, action.ID, "journal_persistence_failed", finishErr)
+			return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
 		}
 		if closeErr := s.closeActionLease(lease); closeErr != nil {
 			return result, coreError("backend_unavailable")
@@ -204,7 +204,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		return s.persistUnknownBeforeTerminal(lease, ticket, action, result, "native_outcome_unknown")
 	}
 	if err := finishLease(lease, ticket, action, result, ""); err != nil {
-		return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
 	}
 	if err := s.closeActionLease(lease); err != nil {
 		return unknownResult(action.ID), coreError("backend_unavailable")
@@ -215,7 +215,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 func (s *Session) finishPermissionDeniedAction(lease *writer.Lease, ticket *writer.Ticket, action Action) (ActionResult, error) {
 	result := notApplied(action.ID)
 	if err := finishLease(lease, ticket, action, result, "permission_denied"); err != nil {
-		return s.quarantineLease(lease, action.ID, "journal_persistence_failed", err)
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
 	}
 	if err := s.closeActionLease(lease); err != nil {
 		return result, coreError("backend_unavailable")
@@ -285,24 +285,12 @@ func (s *Session) retainQuarantinedLease(lease *writer.Lease) {
 	s.mu.Unlock()
 }
 
-func (s *Session) quarantineLease(lease *writer.Lease, actionID, reason string, cause error) (ActionResult, error) {
-	if err := lease.Quarantine(reason); err != nil {
-		cause = errors.Join(cause, err)
-	}
+func (s *Session) quarantineLease(lease *writer.Lease, actionID, reason string) (ActionResult, error) {
+	_ = lease.Quarantine(reason)
 	s.mu.Lock()
 	s.quarantined = append(s.quarantined, lease)
 	s.mu.Unlock()
 	return unknownResult(actionID), coreError("unknown_outcome")
-}
-
-func (s *Session) quarantineLeaseResult(lease *writer.Lease, actionID string, result ActionResult, reason string, cause error) (ActionResult, error) {
-	if err := lease.Quarantine(reason); err != nil {
-		cause = errors.Join(cause, err)
-	}
-	s.mu.Lock()
-	s.quarantined = append(s.quarantined, lease)
-	s.mu.Unlock()
-	return result, coreError("unknown_outcome")
 }
 
 func finishLease(lease *writer.Lease, ticket *writer.Ticket, action Action, result ActionResult, code string) error {
@@ -381,11 +369,4 @@ func replayResult(actionID string, prior writer.PriorOutcome) ActionResult {
 		return unknownResult(actionID)
 	}
 	return result
-}
-
-func validPublicStateStatus(status StateStatus) StateStatus {
-	if status == StateAvailable || status == StateUnavailable {
-		return status
-	}
-	return StateUnavailable
 }
