@@ -201,7 +201,7 @@ func TestDesktopIntentRecoveryRejectsInvalidMarkersBeforeVerifier(t *testing.T) 
 }
 
 func TestDesktopJournalBindingUsesExactPrivateRootAndKey(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "journal")
+	root := filepath.Join(privateJournalParent(t), "journal")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestDesktopJournalBindingUsesExactPrivateRootAndKey(t *testing.T) {
 	if first == second {
 		t.Fatal("different journal keys produced the same binding")
 	}
-	otherRoot := filepath.Join(t.TempDir(), "journal")
+	otherRoot := filepath.Join(privateJournalParent(t), "journal")
 	if err := os.Mkdir(otherRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func bytesOf(value byte, count int) []byte {
 }
 
 func TestDesktopJournalBindingRejectsReplaceableAncestor(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), "replaceable")
+	parent := filepath.Join(privateJournalParent(t), "replaceable")
 	root := filepath.Join(parent, "journal")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
@@ -271,4 +271,13 @@ func TestDesktopJournalBindingRejectsReplaceableAncestor(t *testing.T) {
 	if _, err := DesktopJournalBinding(root, bytes.Repeat([]byte{7}, 32)); err == nil {
 		t.Fatal("accepted replaceable ancestor")
 	}
+}
+
+func privateJournalParent(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return parent
 }
