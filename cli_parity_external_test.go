@@ -359,3 +359,55 @@ func TestCLIQualifiedSemanticDispatchAndReplay(t *testing.T) {
 		}
 	}
 }
+
+type cliDeveloperFixtureBackend struct{ *parityMCPActionBackend }
+
+func (*cliDeveloperFixtureBackend) Doctor(context.Context) (backend.Doctor, error) {
+	return backend.Doctor{Capabilities: backend.Capabilities{Accessibility: true, Input: true, QualifiedInput: true, ActionKinds: []string{backend.ActionClick, backend.ActionTypeText, backend.ActionPressKey, backend.ActionCoordinateScroll, backend.ActionDrag, backend.ActionFocusWindow}}, Permissions: map[string]string{"accessibility": "granted", "input": "granted"}}, nil
+}
+func TestCLIDeveloperRoutesUseHostScopeAndReplay(t *testing.T) {
+	b := &cliDeveloperFixtureBackend{newParityMCPActionBackend()}
+	s, err := comuse.NewSyntheticSessionForTest(comuse.Config{Backend: b, Scope: comuse.Scope{Processes: []comuse.ProcessIdentity{b.process}, ExpiresAt: time.Now().Add(time.Hour)}, Budget: comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 16384, Timeout: time.Second}, ApprovalProvider: parityMCPApproval{}, WriterDirectory: filepath.Join(t.TempDir(), "journal"), WriterKey: bytes.Repeat([]byte{0x74}, 32), MaxActions: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	cases := []struct {
+		command string
+		params  string
+	}{
+		{"click", `"point":{"x":1,"y":2},"button":"left","count":1,"hold_ms":0`},
+		{"type-text", `"text":"héllo 🧭","delay_ms":0`},
+		{"press-key", `"keys":["ctrl","a"],"hold_ms":0`},
+		{"scroll", `"point":{"x":1,"y":2},"dx":0,"dy":1`},
+		{"drag", `"start":{"x":1,"y":2},"end":{"x":3,"y":4},"steps":2,"duration_ms":1`},
+		{"focus-window", ""},
+	}
+	for i, c := range cases {
+		raw := `{"action_id":"cli-developer-` + c.command + `","window_ref":"window-1"`
+		if c.params != "" {
+			raw += "," + c.params
+		}
+		raw += "}"
+		for repeat := 0; repeat < 2; repeat++ {
+			var out, diag bytes.Buffer
+			if code := cli.Run(context.Background(), s, []string{c.command}, strings.NewReader(raw), &out, &diag); code != 0 {
+				t.Fatalf("%s exit%d: %s", c.command, code, out.String())
+			}
+			var env comuse.ResultEnvelope
+			if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+				t.Fatal(err)
+			}
+			if !env.OK || env.Execution != "applied" || env.Usage.Actions != uint64(1-repeat) {
+				t.Fatalf("wrong admission/replay: %s", out.String())
+			}
+			if diag.Len() != 0 || len(b.executionsCopy()) != i+1 {
+				t.Fatal("duplicate dispatch or polluted protocol")
+			}
+		}
+	}
+}

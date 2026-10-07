@@ -180,6 +180,18 @@ func operationFor(command string) (comuse.Operation, bool) {
 		return comuse.OperationWriteElement, true
 	case "scroll-element":
 		return comuse.OperationScrollElement, true
+	case "click":
+		return comuse.OperationClick, true
+	case "type-text":
+		return comuse.OperationTypeText, true
+	case "press-key":
+		return comuse.OperationPressKey, true
+	case "scroll":
+		return comuse.OperationScroll, true
+	case "drag":
+		return comuse.OperationDrag, true
+	case "focus-window":
+		return comuse.OperationFocusWindow, true
 	case "serve":
 		return "serve", true
 	default:
