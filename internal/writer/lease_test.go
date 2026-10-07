@@ -559,3 +559,15 @@ func TestLookupDoesNotAdmitAndExpiresTombstone(t *testing.T) {
 		t.Fatal("tombstone binding mismatch accepted")
 	}
 }
+
+func TestSafeMetadataAcceptsClosedDeveloperKinds(t *testing.T) {
+	for _, kind := range []string{"click", "type_text", "press_key", "coordinate_scroll", "drag", "focus_window"} {
+		metadata := SafeActionMetadata{Action: kind, Execution: "not_applied", Verification: "unavailable", StateStatus: "unavailable", Cleanup: "released"}
+		if !validSafeActionMetadata(metadata) {
+			t.Fatalf("refused closed developer kind %s", kind)
+		}
+	}
+	if validSafeActionMetadata(SafeActionMetadata{Action: "caller-defined", Execution: "not_applied", Verification: "unavailable", StateStatus: "unavailable", Cleanup: "released"}) {
+		t.Fatal("accepted arbitrary kind")
+	}
+}
