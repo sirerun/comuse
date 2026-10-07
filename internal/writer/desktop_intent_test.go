@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -275,7 +276,22 @@ func TestDesktopJournalBindingRejectsReplaceableAncestor(t *testing.T) {
 
 func privateJournalParent(t *testing.T) string {
 	t.Helper()
-	parent := t.TempDir()
+	base := os.Getenv("COMUSE_PRIVATE_TEST_TMP")
+	if base == "" {
+		if runtime.GOOS == "darwin" {
+			t.Skip("protected externally backed fixture root required")
+		}
+		base = "/tmp"
+	}
+	parent, err := os.MkdirTemp(base, "comuse-private-journal-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(parent); err != nil {
+			t.Errorf("remove owned journal fixture: %v", err)
+		}
+	})
 	if err := os.Chmod(parent, 0700); err != nil {
 		t.Fatal(err)
 	}
