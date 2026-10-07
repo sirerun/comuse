@@ -1,6 +1,7 @@
 package darwin
 
 import (
+	"math"
 	"testing"
 
 	"github.com/sirerun/comuse/internal/backend"
@@ -28,6 +29,65 @@ func TestDecodeNativeActionResultMapsOnlyExactMethodsAndSteps(t *testing.T) {
 			result.CompletedSteps[0] = "mutated"
 			if wire.CompletedSteps[0] != test.step {
 				t.Fatalf("result retained native backing slice: %#v", wire.CompletedSteps)
+			}
+		})
+	}
+}
+
+func TestNativeInventoryValidationAndMethodMapping(t *testing.T) {
+	cases := []struct {
+		name   string
+		action backend.Action
+		method string
+	}{
+		{"semantic_click", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionClick}, "ax_press"},
+		{"pick", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionPick}, "ax_pick"},
+		{"focus", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionFocus}, "ax_focus"},
+		{"semantic_scroll", backend.Action{ID: "a", WindowRef: "w", ElementRef: "e", StateID: "s", Kind: backend.ActionScroll, Direction: "down", Amount: "line"}, "ax_scroll"},
+		{"developer_click", backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionClick, X: 1, Y: 1, Button: "left", Count: 1}, "cg_click"},
+		{"type_text", backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionTypeText, Text: "hello"}, "cg_unicode"},
+		{"press_key", backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionPressKey, Keys: "ctrl a"}, "cg_key"},
+		{"coordinate_scroll", backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionCoordinateScroll, X: 1, Y: 2, DX: 1}, "cg_scroll"},
+		{"drag", backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionDrag, X: 1, Y: 2, EndX: 3, EndY: 4, Steps: 2, DurationMS: 1}, "cg_drag"},
+		{"focus_window", backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionFocusWindow}, "ax_focus_window"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !validateNativeAction(tc.action) {
+				t.Fatal("valid frozen action rejected")
+			}
+			expected := expectedNativeActionResult(tc.action)
+			if expected[0] != tc.method {
+				t.Fatalf("method = %q, want %q", expected[0], tc.method)
+			}
+			wire := nativeActionResult{ActionID: tc.action.ID, Execution: backend.ExecutionApplied,
+				Verification: backend.Verification{Status: backend.VerificationUnavailable}, StateStatus: backend.StateUnavailable,
+				Cleanup: backend.CleanupComplete, Method: expected[0], CompletedSteps: []string{expected[1]}}
+			if _, err := decodeActionResult(wire, tc.action); err != nil {
+				t.Fatalf("decode method result: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeInventoryRejectsOutOfContractActions(t *testing.T) {
+	base := backend.Action{ID: "a", WindowRef: "w", Kind: backend.ActionPressKey, Keys: "ctrl a"}
+	cases := []struct {
+		name   string
+		mutate func(*backend.Action)
+	}{
+		{"duplicate_key", func(a *backend.Action) { a.Keys = "ctrl ctrl a" }},
+		{"two_non_modifiers", func(a *backend.Action) { a.Keys = "a b" }},
+		{"unknown_key", func(a *backend.Action) { a.Keys = "ctrl fn" }},
+		{"nan_point", func(a *backend.Action) { a.Kind = backend.ActionClick; a.Keys = ""; a.X = math.NaN() }},
+		{"semantic_missing_state", func(a *backend.Action) { a.Kind = backend.ActionPick; a.ElementRef = "e" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			action := base
+			tc.mutate(&action)
+			if validateNativeAction(action) {
+				t.Fatal("invalid action accepted")
 			}
 		})
 	}

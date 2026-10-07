@@ -36,6 +36,8 @@ private struct TraversalNode {
     var label: String?
     var value: String?
     var enabled: Bool?
+    var checked: Bool?
+    var selected: Bool?
     var actions: [String]
     var classification: String
 
@@ -48,6 +50,8 @@ private struct TraversalNode {
         if let label { result["label"] = label }
         if let value { result["value"] = value }
         if let enabled { result["enabled"] = enabled }
+        if let checked { result["checked"] = checked }
+        if let selected { result["selected"] = selected }
         return result
     }
 }
@@ -177,9 +181,13 @@ extension NativeRuntime {
                         }
                     }
                     let enabled = boolAttribute(element, kAXEnabledAttribute)
+                    let checked = role == "AXCheckBox" || role == "AXRadioButton"
+                        ? boolAttribute(element, kAXValueAttribute) : nil
+                    let selected = boolAttribute(element, "AXSelected")
                     let actions = advertisedActions(element, role: role)
                     let node = TraversalNode(ref: ref, parentRef: parentRef, order: order, role: role,
                                              label: label, value: value, enabled: enabled,
+                                             checked: checked, selected: selected,
                                              actions: actions, classification: classification)
                     let nodeBytes = try JSONSerialization.data(withJSONObject: node.json, options: [.fragmentsAllowed, .sortedKeys]).count
                     if totalOutputBytes + nodeBytes > budget.maxBytes {
@@ -292,7 +300,7 @@ extension NativeRuntime {
         guard nativeActionDispatchEnabled else { throw ProbeFailure(code: "unsupported") }
         let deadline = ProcessInfo.processInfo.systemUptime + 10
         return try NativeActionExecutor(access: AXActionAccess(runtime: self, requestID: requestID, deadline: deadline),
-                                        poster: QuartzUnicodePoster())
+                                        poster: QuartzInputPoster())
             .execute(action, requestID: requestID)
     }
 }
@@ -313,34 +321,46 @@ private struct AXActionAccess: NativeActionAccess {
 
     func revalidate(_ action: NativeAction) throws -> NativeActionTarget {
         try check(requestID: requestID, deadline: deadline)
-        let prior = try runtime.validateSnapshot(action.stateID, windowRef: action.windowRef,
-                                                 requestID: requestID, budget: nil)
-        guard prior.complete, prior.process == (try runtime.resolve(action.windowRef, kind: .window).process),
-              prior.refs.contains(action.elementRef) else { throw ProbeFailure(code: "state_expired") }
         let window = try runtime.resolve(action.windowRef, kind: .window)
-        let element = try runtime.resolve(action.elementRef, kind: .element, windowRef: action.windowRef)
         let process = try runtime.matchingProcess(window.process)
-        guard process == element.process, process == prior.process else { throw ProbeFailure(code: "element_stale") }
+        guard process == window.process else { throw ProbeFailure(code: "element_stale") }
+        let semantic = !action.elementRef.isEmpty
+        let element: NativeReference
+        if semantic {
+            let snapshot = try runtime.validateSnapshot(action.stateID, windowRef: action.windowRef,
+                                                        requestID: requestID, budget: nil)
+            guard snapshot.complete, snapshot.process == process, snapshot.refs.contains(action.elementRef) else {
+                throw ProbeFailure(code: "state_expired")
+            }
+            element = try runtime.resolve(action.elementRef, kind: .element, windowRef: action.windowRef)
+            guard element.process == process else { throw ProbeFailure(code: "element_stale") }
+        } else {
+            element = window
+        }
         let role = stringAttribute(element.element, kAXRoleAttribute) ?? ""
         let subrole = stringAttribute(element.element, kAXSubroleAttribute)
         let classification = classify(role: role, subrole: subrole)
-        guard classification == "normal", role == "AXButton" || role == "AXTextField" else {
+        guard classification == "normal" else {
             throw ProbeFailure(code: classification == "secure" ? "policy_refused" : "unsupported")
         }
         let focusedWindow = copyAttribute(AXUIElementCreateApplication(process.pid), kAXFocusedWindowAttribute as String)
-        guard let focusedWindow, CFEqual(focusedWindow, window.element) else { throw ProbeFailure(code: "state_expired") }
+        if action.kind != "focus_window" {
+            guard let focusedWindow, CFEqual(focusedWindow, window.element) else { throw ProbeFailure(code: "state_expired") }
+        }
         return NativeActionTarget(actionID: action.id, windowRef: action.windowRef,
                                   elementRef: action.elementRef, stateID: action.stateID,
                                   process: process, role: role, classification: classification,
                                   enabled: boolAttribute(element.element, kAXEnabledAttribute),
                                   focused: boolAttribute(element.element, kAXFocusedAttribute) == true,
-                                  windowFocused: true)
+                                  windowFocused: focusedWindow.map { CFEqual($0, window.element) } ?? false)
     }
 
     func supports(_ kind: String, target: NativeActionTarget) throws -> Bool {
         guard target.classification == "normal" else { return false }
-        let ref = target.elementRef
-        let entry = try runtime.resolve(ref, kind: .element, windowRef: target.windowRef)
+        if target.elementRef.isEmpty && kind == "click" { return false }
+        let entry = target.elementRef.isEmpty
+            ? try runtime.resolve(target.windowRef, kind: .window)
+            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
         switch kind {
         case "press":
             var names: CFArray?
@@ -354,12 +374,42 @@ private struct AXActionAccess: NativeActionAccess {
             guard target.role == "AXTextField" else { return false }
             guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
             return CGEventSource(stateID: .hidSystemState) != nil
+        case "click":
+            if target.role == "AXButton" {
+                var names: CFArray?
+                return AXUIElementCopyActionNames(entry.element, &names) == .success &&
+                    (names as? [String])?.contains(kAXPressAction as String) == true
+            }
+            return false
+        case "pick", "focus":
+            var names: CFArray?
+            guard AXUIElementCopyActionNames(entry.element, &names) == .success,
+                  let actions = names as? [String] else { return false }
+            let nativeName = kind == "pick" ? "AXPick" : "AXFocus"
+            return actions.contains(nativeName)
+        case "scroll":
+            // The frozen semantic operation carries direction and amount, but
+            // AX has no parameterized action call here. Do not issue a generic
+            // AXScroll action that would ignore those arguments.
+            return false
+        case "focus_window":
+            var settable = DarwinBoolean(false)
+            return AXUIElementIsAttributeSettable(entry.element, kAXMainAttribute as CFString, &settable) == .success && settable.boolValue
+        case "type_text", "press_key":
+            guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
+            return CGEventSource(stateID: .hidSystemState) != nil
+        case "coordinate_scroll", "drag":
+            // Coordinate hit testing and primary-display logical conversion are
+            // unavailable until native geometry has been independently qualified.
+            return false
         default: return false
         }
     }
 
     func selection(target: NativeActionTarget) throws -> NativeTextSelection {
-        let entry = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
+        let entry = target.elementRef.isEmpty
+            ? try runtime.resolve(target.windowRef, kind: .window)
+            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
         guard let current = allowedValue(entry.element, classification: target.classification, role: target.role),
               !current.truncated,
               let rawRange = copyAttribute(entry.element, kAXSelectedTextRangeAttribute as String) else {
@@ -376,21 +426,28 @@ private struct AXActionAccess: NativeActionAccess {
     }
 
     func dispatch(_ action: NativeAction, target: NativeActionTarget, method: String,
-                  poster: NativeUnicodePoster) throws -> NativeActionDispatch {
+                  poster: NativeInputPoster) throws -> NativeActionDispatch {
         try check(requestID: requestID, deadline: deadline)
         guard try revalidate(action) == target else { throw ProbeFailure(code: "state_expired") }
         try check(requestID: requestID, deadline: deadline)
-        let entry = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
+        let entry = target.elementRef.isEmpty
+            ? try runtime.resolve(target.windowRef, kind: .window)
+            : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
         guard try runtime.matchingProcess(target.process) == target.process,
               target.classification == "normal" else { throw ProbeFailure(code: "element_stale") }
         let error: AXError
         switch method {
         case "ax_press": error = AXUIElementPerformAction(entry.element, kAXPressAction as CFString)
         case "ax_set_value": error = AXUIElementSetAttributeValue(entry.element, kAXValueAttribute as CFString, action.text as CFString)
-        case "cg_unicode":
+        case "ax_pick": error = AXUIElementPerformAction(entry.element, "AXPick" as CFString)
+        case "ax_focus": error = AXUIElementSetAttributeValue(entry.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        case "ax_focus_window": error = AXUIElementSetAttributeValue(entry.element, kAXMainAttribute as CFString, kCFBooleanTrue)
+        case "ax_scroll": error = AXUIElementPerformAction(entry.element, "AXScroll" as CFString)
+        case "cg_unicode" where action.kind == "insert":
             _ = try selection(target: target) // Recheck immediately before the only event dispatch.
-            try poster.post(action.text)
-            return NativeActionDispatch(method: method, completedSteps: ["unicode"], execution: "applied")
+            return try poster.post(action, target: target)
+        case "cg_unicode", "cg_key", "cg_click", "cg_scroll", "cg_drag":
+            return try poster.post(action, target: target)
         default: throw ProbeFailure(code: "unsupported")
         }
         guard error == .success else {
@@ -398,7 +455,9 @@ private struct AXActionAccess: NativeActionAccess {
             // boundary. Never try another method or report a clean failure.
             throw ProbeFailure(code: "unknown_outcome")
         }
-        return NativeActionDispatch(method: method, completedSteps: [action.kind == "press" ? "press" : "set_value"], execution: "applied")
+        let step = nativeActionRoute(action)?.step ?? ""
+        guard !step.isEmpty else { throw ProbeFailure(code: "unsupported") }
+        return NativeActionDispatch(method: method, completedSteps: [step], execution: "applied")
     }
 }
 

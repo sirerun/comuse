@@ -3,6 +3,60 @@ import XCTest
 @testable import ComuseMacOS
 
 final class WireTests: XCTestCase {
+    func testRemainingNativeInventoryUsesSyntheticAccessAndPosterRoutes() async throws {
+        try await MainActor.run {
+            let payloads = [
+                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"click"}"#,
+                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"pick"}"#,
+                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"focus"}"#,
+                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"scroll","direction":"down","amount":"line"}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"click","x":10,"y":20,"button":"left","count":1,"hold_ms":0}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"type_text","text":"hello","delay_ms":0}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"press_key","keys":"ctrl a","hold_ms":0}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"coordinate_scroll","x":10,"y":20,"dx":0,"dy":1}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"drag","x":10,"y":20,"end_x":30,"end_y":40,"steps":2,"duration_ms":1}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"focus_window"}"#
+            ]
+            for json in payloads {
+                let action = try Self.decodeAction(json: json)
+                XCTAssertTrue(validNativeAction(action), "invalid route \(action.kind)")
+                let access = FakeNativeActionAccess()
+                let poster = FakeNativeInputPoster()
+                let result = try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)
+                XCTAssertEqual(result["method"] as? String, nativeTestMethod(action))
+                XCTAssertEqual(result["completed_steps"] as? [String], [nativeTestStep(action)])
+                XCTAssertEqual(result["cleanup"] as? String, "complete")
+                if nativeTestMethod(action).hasPrefix("cg_") {
+                    XCTAssertEqual(poster.events, ["\(action.kind):down", "\(action.kind):up"])
+                }
+            }
+        }
+    }
+
+    func testSyntheticPosterReleasesEveryHeldRouteAfterPartialDispatch() async throws {
+        try await MainActor.run {
+            let payloads = [
+                #"{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"insert","text":"x"}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"type_text","text":"x"}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"click","x":10,"y":20,"button":"left","count":1}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"press_key","keys":"ctrl a"}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"coordinate_scroll","x":10,"y":20,"dy":1}"#,
+                #"{"id":"a1","window_ref":"w1","kind":"drag","x":10,"y":20,"end_x":30,"end_y":40,"steps":2,"duration_ms":1}"#
+            ]
+            for json in payloads {
+                let action = try Self.decodeAction(json: json)
+                let access = FakeNativeActionAccess()
+                let poster = FakeNativeInputPoster()
+                poster.failAfterDown = true
+                XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)) { error in
+                    XCTAssertEqual((error as? ProbeFailure)?.code, "unknown_outcome")
+                }
+                XCTAssertEqual(poster.events, ["\(action.kind):down", "\(action.kind):up"])
+                XCTAssertEqual(access.dispatchCount, 1)
+            }
+        }
+    }
+
     func testNativeActionExecutorUsesOneQualifiedMethodPerKind() async throws {
         try await MainActor.run {
             let cases: [(String, String, String, String)] = [
@@ -16,7 +70,7 @@ final class WireTests: XCTestCase {
                 access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
                                                    process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
                                                    role: "AXButton", classification: "normal", enabled: true, focused: true, windowFocused: true)
-                let poster = FakeNativeUnicodePoster()
+                let poster = FakeNativeInputPoster()
                 let result = try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)
                 XCTAssertEqual(access.dispatchCount, 1)
                 XCTAssertEqual(access.dispatchedMethod, method)
@@ -43,7 +97,7 @@ final class WireTests: XCTestCase {
             }
 
             let access = FakeNativeActionAccess()
-            let poster = FakeNativeUnicodePoster()
+            let poster = FakeNativeInputPoster()
             access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
                                                process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
                                                role: "AXButton", classification: "unknown", enabled: true, focused: true, windowFocused: true)
@@ -58,7 +112,7 @@ final class WireTests: XCTestCase {
         try await MainActor.run {
             let access = FakeNativeActionAccess()
             access.failure = ProbeFailure(code: "unknown_outcome")
-            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: FakeNativeUnicodePoster())
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: FakeNativeInputPoster())
                 .execute(try Self.decodeAction(kind: "press", text: ""), requestID: 0)) { error in
                 XCTAssertEqual((error as? ProbeFailure)?.code, "unknown_outcome")
             }
@@ -69,7 +123,7 @@ final class WireTests: XCTestCase {
     func testNativeActionExecutorRejectsStaleIdentityFocusAndUnreliableSelectionBeforeDispatch() async throws {
         try await MainActor.run {
             let action = try Self.decodeAction(kind: "insert", text: "x")
-            let poster = FakeNativeUnicodePoster()
+            let poster = FakeNativeInputPoster()
             let access = FakeNativeActionAccess()
 
             access.target = NativeActionTarget(actionID: "other", windowRef: "w1", elementRef: "e1", stateID: "s1",
@@ -124,6 +178,10 @@ final class WireTests: XCTestCase {
         let value: [String: Any] = ["id": "a1", "window_ref": "w1", "element_ref": "e1",
                                     "state_id": "s1", "kind": kind, "text": text]
         return try JSONDecoder().decode(NativeAction.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+
+    private static func decodeAction(json: String) throws -> NativeAction {
+        try JSONDecoder().decode(NativeAction.self, from: Data(json.utf8))
     }
 
     func testDecodeGoObserveRequest() throws {
@@ -238,21 +296,70 @@ final class WireTests: XCTestCase {
     var supportsActions = true
 
     func check(requestID: UInt64, deadline: TimeInterval) throws {}
-    func revalidate(_ action: NativeAction) throws -> NativeActionTarget { target }
+    func revalidate(_ action: NativeAction) throws -> NativeActionTarget {
+        target = NativeActionTarget(actionID: action.id, windowRef: action.windowRef, elementRef: action.elementRef,
+                                    stateID: action.stateID, process: target.process, role: target.role,
+                                    classification: target.classification, enabled: target.enabled,
+                                    focused: target.focused, windowFocused: target.windowFocused)
+        return target
+    }
     func supports(_ kind: String, target: NativeActionTarget) throws -> Bool { supportsActions }
     func selection(target: NativeActionTarget) throws -> NativeTextSelection { textSelection }
     func dispatch(_ action: NativeAction, target: NativeActionTarget, method: String,
-                  poster: NativeUnicodePoster) throws -> NativeActionDispatch {
+                  poster: NativeInputPoster) throws -> NativeActionDispatch {
         dispatchCount += 1
         dispatchedMethod = method
         if let failure { throw failure }
-        if method == "cg_unicode" { try poster.post(action.text) }
-        let step = ["ax_press": "press", "ax_set_value": "set_value", "cg_unicode": "unicode"][method] ?? ""
+        if method.hasPrefix("cg_") { return try poster.post(action, target: target) }
+        let step = ["ax_press": action.kind == "click" ? "click" : "press",
+                    "ax_set_value": "set_value", "ax_pick": "pick", "ax_focus": "focus",
+                    "ax_scroll": "scroll", "ax_focus_window": "focus_window"][method] ?? ""
         return NativeActionDispatch(method: method, completedSteps: [step], execution: "applied")
     }
 }
 
-@MainActor private final class FakeNativeUnicodePoster: NativeUnicodePoster {
+@MainActor private final class FakeNativeInputPoster: NativeInputPoster {
     var values: [String] = []
-    func post(_ text: String) throws { values.append(text) }
+    var events: [String] = []
+    var failAfterDown = false
+
+    func post(_ action: NativeAction, target: NativeActionTarget) throws -> NativeActionDispatch {
+        if action.kind == "insert" || action.kind == "type_text" { values.append(action.text) }
+        let route = action.kind
+        events.append("\(route):down")
+        defer { events.append("\(route):up") }
+        if failAfterDown { throw ProbeFailure(code: "unknown_outcome") }
+        return NativeActionDispatch(method: nativeTestMethod(action), completedSteps: [nativeTestStep(action)], execution: "applied")
+    }
+}
+
+private func nativeTestMethod(_ action: NativeAction) -> String {
+    switch action.kind {
+    case "insert", "type_text": return "cg_unicode"
+    case "click": return action.elementRef.isEmpty ? "cg_click" : "ax_press"
+    case "press_key": return "cg_key"
+    case "coordinate_scroll": return "cg_scroll"
+    case "drag": return "cg_drag"
+    case "pick": return "ax_pick"
+    case "focus": return "ax_focus"
+    case "scroll": return "ax_scroll"
+    case "focus_window": return "ax_focus_window"
+    case "replace": return "ax_set_value"
+    default: return "ax_press"
+    }
+}
+
+private func nativeTestStep(_ action: NativeAction) -> String {
+    switch action.kind {
+    case "insert", "type_text": return "unicode"
+    case "click": return "click"
+    case "press_key": return "key"
+    case "coordinate_scroll", "scroll": return "scroll"
+    case "drag": return "drag"
+    case "pick": return "pick"
+    case "focus": return "focus"
+    case "focus_window": return "focus_window"
+    case "replace": return "set_value"
+    default: return "press"
+    }
 }
