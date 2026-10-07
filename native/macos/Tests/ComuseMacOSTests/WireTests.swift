@@ -434,7 +434,7 @@ final class WireTests: XCTestCase {
     }
 }
 
-@MainActor private final class FakeNativeInputPoster: NativeInputPoster {
+@MainActor private final class FakeNativeInputPoster: NativeInputPoster, NativeEventSink {
     var values: [String] = []
     var events: [String] = []
     var failAfterDown = false
