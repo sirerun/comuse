@@ -38,6 +38,7 @@ private struct TraversalNode {
     var enabled: Bool?
     var checked: Bool?
     var selected: Bool?
+    var focused: Bool?
     var actions: [String]
     var classification: String
 
@@ -52,6 +53,7 @@ private struct TraversalNode {
         if let enabled { result["enabled"] = enabled }
         if let checked { result["checked"] = checked }
         if let selected { result["selected"] = selected }
+        if let focused { result["focused"] = focused }
         return result
     }
 }
@@ -184,10 +186,11 @@ extension NativeRuntime {
                     let checked = role == "AXCheckBox" || role == "AXRadioButton"
                         ? boolAttribute(element, kAXValueAttribute) : nil
                     let selected = boolAttribute(element, "AXSelected")
+                    let focused = boolAttribute(element, kAXFocusedAttribute)
                     let actions = advertisedActions(element, role: role)
                     let node = TraversalNode(ref: ref, parentRef: parentRef, order: order, role: role,
                                              label: label, value: value, enabled: enabled,
-                                             checked: checked, selected: selected,
+                                             checked: checked, selected: selected, focused: focused,
                                              actions: actions, classification: classification)
                     let nodeBytes = try JSONSerialization.data(withJSONObject: node.json, options: [.fragmentsAllowed, .sortedKeys]).count
                     if totalOutputBytes + nodeBytes > budget.maxBytes {
@@ -343,21 +346,37 @@ private struct AXActionAccess: NativeActionAccess {
         guard classification == "normal" else {
             throw ProbeFailure(code: classification == "secure" ? "policy_refused" : "unsupported")
         }
-        let focusedWindow = copyAttribute(AXUIElementCreateApplication(process.pid), kAXFocusedWindowAttribute as String)
+        let application = AXUIElementCreateApplication(process.pid)
+        let focusedWindow = copyAttribute(application, kAXFocusedWindowAttribute as String)
         if action.kind != "focus_window" {
             guard let focusedWindow, CFEqual(focusedWindow, window.element) else { throw ProbeFailure(code: "state_expired") }
         }
+        let focusedElement = copyAttribute(application, kAXFocusedUIElementAttribute as String) as? AXUIElement
+        var focusedRole: String?
+        var focusedClassification: String?
+        if let focusedElement {
+            let focusedWindowValue = copyAttribute(focusedElement, kAXWindowAttribute as String)
+            if let focusedWindowValue, CFEqual(focusedWindowValue, window.element) {
+                focusedRole = stringAttribute(focusedElement, kAXRoleAttribute)
+                focusedClassification = classify(role: focusedRole ?? "", subrole: stringAttribute(focusedElement, kAXSubroleAttribute))
+            }
+        }
+        let windowBounds = axBounds(window.element)
+        let displayID = CGMainDisplayID()
+        let displayBounds = CGDisplayBounds(displayID)
         return NativeActionTarget(actionID: action.id, windowRef: action.windowRef,
                                   elementRef: action.elementRef, stateID: action.stateID,
                                   process: process, role: role, classification: classification,
                                   enabled: boolAttribute(element.element, kAXEnabledAttribute),
                                   focused: boolAttribute(element.element, kAXFocusedAttribute) == true,
-                                  windowFocused: focusedWindow.map { CFEqual($0, window.element) } ?? false)
+                                  windowFocused: focusedWindow.map { CFEqual($0, window.element) } ?? false,
+                                  focusedRole: focusedRole, focusedClassification: focusedClassification,
+                                  windowBounds: windowBounds, elementBounds: axBounds(element.element),
+                                  displayBounds: displayBounds, displayID: displayID)
     }
 
-    func supports(_ kind: String, target: NativeActionTarget) throws -> Bool {
+    func supports(_ kind: String, target: NativeActionTarget, point: CGPoint?) throws -> Bool {
         guard target.classification == "normal" else { return false }
-        if target.elementRef.isEmpty && kind == "click" { return false }
         let entry = target.elementRef.isEmpty
             ? try runtime.resolve(target.windowRef, kind: .window)
             : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
@@ -371,37 +390,51 @@ private struct AXActionAccess: NativeActionAccess {
             return target.role == "AXTextField" &&
                 AXUIElementIsAttributeSettable(entry.element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
         case "insert":
-            guard target.role == "AXTextField" else { return false }
+            guard textRole(target.role), target.focused, target.focusedClassification == "normal" else { return false }
             guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
             return CGEventSource(stateID: .hidSystemState) != nil
-        case "click":
+        case "click" where point == nil:
             if target.role == "AXButton" {
                 var names: CFArray?
                 return AXUIElementCopyActionNames(entry.element, &names) == .success &&
                     (names as? [String])?.contains(kAXPressAction as String) == true
             }
             return false
-        case "pick", "focus":
+        case "pick":
             var names: CFArray?
             guard AXUIElementCopyActionNames(entry.element, &names) == .success,
                   let actions = names as? [String] else { return false }
-            let nativeName = kind == "pick" ? "AXPick" : "AXFocus"
-            return actions.contains(nativeName)
-        case "scroll":
-            // The frozen semantic operation carries direction and amount, but
-            // AX has no parameterized action call here. Do not issue a generic
-            // AXScroll action that would ignore those arguments.
-            return false
-        case "focus_window":
+            return actions.contains("AXPick")
+        case "focus":
             var settable = DarwinBoolean(false)
-            return AXUIElementIsAttributeSettable(entry.element, kAXMainAttribute as CFString, &settable) == .success && settable.boolValue
+            return AXUIElementIsAttributeSettable(entry.element, kAXFocusedAttribute as CFString, &settable) == .success && settable.boolValue
+        case "scroll":
+            guard ["AXScrollArea", "AXWebArea", "AXList", "AXTable", "AXOutline", "AXTextArea", "AXTextView"].contains(target.role) else {
+                return false
+            }
+            guard let bounds = target.elementBounds ?? target.windowBounds, bounds.isFinitePositive,
+                  CGPreflightPostEventAccess(), CGEventSource(stateID: .hidSystemState) != nil else { return false }
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            guard checkedPoint(Double(center.x), Double(center.y), target: target) != nil else { return false }
+            try validateCoordinateHit(center, target: target, runtime: runtime)
+            return true
+        case "focus_window":
+            var names: CFArray?
+            return AXUIElementCopyActionNames(entry.element, &names) == .success && (names as? [String])?.contains("AXRaise") == true
         case "type_text", "press_key":
+            if target.focusedClassification == "secure" { throw ProbeFailure(code: "policy_refused") }
+            guard target.focusedRole != nil, target.focusedClassification == "normal" else { return false }
+            if kind == "type_text", !textRole(target.focusedRole ?? "") { return false }
             guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
             return CGEventSource(stateID: .hidSystemState) != nil
         case "coordinate_scroll", "drag":
-            // Coordinate hit testing and primary-display logical conversion are
-            // unavailable until native geometry has been independently qualified.
-            return false
+            guard let point, checkedPoint(Double(point.x), Double(point.y), target: target) != nil else { return false }
+            try validateCoordinateHit(point, target: target, runtime: runtime)
+            return CGPreflightPostEventAccess() && CGEventSource(stateID: .hidSystemState) != nil
+        case "click" where point != nil:
+            guard let point, checkedPoint(Double(point.x), Double(point.y), target: target) != nil else { return false }
+            try validateCoordinateHit(point, target: target, runtime: runtime)
+            return CGPreflightPostEventAccess() && CGEventSource(stateID: .hidSystemState) != nil
         default: return false
         }
     }
@@ -430,6 +463,9 @@ private struct AXActionAccess: NativeActionAccess {
         try check(requestID: requestID, deadline: deadline)
         guard try revalidate(action) == target else { throw ProbeFailure(code: "state_expired") }
         try check(requestID: requestID, deadline: deadline)
+        let point = action.kind == "click" || action.kind == "coordinate_scroll" || action.kind == "drag"
+            ? CGPoint(x: action.x, y: action.y) : nil
+        guard try supports(action.kind, target: target, point: point) else { throw ProbeFailure(code: "unsupported") }
         let entry = target.elementRef.isEmpty
             ? try runtime.resolve(target.windowRef, kind: .window)
             : try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
@@ -441,13 +477,13 @@ private struct AXActionAccess: NativeActionAccess {
         case "ax_set_value": error = AXUIElementSetAttributeValue(entry.element, kAXValueAttribute as CFString, action.text as CFString)
         case "ax_pick": error = AXUIElementPerformAction(entry.element, "AXPick" as CFString)
         case "ax_focus": error = AXUIElementSetAttributeValue(entry.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        case "ax_focus_window": error = AXUIElementSetAttributeValue(entry.element, kAXMainAttribute as CFString, kCFBooleanTrue)
-        case "ax_scroll": error = AXUIElementPerformAction(entry.element, "AXScroll" as CFString)
+        case "ax_focus_window": error = AXUIElementPerformAction(entry.element, "AXRaise" as CFString)
+        case "ax_scroll": throw ProbeFailure(code: "unsupported")
         case "cg_unicode" where action.kind == "insert":
             _ = try selection(target: target) // Recheck immediately before the only event dispatch.
-            return try poster.post(action, target: target)
+            return poster.post(action, target: target) { point in try validateStep(action, target: target, point: point) }
         case "cg_unicode", "cg_key", "cg_click", "cg_scroll", "cg_drag":
-            return try poster.post(action, target: target)
+            return poster.post(action, target: target) { point in try validateStep(action, target: target, point: point) }
         default: throw ProbeFailure(code: "unsupported")
         }
         guard error == .success else {
@@ -459,13 +495,57 @@ private struct AXActionAccess: NativeActionAccess {
         guard !step.isEmpty else { throw ProbeFailure(code: "unsupported") }
         return NativeActionDispatch(method: method, completedSteps: [step], execution: "applied")
     }
+
+    private func validateStep(_ action: NativeAction, target: NativeActionTarget, point: CGPoint?) throws {
+        try check(requestID: requestID, deadline: deadline)
+        let current = try revalidate(action)
+        guard current == target else { throw ProbeFailure(code: "state_expired") }
+        guard try supports(action.kind, target: current, point: point) else { throw ProbeFailure(code: "policy_refused") }
+    }
+}
+
+private func textRole(_ role: String) -> Bool {
+    ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox"].contains(role)
+}
+
+private func axBounds(_ element: AXUIElement) -> CGRect? {
+    guard let position = copyAttribute(element, kAXPositionAttribute as String),
+          let size = copyAttribute(element, kAXSizeAttribute as String) else { return nil }
+    var point = CGPoint.zero
+    var dimensions = CGSize.zero
+    guard AXValueGetType((unsafeBitCast(position, to: AXValue.self))) == .cgPoint,
+          AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+          AXValueGetType(unsafeBitCast(size, to: AXValue.self)) == .cgSize,
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions) else { return nil }
+    let bounds = CGRect(origin: point, size: dimensions)
+    return bounds.isFinitePositive ? bounds : nil
+}
+
+private func validateCoordinateHit(_ point: CGPoint, target: NativeActionTarget, runtime: NativeRuntime) throws {
+    guard let window = try? runtime.resolve(target.windowRef, kind: .window) else {
+        throw ProbeFailure(code: "policy_refused")
+    }
+    let app = AXUIElementCreateApplication(target.process.pid)
+    guard let focusedWindow = copyAttribute(app, kAXFocusedWindowAttribute as String), CFEqual(focusedWindow, window.element) else {
+        throw ProbeFailure(code: "state_expired")
+    }
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success,
+          let hit else { throw ProbeFailure(code: "policy_refused") }
+    let role = stringAttribute(hit, kAXRoleAttribute) ?? ""
+    let classification = classify(role: role, subrole: stringAttribute(hit, kAXSubroleAttribute))
+    guard classification == "normal",
+          let hitWindow = copyAttribute(hit, kAXWindowAttribute as String), CFEqual(hitWindow, window.element) else {
+        throw ProbeFailure(code: "policy_refused")
+    }
 }
 
 private func classify(role: String, subrole: String?) -> String {
     if subrole == "AXSecureTextField" || role == "AXSecureTextField" { return "secure" }
     guard let subrole else { return "unknown" }
     let expected: [String: Set<String>] = [
-        "AXStaticText": ["AXStaticText"], "AXTextField": ["AXTextField"],
+        "AXStaticText": ["AXStaticText"], "AXTextField": ["AXTextField", "AXSearchField"],
+        "AXTextArea": ["AXTextArea", "AXTextView"], "AXTextView": ["AXTextView"], "AXSearchField": ["AXSearchField"],
         "AXButton": ["AXButton", "AXDisclosureTriangle", "AXPopUpButton"],
         "AXCheckBox": ["AXCheckBox"], "AXRadioButton": ["AXRadioButton"],
         "AXPopUpButton": ["AXPopUpButton"], "AXComboBox": ["AXComboBox"],
@@ -496,7 +576,8 @@ private func boolAttribute(_ element: AXUIElement, _ attribute: String) -> Bool?
 }
 
 private func allowedValue(_ element: AXUIElement, classification: String, role: String) -> BoundedText? {
-    guard classification == "normal", role == "AXTextField",
+    guard classification == "normal",
+          ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField"].contains(role),
           let value = copyAttribute(element, kAXValueAttribute as String) else { return nil }
     if let text = value as? String { return boundedUTF8Prefix(text, byteLimit: 8192) }
     if let text = value as? NSAttributedString { return boundedUTF8Prefix(text.string, byteLimit: 8192) }
