@@ -21,6 +21,12 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 	if err := (Request{Operation: OperationWait, Wait: &params}).Validate(); err != nil {
 		return result, err
 	}
+	callCtx, done, enterErr := s.enter(ctx)
+	if enterErr != nil {
+		return result, enterErr
+	}
+	defer done()
+	ctx = callCtx
 	if time.Duration(params.TimeoutMS)*time.Millisecond > s.budget.Timeout {
 		return result, coreError("budget_exceeded")
 	}
