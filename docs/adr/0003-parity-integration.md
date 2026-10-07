@@ -45,5 +45,15 @@ failure, and cancellation. Exact durable replay counts no new action or native
 read. Actual native execution advances action_sequence independently.
 Default native input stays disabled. Passing Go, Swift, and synthetic protocol
 fixtures proves source behavior, not real GUI acceptance or release readiness.
-Actual native display/focus context and remaining action inventory still need
-source implementation and controlled qualification.
+Native display/focus producer and the action inventory are implemented and
+pass controlled source fixtures. Live display/focus and action behavior still
+require separate controlled runtime qualification.
+
+## Inspected desktop context
+
+Trusted optional backend context carries only an opaque runtime display identity,
+a positive observed generation and scoped focused window or inspected no-focus
+null. Missing or unreadable facts remain unavailable. Display topology, primary
+display, bounds and scale changes rotate generation and purge private native
+references; common semantic scope also binds this authority. No request field
+grants it, no unlocked state is inferred, and default production input stays false.
