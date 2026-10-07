@@ -49,6 +49,7 @@ type Ledger struct {
 	images              uint64
 	retainedBytes       uint64
 	elapsedMS           uint64
+	modelUsage          *ModelUsage
 }
 
 // ObservationCounts contains attempted native observation counters.
@@ -79,6 +80,13 @@ type LedgerSnapshot struct {
 	RetainedBytes       uint64               `json:"retained_bytes"`
 	ElapsedMS           uint64               `json:"elapsed_ms"`
 	ModelUsage          *ModelUsage          `json:"model_usage"`
+}
+
+// MarshalJSON emits the ledger's compact canonical representation shared by
+// standalone library reads and the MCP ledger resource.
+func (snapshot LedgerSnapshot) MarshalJSON() ([]byte, error) {
+	type wire LedgerSnapshot
+	return canonicalJSON(wire(snapshot))
 }
 
 // Usage is the per-call counter delta plus current gauges and duration.
@@ -190,7 +198,28 @@ func (l *Ledger) Snapshot(session string) LedgerSnapshot {
 		SemanticResults: l.semantic, BaselineResets: l.baselineResets,
 		EncodedImageBytes: l.encodedImageBytes, SerializedTextBytes: l.serializedTextBytes,
 		Images: l.images, RetainedBytes: l.retainedBytes, ElapsedMS: l.elapsedMS,
+		ModelUsage: l.modelUsage.clone(),
 	}
+}
+
+// SetModelUsageSnapshot replaces the trusted cumulative provider-usage
+// snapshot. The caller supplies cumulative totals for each independently
+// attributed record; the ledger never aggregates reports across models.
+func (l *Ledger) SetModelUsageSnapshot(actual *ActualModelUsage, estimate *EstimateModelUsage) error {
+	if l == nil {
+		return ErrInvalidMetadata
+	}
+	usage, err := newModelUsage(actual, estimate)
+	if err != nil {
+		return err
+	}
+	if actual == nil && estimate == nil {
+		usage = nil
+	}
+	l.mu.Lock()
+	l.modelUsage = usage
+	l.mu.Unlock()
+	return nil
 }
 
 // ChargeLedgerSnapshot measures a standalone canonical Ledger representation

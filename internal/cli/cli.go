@@ -19,6 +19,9 @@ const maxRequestBytes = 32768
 // Run executes one command or a persistent serve session. The caller owns
 // trusted session construction and host configuration.
 func Run(ctx context.Context, session *comuse.Session, args []string, in io.Reader, out, diagnostics io.Writer) int {
+	if len(args) == 2 && args[0] == "state" && args[1] == "--ledger" {
+		return Dispatch(ctx, session, comuse.OperationLedger, []byte(`{}`), out)
+	}
 	if len(args) != 1 {
 		return writeRejection(out, "invalid_request")
 	}
