@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +16,14 @@ import (
 
 func newProtectedRecoveryJournal(t *testing.T) string {
 	t.Helper()
-	root, err := os.MkdirTemp("/tmp", "comuse-recovery-")
+	base := os.Getenv("COMUSE_PRIVATE_TEST_TMP")
+	if base == "" {
+		if runtime.GOOS == "darwin" {
+			t.Skip("protected externally backed fixture root required")
+		}
+		base = "/tmp"
+	}
+	root, err := os.MkdirTemp(base, "comuse-recovery-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,5 +294,23 @@ func TestReconcileDesktopPublicBoundaryRejectsUnsafeJournalInputs(t *testing.T) 
 	}
 	if err := ReconcileDesktop(context.Background(), root, key, nil); ErrorCode(err) != "invalid_request" {
 		t.Fatalf("nil verifier error code=%q err=%v", ErrorCode(err), err)
+	}
+}
+
+func TestRecoveryJournalInputRequiresExactBoundedHostKey(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []int{0, 31, 33, 8192} {
+		if validRecoveryJournalInput(root, make([]byte, size)) {
+			t.Fatalf("accepted key length%d", size)
+		}
+	}
+	if !validRecoveryJournalInput(root, make([]byte, 32)) {
+		t.Fatal("refused exact private host inputs")
+	}
+	if validRecoveryJournalInput(strings.Repeat("x", 4097), make([]byte, 32)) {
+		t.Fatal("accepted oversized journal path")
 	}
 }
