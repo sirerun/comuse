@@ -136,7 +136,7 @@
       },
       "observation": {
         "schema_version": 1,
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "scope_id": "scope-1",
         "window_ref": "window-1",
         "observed_at": "2026-10-07T00:00:00Z",
@@ -168,7 +168,7 @@
       },
       "result": {
         "window_ref": "window-1",
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "observed_at": "2026-10-07T00:00:00Z",
         "elements": [
           {
@@ -227,7 +227,7 @@
       },
       "observation": {
         "schema_version": 1,
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "scope_id": "scope-1",
         "window_ref": "window-1",
         "observed_at": "2026-10-07T00:00:00Z",
@@ -260,7 +260,7 @@
       },
       "result": {
         "window_ref": "window-1",
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "observed_at": "2026-10-07T00:00:00Z",
         "elements": [
           {
@@ -319,7 +319,7 @@
       },
       "observation": {
         "schema_version": 1,
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "scope_id": "scope-1",
         "window_ref": "window-1",
         "observed_at": "2026-10-07T00:00:00Z",
@@ -351,7 +351,7 @@
       },
       "result": {
         "window_ref": "window-1",
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "observed_at": "2026-10-07T00:00:00Z",
         "elements": [
           {
@@ -410,7 +410,7 @@
       },
       "observation": {
         "schema_version": 1,
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "scope_id": "scope-1",
         "window_ref": "window-1",
         "observed_at": "2026-10-07T00:00:00Z",
@@ -427,7 +427,7 @@
           "focused_element_ref": null
         },
         "kind": "unchanged",
-        "base_state_id": "state-1"
+        "base_state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44"
       },
       "result": null,
       "error": null,
@@ -472,7 +472,7 @@
       },
       "observation": {
         "schema_version": 1,
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "scope_id": "scope-1",
         "window_ref": "window-1",
         "observed_at": "2026-10-07T00:00:00Z",
@@ -489,7 +489,7 @@
           "focused_element_ref": null
         },
         "kind": "delta",
-        "base_state_id": "state-0",
+        "base_state_id": "a08890b6bca55357fd063483d1ced1c076b89f15c07fee163fdc5eb431314d34",
         "upsert": {
           "element-1": {
             "role": "button",
@@ -548,7 +548,7 @@
         "kind": "element_content",
         "window_ref": "window-1",
         "element_ref": "element-1",
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "observed_at": "2026-10-07T00:00:00Z",
         "text": "illustrative normal text",
         "truncated": false
@@ -557,7 +557,7 @@
         "kind": "element_content",
         "window_ref": "window-1",
         "element_ref": "element-1",
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "observed_at": "2026-10-07T00:00:00Z",
         "text": "illustrative normal text",
         "truncated": false
@@ -815,7 +815,7 @@
       },
       "observation": {
         "schema_version": 1,
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "scope_id": "scope-1",
         "window_ref": "window-1",
         "observed_at": "2026-10-07T00:00:00Z",
@@ -847,7 +847,7 @@
       },
       "result": {
         "window_ref": "window-1",
-        "state_id": "state-1",
+        "state_id": "f36b45ae818809ee24ae2489edabfe3cf2a12627b6929c07fc7a3b885d414d44",
         "observed_at": "2026-10-07T00:00:00Z",
         "elements": [
           {
