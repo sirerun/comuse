@@ -3,10 +3,7 @@ package semantic
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -320,53 +317,17 @@ func validateHistorySnapshot(s Snapshot) error {
 }
 
 func retainedCharge(s Snapshot) (uint64, bool) {
-	s = CloneSnapshot(s)
-	keys := make([]string, 0, len(s.Nodes))
-	for ref := range s.Nodes {
-		keys = append(keys, ref)
-	}
-	sort.Strings(keys)
-	// State identity excludes metadata and opaque reference spellings. Keep the
-	// canonical payload shape but replace all opaque identifiers with a fixed
-	// token before measuring its logical redacted JSON size.
-	canonical := struct {
-		SchemaVersion int             `json:"schema_version"`
-		ScopeID       string          `json:"scope_id"`
-		WindowRef     string          `json:"window_ref"`
-		Coverage      Coverage        `json:"coverage"`
-		Context       Context         `json:"context"`
-		Nodes         map[string]Node `json:"nodes"`
-	}{SchemaVersion, "r", "r", s.Coverage, Context{RootRefs: make([]string, len(s.Context.RootRefs))}, make(map[string]Node, len(keys))}
-	replacements := make(map[string]string, len(keys))
-	for i, ref := range keys {
-		replacements[ref] = "r" + strconv.Itoa(i)
-	}
-	for i := range canonical.Context.RootRefs {
-		canonical.Context.RootRefs[i] = replacements[s.Context.RootRefs[i]]
-	}
-	if s.Context.FocusedElementRef != nil {
-		canonical.Context.FocusedElementRef = stringPointer(replacements[*s.Context.FocusedElementRef])
-	}
-	for _, ref := range keys {
-		node := s.Nodes[ref]
-		if node.ParentRef != nil {
-			node.ParentRef = stringPointer(replacements[*node.ParentRef])
-		}
-		for i := range node.ChildRefs {
-			node.ChildRefs[i] = replacements[node.ChildRefs[i]]
-		}
-		canonical.Nodes[replacements[ref]] = node
-	}
-	encoded, err := json.Marshal(canonical)
+	// Charge the immutable public payload exactly; private reference metadata
+	// has a fixed charge and never includes native IDs or protected content.
+	encoded, err := canonicalSnapshot(CloneSnapshot(s))
 	if err != nil {
 		return 0, false
 	}
-	refs := len(s.Nodes)
-	if uint64(refs) > ^uint64(0)/BindingCharge {
+	refs := uint64(len(s.Nodes) + 2)
+	if refs > (^uint64(0)-uint64(len(encoded)))/BindingCharge {
 		return 0, false
 	}
-	charge := uint64(len(encoded)) + uint64(refs)*BindingCharge
-	return charge, charge >= uint64(len(encoded))
+	return uint64(len(encoded)) + refs*BindingCharge, true
 }
 
 func validOpaque(value string) bool {

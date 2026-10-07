@@ -171,7 +171,7 @@ func TestHistoryCountLimitEvictsOldestAcrossSession(t *testing.T) {
 	}
 }
 
-func TestHistoryBytesBoundAndReferenceSpellingDoesNotAffectCharge(t *testing.T) {
+func TestHistoryBytesBoundIncludesExactPublicReferencePayload(t *testing.T) {
 	now := time.Now().UTC()
 	left := historyFixture("5", now, 0, strings.Repeat("x", 128))
 	right := CloneSnapshot(left)
@@ -186,8 +186,8 @@ func TestHistoryBytesBoundAndReferenceSpellingDoesNotAffectCharge(t *testing.T) 
 		t.Fatal("left charge failed")
 	}
 	rightCharge, ok := retainedCharge(right)
-	if !ok || rightCharge != leftCharge {
-		t.Fatalf("reference spelling changed charge: %d vs %d", leftCharge, rightCharge)
+	if !ok || rightCharge <= leftCharge {
+		t.Fatalf("longer public payload was not charged: %d vs %d", leftCharge, rightCharge)
 	}
 	h := newTestHistory(t)
 	large := historyFixture("6", now, 0, strings.Repeat("L", MaxStateBytes/2))
