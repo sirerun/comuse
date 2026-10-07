@@ -29,10 +29,15 @@ func (s *Session) Doctor(ctx context.Context) (DoctorReport, error) {
 	if observed, _ := callCtx.Value(stateAccountingKey{}).(bool); observed {
 		s.account(callCtx, CounterObservationState, 1)
 	}
+	contextEpoch := s.contextEpochNow()
 	report, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
 		return DoctorReport{}, s.stableBackendError(callCtx, callErr)
 	}
+	if _, _, err = s.reconcileDesktopContextAt(report.DesktopContext, &contextEpoch); err != nil {
+		return DoctorReport{}, err
+	}
+	report.DesktopContext = cloneDesktopContext(report.DesktopContext)
 	// Reasons and permission values are implementation diagnostics. Retain only
 	// the closed capability booleans and known, stable permission statuses.
 	report.Capabilities.Reasons = nil
@@ -67,6 +72,7 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 	}
 	defer done()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	s.account(callCtx, CounterObservationState, 1)
 	windows, callErr := s.backend.Windows(callCtx, s.budget)
 	if callErr != nil {
@@ -95,6 +101,10 @@ func (s *Session) Windows(ctx context.Context) ([]Window, error) {
 		s.mu.Unlock()
 		return nil, coreError("permission_denied")
 	}
+	if s.contextEpoch != contextEpoch {
+		s.mu.Unlock()
+		return nil, coreError("state_expired")
+	}
 	s.windows = make(map[string]Window, len(filtered))
 	for _, window := range filtered {
 		s.windows[window.Ref] = window
@@ -114,6 +124,7 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	}
 	defer done()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	s.mu.Lock()
 	_, exists := s.windows[windowRef]
 	s.mu.Unlock()
@@ -125,6 +136,12 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	if callErr != nil {
 		return Observation{}, s.stableBackendError(callCtx, callErr)
 	}
+	if _, _, err := s.reconcileDesktopContextAt(native.DesktopContext, &contextEpoch); err != nil {
+		return Observation{}, err
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return Observation{}, coreError("state_expired")
+	}
 	projection, binding, normalizeErr := s.normalizeObservation(windowRef, native)
 	if normalizeErr != nil {
 		return Observation{}, normalizeErr
@@ -132,8 +149,13 @@ func (s *Session) Observe(ctx context.Context, windowRef string) (Observation, e
 	if exceedsJSONBudget(projection, s.budget.MaxBytes) {
 		return Observation{}, coreError("budget_exceeded")
 	}
-	if !s.rememberSnapshotAtEpoch(binding, epoch) {
-		return Observation{}, coreError("permission_denied")
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	if s.contextEpochNow() != contextEpoch {
+		return Observation{}, coreError("state_expired")
+	}
+	if !s.rememberSnapshotAtEpoch(binding, epoch, contextEpoch) {
+		return Observation{}, snapshotEpochError(s, epoch, contextEpoch)
 	}
 	return cloneObservation(projection), nil
 }
@@ -149,6 +171,7 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	}
 	defer done()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	prior, ok := s.findSnapshot(windowRef, stateID)
 	if !ok {
 		return ElementContent{}, coreError("state_expired")
@@ -164,23 +187,37 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 	if callErr != nil {
 		return ElementContent{}, s.stableBackendError(callCtx, callErr)
 	}
+	if _, _, contextErr := s.reconcileDesktopContextAt(current.DesktopContext, &contextEpoch); contextErr != nil {
+		return ElementContent{}, contextErr
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return ElementContent{}, coreError("state_expired")
+	}
 	projection, binding, normalizeErr := s.normalizeObservation(windowRef, current)
 	if normalizeErr != nil {
 		return ElementContent{}, normalizeErr
 	}
-	if !s.rememberSnapshotAtEpoch(binding, epoch) {
-		return ElementContent{}, coreError("permission_denied")
+	if !s.rememberSnapshotAtEpoch(binding, epoch, contextEpoch) {
+		return ElementContent{}, snapshotEpochError(s, epoch, contextEpoch)
 	}
 	if projection.StateID != stateID || !normalTarget(projection, elementRef) {
 		return ElementContent{}, coreError("element_stale")
 	}
 	s.account(callCtx, CounterObservationA11y, 1)
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	if s.contextEpochNow() != contextEpoch {
+		return ElementContent{}, coreError("state_expired")
+	}
 	content, callErr := s.backend.ReadElement(callCtx, windowRef, elementRef, binding.nativeState, s.budget)
 	if callErr != nil {
 		return ElementContent{}, s.stableBackendError(callCtx, callErr)
 	}
 	if s.currentPermissionEpoch() != epoch {
 		return ElementContent{}, coreError("permission_denied")
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return ElementContent{}, coreError("state_expired")
 	}
 	if content.WindowRef != windowRef || content.ElementRef != elementRef || content.StateID != binding.nativeState || !validText(content.Text, s.budget.MaxBytes) {
 		return ElementContent{}, coreError("backend_unavailable")
@@ -194,6 +231,18 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 		return ElementContent{}, coreError("budget_exceeded")
 	}
 	return content, nil
+}
+
+func snapshotEpochError(s *Session, permissionEpoch, contextEpoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.permissionEpoch != permissionEpoch {
+		return coreError("permission_denied")
+	}
+	if s.contextEpoch != contextEpoch {
+		return coreError("state_expired")
+	}
+	return coreError("backend_unavailable")
 }
 
 // Wait performs one fresh bounded observation within the requested timeout.
@@ -247,7 +296,8 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 	if !native.Coverage.Complete {
 		coverage.Reason = safeCoverageReason(native.Coverage.Reason)
 	}
-	public := Observation{WindowRef: windowRef, ObservedAt: s.now().UTC(), Elements: filtered, Coverage: coverage}
+	public := Observation{WindowRef: windowRef, ObservedAt: s.now().UTC(), Elements: filtered, Coverage: coverage,
+		DesktopContext: cloneDesktopContext(native.DesktopContext)}
 	full, projectionErr := buildFullObservation(s, public)
 	if projectionErr != nil {
 		return Observation{}, snapshotBinding{}, projectionErr
@@ -271,10 +321,10 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 	return public, snapshotBinding{public: public, nativeState: native.StateID, canonical: canonical, storedAt: now, storageSize: storageSize}, nil
 }
 
-func (s *Session) rememberSnapshotAtEpoch(binding snapshotBinding, epoch uint64) bool {
+func (s *Session) rememberSnapshotAtEpoch(binding snapshotBinding, epoch, contextEpoch uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.permissionEpoch != epoch {
+	if s.permissionEpoch != epoch || s.contextEpoch != contextEpoch {
 		return false
 	}
 	s.pruneSnapshotsLocked(s.now())
@@ -490,6 +540,7 @@ func cloneBool(value *bool) *bool {
 
 func cloneObservation(value Observation) Observation {
 	clone := value
+	clone.DesktopContext = cloneDesktopContext(value.DesktopContext)
 	clone.Elements = make([]Element, len(value.Elements))
 	for i, element := range value.Elements {
 		clone.Elements[i] = element

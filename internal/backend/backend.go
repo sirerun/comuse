@@ -2,8 +2,12 @@
 package backend
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"time"
 )
 
@@ -61,14 +65,124 @@ type Capabilities struct {
 	Reasons        []string `json:"reasons,omitempty"`
 }
 type Doctor struct {
-	Capabilities Capabilities      `json:"capabilities"`
-	Permissions  map[string]string `json:"permissions"`
+	Capabilities   Capabilities      `json:"capabilities"`
+	Permissions    map[string]string `json:"permissions"`
+	DesktopContext *DesktopContext   `json:"desktop_context,omitempty"`
 }
 type Window struct {
 	Ref     string          `json:"ref"`
 	Process ProcessIdentity `json:"process"`
 	Title   string          `json:"title"`
 }
+
+// DesktopContext is inspected native evidence. It is never request authority.
+// A non-nil value represents a complete inspection; FocusedWindow=nil means
+// inspection found no scoped focused window. The wire decoder requires all
+// three members so a missing focus field cannot be mistaken for an inspected
+// null result.
+type DesktopContext struct {
+	DisplayID         string  `json:"display_id"`
+	DisplayGeneration uint64  `json:"display_generation"`
+	FocusedWindow     *Window `json:"focused_window"`
+}
+
+func (c *DesktopContext) UnmarshalJSON(data []byte) error {
+	if c == nil {
+		return errors.New("nil desktop context")
+	}
+	var fields map[string]json.RawMessage
+	if err := uniqueJSONObjectMembers(data); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if len(fields) != 3 {
+		return errors.New("invalid desktop context fields")
+	}
+	for _, name := range []string{"display_id", "display_generation", "focused_window"} {
+		if _, ok := fields[name]; !ok {
+			return fmt.Errorf("missing desktop context field %q", name)
+		}
+	}
+	var decoded struct {
+		DisplayID         string  `json:"display_id"`
+		DisplayGeneration uint64  `json:"display_generation"`
+		FocusedWindow     *Window `json:"focused_window"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if !validContextOpaque(decoded.DisplayID) || decoded.DisplayGeneration == 0 || decoded.DisplayGeneration > 9007199254740991 {
+		return errors.New("invalid desktop context identity")
+	}
+	if decoded.FocusedWindow != nil && (!validContextOpaque(decoded.FocusedWindow.Ref) ||
+		decoded.FocusedWindow.Process.PID <= 0 || decoded.FocusedWindow.Process.BundleID == "" ||
+		decoded.FocusedWindow.Process.LaunchID == "" || len(decoded.FocusedWindow.Title) > 4096) {
+		return errors.New("invalid focused window evidence")
+	}
+	*c = DesktopContext{DisplayID: decoded.DisplayID, DisplayGeneration: decoded.DisplayGeneration, FocusedWindow: cloneWindowPointer(decoded.FocusedWindow)}
+	return nil
+}
+
+func uniqueJSONObjectMembers(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return errors.New("desktop context must be an object")
+	}
+	seen := make(map[string]struct{}, 3)
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return errors.New("invalid desktop context object")
+		}
+		name, ok := token.(string)
+		if !ok {
+			return errors.New("invalid desktop context key")
+		}
+		if _, exists := seen[name]; exists {
+			return errors.New("duplicate desktop context field")
+		}
+		seen[name] = struct{}{}
+		var value json.RawMessage
+		if err = decoder.Decode(&value); err != nil {
+			return errors.New("invalid desktop context value")
+		}
+	}
+	token, err = decoder.Token()
+	if err != nil || token != json.Delim('}') {
+		return errors.New("unterminated desktop context object")
+	}
+	var trailing any
+	if err = decoder.Decode(&trailing); err != io.EOF {
+		return errors.New("trailing desktop context data")
+	}
+	return nil
+}
+
+func validContextOpaque(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '!' || value[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneWindowPointer(window *Window) *Window {
+	if window == nil {
+		return nil
+	}
+	copy := *window
+	return &copy
+}
+
 type Element struct {
 	Ref            string   `json:"ref"`
 	ParentRef      string   `json:"parent_ref,omitempty"`
@@ -88,13 +202,14 @@ type Coverage struct {
 	Reason   string `json:"reason,omitempty"`
 }
 type Snapshot struct {
-	ScopeID        string    `json:"-"`
-	ActionSequence uint64    `json:"-"`
-	WindowRef      string    `json:"window_ref"`
-	StateID        string    `json:"state_id"`
-	ObservedAt     time.Time `json:"observed_at"`
-	Elements       []Element `json:"elements"`
-	Coverage       Coverage  `json:"coverage"`
+	ScopeID        string          `json:"-"`
+	ActionSequence uint64          `json:"-"`
+	WindowRef      string          `json:"window_ref"`
+	StateID        string          `json:"state_id"`
+	ObservedAt     time.Time       `json:"observed_at"`
+	Elements       []Element       `json:"elements"`
+	Coverage       Coverage        `json:"coverage"`
+	DesktopContext *DesktopContext `json:"desktop_context,omitempty"`
 }
 type ElementContent struct {
 	ObservedAt time.Time `json:"-"`

@@ -132,10 +132,12 @@ func projectSemanticUnchanged(value semantic.Unchanged) MetadataUnchanged {
 type projectionBinding struct {
 	SessionID     string `json:"session_id"`
 	Scope         Scope  `json:"scope"`
+	Desktop       any    `json:"desktop_context"`
 	Budget        Budget `json:"budget"`
 	AllowValues   bool   `json:"allow_values"`
 	PolicyVersion uint64 `json:"policy_version"`
 	Epoch         uint64 `json:"permission_epoch"`
+	ContextEpoch  uint64 `json:"desktop_context_epoch"`
 }
 
 // projectFullObservation binds a sanitized legacy record to this immutable
@@ -162,7 +164,7 @@ func projectFullObservation(session *Session, observation Observation) (semantic
 // buildFullObservation is used only after core redaction and topology policy.
 func buildFullObservation(session *Session, observation Observation) (semantic.Snapshot, error) {
 	session.mu.Lock()
-	metadata := projectionBinding{SessionID: session.sessionID, Scope: session.scope, Budget: session.budget, AllowValues: session.allowValues, PolicyVersion: actionPolicyVersion, Epoch: session.permissionEpoch}
+	metadata := projectionBinding{SessionID: session.sessionID, Scope: session.scope, Desktop: desktopScopeBinding(session.desktopContext), Budget: session.budget, AllowValues: session.allowValues, PolicyVersion: actionPolicyVersion, Epoch: session.permissionEpoch, ContextEpoch: session.contextEpoch}
 	actionSequence := observation.ActionSequence
 	if observation.ScopeID == "" {
 		actionSequence = session.actionSequence
@@ -174,9 +176,6 @@ func buildFullObservation(session *Session, observation Observation) (semantic.S
 	}
 	scopeHash := sha256.Sum256(trusted)
 	scopeID := hex.EncodeToString(scopeHash[:])
-	if observation.ScopeID != "" {
-		scopeID = observation.ScopeID
-	}
 	nodes := make(map[string]semantic.Node, len(observation.Elements))
 	var focusedRef *string
 	focusedCount := 0

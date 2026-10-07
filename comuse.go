@@ -34,6 +34,7 @@ type Config struct {
 type Session struct {
 	mu                sync.Mutex
 	actionMu          sync.Mutex
+	contextMu         sync.Mutex
 	closeMu           sync.Mutex
 	changed           chan struct{}
 	active            int
@@ -42,6 +43,9 @@ type Session struct {
 	backendClosed     bool
 	terminalCloseCode string
 	permissionEpoch   uint64
+	contextEpoch      uint64
+	desktopContext    *DesktopContext
+	hasDesktopContext bool
 
 	ledger              *Ledger
 	acquireDesktop      func(context.Context) (desktopAuthority, error)
@@ -95,6 +99,10 @@ func (s *Session) invalidateSemanticState() {
 
 func (s *Session) purgeSemanticStateLocked() {
 	s.permissionEpoch++
+	s.clearSemanticStateLocked()
+}
+
+func (s *Session) clearSemanticStateLocked() {
 	s.windows = make(map[string]Window)
 	s.snapshots = make(map[string][]snapshotBinding)
 	s.snapshotBytes = 0

@@ -49,13 +49,9 @@ func (s *Session) ledgerView(ctx context.Context, charge bool) (LedgerSnapshot, 
 		return LedgerSnapshot{}, coreError("internal_error")
 	}
 	epoch := s.currentPermissionEpoch()
-	report, callErr := s.backend.Doctor(callCtx)
-	if callErr != nil {
-		return LedgerSnapshot{}, s.stableBackendError(callCtx, callErr)
-	}
-	s.invalidateIfPermissionDenied(report)
-	if !report.Capabilities.Accessibility || report.Permissions["accessibility"] == "denied" {
-		return LedgerSnapshot{}, coreError("permission_denied")
+	contextEpoch := s.contextEpochNow()
+	if _, _, err := s.revalidateDesktopAuthority(callCtx, contextEpoch); err != nil {
+		return LedgerSnapshot{}, err
 	}
 	s.mu.Lock()
 	if s.closed || s.closing {

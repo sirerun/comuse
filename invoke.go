@@ -52,13 +52,21 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 
 	var result any
 	var observation any
+	var stateValue *MetadataCompactState
+	stateStatus := StateUnavailable
 	var actionResult *ActionResult
 	var err error
 	switch request.Operation {
 	case OperationDoctor:
 		result, err = s.Doctor(ctx)
+		if err == nil {
+			stateValue, stateStatus = compactStateForReport(result)
+		}
 	case OperationState:
 		result, err = s.State(ctx)
+		if err == nil {
+			stateValue, stateStatus = compactStateForReport(result)
+		}
 	case OperationWindows:
 		result, err = s.Windows(ctx)
 	case OperationLedger:
@@ -85,6 +93,7 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 				_, _ = call.Add(CounterSemanticSnapshot, 1)
 				observed.StateID = full.StateID
 				result, observation = observed, full
+				stateValue, stateStatus = compactStateForObservation(observed)
 			}
 		}
 	case OperationWait:
@@ -138,7 +147,36 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 	default:
 		err = coreError("invalid_request")
 	}
-	return finishCall(s, call, request.Operation, result, observation, actionResult, err)
+	return finishCallWithState(s, call, request.Operation, result, observation, actionResult, err, stateValue, stateStatus)
+}
+
+func compactStateForReport(value any) (*MetadataCompactState, StateStatus) {
+	report, ok := value.(DoctorReport)
+	if !ok {
+		return nil, StateUnavailable
+	}
+	if !report.Capabilities.Accessibility || report.Permissions["accessibility"] == "denied" {
+		return nil, StateUnavailable
+	}
+	state, status, err := compactState(report.DesktopContext)
+	if err != nil {
+		return nil, StateUnavailable
+	}
+	if status == StateUnavailable {
+		return nil, status
+	}
+	return state, status
+}
+
+func compactStateForObservation(value Observation) (*MetadataCompactState, StateStatus) {
+	state, status, err := compactState(value.DesktopContext)
+	if err != nil {
+		return nil, StateUnavailable
+	}
+	if status == StateUnavailable {
+		return nil, status
+	}
+	return state, status
 }
 
 func (s *Session) ledgerCall() *CallSnapshot {
@@ -194,6 +232,10 @@ func requestActionID(request Request) string {
 }
 
 func finishCall(s *Session, call *CallSnapshot, operation Operation, result, observation any, actionResult *ActionResult, domainErr error) (ResultEnvelope, error) {
+	return finishCallWithState(s, call, operation, result, observation, actionResult, domainErr, nil, StateUnavailable)
+}
+
+func finishCallWithState(s *Session, call *CallSnapshot, operation Operation, result, observation any, actionResult *ActionResult, domainErr error, stateValue *MetadataCompactState, stateStatus StateStatus) (ResultEnvelope, error) {
 	code := ""
 	if domainErr != nil {
 		code = ErrorCode(domainErr)
@@ -218,10 +260,10 @@ func finishCall(s *Session, call *CallSnapshot, operation Operation, result, obs
 			code = "internal_error"
 		}
 	}
-	state, _ := NewStatePayload(nil)
+	state, _ := NewStatePayload(stateValue)
 	metadata := EnvelopeMetadata{
 		Status: "ok", OK: true, Action: string(operation), Execution: string(ExecutionNotApplied),
-		StateStatus: "unavailable", Verification: MetadataVerification{Status: string(VerificationUnavailable)},
+		StateStatus: string(stateStatus), Verification: MetadataVerification{Status: string(VerificationUnavailable)},
 		Cleanup: string(CleanupComplete), CompletedSteps: []string{},
 	}
 	if code != "" {
