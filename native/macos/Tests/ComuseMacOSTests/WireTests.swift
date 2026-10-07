@@ -351,8 +351,9 @@ final class WireTests: XCTestCase {
     }
 
     private static func decodeAction(kind: String, text: String) throws -> NativeAction {
-        let value: [String: Any] = ["id": "a1", "window_ref": "w1", "element_ref": "e1",
-                                    "state_id": "s1", "kind": kind, "text": text]
+        var value: [String: Any] = ["id": "a1", "window_ref": "w1", "element_ref": "e1",
+                                    "state_id": "s1", "kind": kind]
+        if kind == "replace" || kind == "insert" { value["text"] = text }
         let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
         return try decodeAction(json: String(decoding: data, as: UTF8.self))
     }
