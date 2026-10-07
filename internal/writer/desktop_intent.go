@@ -160,7 +160,7 @@ func ReconcileDesktop(ctx context.Context, journalBinding [32]byte, verify func(
 
 // reconcileDesktopAt is private so synthetic identity and root injection stay
 // confined to package tests.
-func reconcileDesktopAt(ctx context.Context, identity desktopIdentity, root string, journalBinding [32]byte, verify func(context.Context) error) error {
+func reconcileDesktopAt(ctx context.Context, identity desktopIdentity, root string, journalBinding [32]byte, verify func(context.Context) error) (returnedErr error) {
 	if journalBinding == ([32]byte{}) {
 		return errors.New("desktop journal binding is required")
 	}
@@ -171,7 +171,7 @@ func reconcileDesktopAt(ctx context.Context, identity desktopIdentity, root stri
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lease.Close() }()
+	defer func() { returnedErr = errors.Join(returnedErr, lease.Close()) }()
 	path := desktopIntentPath(root, identity)
 	marker, err := readDesktopIntent(path, identity.uid)
 	if err != nil {

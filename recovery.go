@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sirerun/comuse/internal/writer"
 )
@@ -40,7 +42,7 @@ func ReconcileDesktop(ctx context.Context, journalDirectory string, journalKey [
 }
 
 func validRecoveryJournalInput(root string, key []byte) bool {
-	if len(key) < 32 || root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+	if len(key) != 32 || len(root) > 4096 || !utf8.ValidString(root) || strings.ContainsRune(root, 0) || root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return false
 	}
 	info, err := os.Lstat(root)

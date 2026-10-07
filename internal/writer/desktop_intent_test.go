@@ -164,7 +164,7 @@ func TestDesktopIntentRecoveryVerifierControlsClear(t *testing.T) {
 			called = true
 			return verifierErr
 		})
-		if err != verifierErr {
+		if !errors.Is(err, verifierErr) {
 			t.Fatalf("reconcile error = %v, want %v", err, verifierErr)
 		}
 		if !called {
