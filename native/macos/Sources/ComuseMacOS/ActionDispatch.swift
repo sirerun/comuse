@@ -13,12 +13,27 @@ struct NativeActionTarget: Equatable {
     let enabled: Bool?
     let focused: Bool
     let windowFocused: Bool
-    let focusedRole: String? = nil
-    let focusedClassification: String? = nil
-    let windowBounds: CGRect? = nil
-    let elementBounds: CGRect? = nil
-    let displayBounds: CGRect? = nil
-    let displayID: CGDirectDisplayID? = nil
+    let focusedRole: String?
+    let focusedClassification: String?
+    let windowBounds: CGRect?
+    let elementBounds: CGRect?
+    let displayBounds: CGRect?
+    let displayID: CGDirectDisplayID?
+
+    init(actionID: String, windowRef: String, elementRef: String, stateID: String,
+         process: NativeProcess, role: String, classification: String, enabled: Bool?,
+         focused: Bool, windowFocused: Bool, focusedRole: String? = nil,
+         focusedClassification: String? = nil, windowBounds: CGRect? = nil,
+         elementBounds: CGRect? = nil, displayBounds: CGRect? = nil,
+         displayID: CGDirectDisplayID? = nil) {
+        self.actionID = actionID; self.windowRef = windowRef; self.elementRef = elementRef
+        self.stateID = stateID; self.process = process; self.role = role
+        self.classification = classification; self.enabled = enabled
+        self.focused = focused; self.windowFocused = windowFocused
+        self.focusedRole = focusedRole; self.focusedClassification = focusedClassification
+        self.windowBounds = windowBounds; self.elementBounds = elementBounds
+        self.displayBounds = displayBounds; self.displayID = displayID
+    }
 }
 
 struct NativeActionDispatch {
@@ -66,7 +81,7 @@ func validNativeTextSelection(_ selection: NativeTextSelection) -> Bool {
 
 struct NativeInputEvent {
     enum Kind: Equatable { case keyDown, keyUp, mouseDown, mouseUp, mouseMove, scroll }
-    let kind: Kind
+    var kind: Kind
     var keyCode: CGKeyCode = 0
     var keyFlags: CGEventFlags = []
     var unicode: [UInt16] = []
