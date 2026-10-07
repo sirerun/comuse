@@ -380,7 +380,7 @@ func validBundleID(value string) bool {
 			return false
 		}
 		for _, ch := range label {
-			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-') {
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '-' {
 				return false
 			}
 		}
@@ -393,7 +393,7 @@ func validOpaque(value string) bool {
 		return false
 	}
 	for _, ch := range value {
-		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '.' || ch == '_' || ch == '-') {
+		if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '.' && ch != '_' && ch != '-' {
 			return false
 		}
 	}
