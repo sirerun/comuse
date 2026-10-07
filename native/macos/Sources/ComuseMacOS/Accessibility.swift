@@ -662,7 +662,7 @@ private func classify(role: String, subrole: String?) -> String {
     return expected[role]?.contains(subrole) == true ? "normal" : "unknown"
 }
 
-private func copyAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+func copyAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
     return value
