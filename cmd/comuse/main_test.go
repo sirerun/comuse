@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestStateLedgerLaunchFlagReachesHostDispatcher(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Error == nil || envelope.Error.Code != "unsupported" {
-		t.Fatalf("Linux host setup should reach the existing unsupported backend gate, got %s", output.String())
+	if envelope.Error == nil || (envelope.Error.Code != "unsupported" && (runtime.GOOS != "darwin" || envelope.Error.Code != "backend_unavailable")) {
+		t.Fatalf("host setup did not reach the platform backend admission gate: %s", output.String())
 	}
 }
