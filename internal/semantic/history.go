@@ -320,6 +320,7 @@ func validateHistorySnapshot(s Snapshot) error {
 }
 
 func retainedCharge(s Snapshot) (uint64, bool) {
+	s = CloneSnapshot(s)
 	keys := make([]string, 0, len(s.Nodes))
 	for ref := range s.Nodes {
 		keys = append(keys, ref)
