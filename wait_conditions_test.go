@@ -309,6 +309,18 @@ func TestWaitConditionTimeoutAndAmbiguousWindowAreTruthful(t *testing.T) {
 		t.Fatalf("timeout = (%+v, %v)", result, err)
 	}
 
+	resourceBackend := &budgetErrorWaitBackend{fakeBackend: backend}
+	resourceSession := newWaitTestSession(t, resourceBackend, testProcess())
+	t.Cleanup(func() { _ = resourceSession.Close(context.Background()) })
+	resourceRef, err := resourceSession.ProcessRef(testProcess())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := resourceSession.WaitCondition(context.Background(), WaitParams{Condition: "window_appears", ProcessRef: resourceRef, TimeoutMS: 100})
+	if ErrorCode(err) != "budget_exceeded" || resource.Reason != "unavailable" || resource.Satisfied {
+		t.Fatalf("non-deadline budget refusal = (%+v, %v)", resource, err)
+	}
+
 	ambiguousBackend := &multiWindowWaitBackend{fakeBackend: backend}
 	ambiguousSession := newWaitTestSession(t, ambiguousBackend, testProcess())
 	t.Cleanup(func() { _ = ambiguousSession.Close(context.Background()) })
@@ -320,6 +332,12 @@ func TestWaitConditionTimeoutAndAmbiguousWindowAreTruthful(t *testing.T) {
 	if ErrorCode(err) != "unsupported" || ambiguous.Satisfied || ambiguous.Reason != "ambiguous" || ambiguous.WindowRef != nil {
 		t.Fatalf("ambiguous wait = (%+v, %v)", ambiguous, err)
 	}
+}
+
+type budgetErrorWaitBackend struct{ *fakeBackend }
+
+func (b *budgetErrorWaitBackend) Windows(context.Context, Budget) ([]Window, error) {
+	return nil, coreError("budget_exceeded")
 }
 
 type multiWindowWaitBackend struct{ *fakeBackend }

@@ -74,7 +74,7 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 				result.Reason = "ambiguous"
 			} else if ctx.Err() != nil || ErrorCode(pollErr) == "cancelled" {
 				result.Reason = "cancelled"
-			} else if waitCtx.Err() != nil || ErrorCode(pollErr) == "budget_exceeded" {
+			} else if waitCtx.Err() != nil {
 				result.Reason = "timeout"
 			}
 			return result, pollErr
