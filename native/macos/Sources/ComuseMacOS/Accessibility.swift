@@ -527,6 +527,7 @@ private func axBounds(_ element: AXUIElement) -> CGRect? {
     return bounds.isFinitePositive ? bounds : nil
 }
 
+@MainActor
 private func validateCoordinateHit(_ point: CGPoint, target: NativeActionTarget, runtime: NativeRuntime) throws {
     guard let window = try? runtime.resolve(target.windowRef, kind: .window) else {
         throw ProbeFailure(code: "policy_refused")
