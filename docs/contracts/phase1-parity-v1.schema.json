@@ -1,0 +1,2487 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sirerun.github.io/comuse/contracts/phase1-parity-v1.schema.json",
+  "$comment": "Source contract only; capability and trusted policy admission are mandatory, not schema-derived.",
+  "title": "Comuse Phase1 parity wire definitions",
+  "$ref": "#/$defs/Envelope",
+  "$defs": {
+    "Opaque": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[!-~]+$"
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "policy_refused",
+            "approval_required",
+            "element_stale",
+            "state_expired",
+            "permission_denied",
+            "unsupported",
+            "backend_unavailable",
+            "desktop_busy",
+            "rate_limited",
+            "budget_exceeded",
+            "cancelled",
+            "session_closed",
+            "unknown_outcome",
+            "internal_error",
+            "replay_result_expired"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 160,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "Verification": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "failed",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 0
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Window": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessIdentity"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 4096,
+          "minLength": 0
+        }
+      },
+      "required": [
+        "ref",
+        "process",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "ProcessIdentity": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "bundle_id": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "launch_id": {
+          "$ref": "#/$defs/Opaque"
+        }
+      },
+      "required": [
+        "pid",
+        "bundle_id",
+        "launch_id"
+      ],
+      "additionalProperties": false
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "accessibility": {
+          "type": "boolean"
+        },
+        "input": {
+          "type": "boolean"
+        },
+        "screen_capture": {
+          "type": "boolean"
+        },
+        "qualified_input": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 0
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "accessibility",
+        "input",
+        "screen_capture",
+        "qualified_input"
+      ],
+      "additionalProperties": false
+    },
+    "Doctor": {
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "permissions": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "accessibility",
+              "input",
+              "screen_capture"
+            ]
+          },
+          "additionalProperties": {
+            "enum": [
+              "granted",
+              "denied",
+              "unavailable",
+              "not_requested"
+            ]
+          }
+        }
+      },
+      "required": [
+        "capabilities",
+        "permissions"
+      ],
+      "additionalProperties": false
+    },
+    "CompactState": {
+      "type": "object",
+      "properties": {
+        "focused_window": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "$ref": "#/$defs/Opaque"
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 0
+                }
+              },
+              "required": [
+                "ref",
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "display_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "display_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "focused_window",
+        "display_id",
+        "display_generation"
+      ],
+      "additionalProperties": false
+    },
+    "Coverage": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "status",
+        "truncated",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "Context": {
+      "type": "object",
+      "properties": {
+        "root_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Opaque"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "focused_element_ref": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Opaque"
+            }
+          ]
+        }
+      },
+      "required": [
+        "root_refs",
+        "focused_element_ref"
+      ],
+      "additionalProperties": false
+    },
+    "Node": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "classification": {
+          "enum": [
+            "normal",
+            "secure",
+            "unknown"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 4096,
+          "minLength": 0
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 8192,
+          "minLength": 0
+        },
+        "parent_ref": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Opaque"
+            }
+          ]
+        },
+        "child_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Opaque"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "checked": {
+          "type": "boolean"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "press",
+              "pick",
+              "focus",
+              "replace",
+              "insert",
+              "scroll",
+              "click"
+            ]
+          },
+          "maxItems": 16,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "role",
+        "classification",
+        "parent_ref",
+        "child_refs",
+        "actions"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "classification": {
+                "enum": [
+                  "secure",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Snapshot": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "action_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "context": {
+          "$ref": "#/$defs/Context"
+        },
+        "kind": {
+          "const": "snapshot"
+        },
+        "nodes": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[!-~]+$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/Node"
+          },
+          "maxProperties": 10000
+        },
+        "historical": {
+          "type": "boolean"
+        },
+        "reset_reason": {
+          "enum": [
+            "missing_baseline",
+            "expired_baseline",
+            "incompatible_baseline",
+            "partial_coverage",
+            "identity_uncertain",
+            "delta_not_smaller"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "state_id",
+        "scope_id",
+        "window_ref",
+        "observed_at",
+        "action_sequence",
+        "coverage",
+        "context",
+        "kind",
+        "nodes",
+        "historical"
+      ],
+      "additionalProperties": false
+    },
+    "Delta": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "action_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "context": {
+          "$ref": "#/$defs/Context"
+        },
+        "kind": {
+          "const": "delta"
+        },
+        "base_state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "upsert": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[!-~]+$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/Node"
+          },
+          "maxProperties": 10000
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Opaque"
+          },
+          "maxItems": 10000,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "schema_version",
+        "state_id",
+        "scope_id",
+        "window_ref",
+        "observed_at",
+        "action_sequence",
+        "coverage",
+        "context",
+        "kind",
+        "base_state_id",
+        "upsert",
+        "removed"
+      ],
+      "additionalProperties": false
+    },
+    "Unchanged": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "action_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "context": {
+          "$ref": "#/$defs/Context"
+        },
+        "kind": {
+          "const": "unchanged"
+        },
+        "base_state_id": {
+          "$ref": "#/$defs/Opaque"
+        }
+      },
+      "required": [
+        "schema_version",
+        "state_id",
+        "scope_id",
+        "window_ref",
+        "observed_at",
+        "action_sequence",
+        "coverage",
+        "context",
+        "kind",
+        "base_state_id"
+      ],
+      "additionalProperties": false
+    },
+    "ElementContent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "element_content"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "element_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 8192,
+          "minLength": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "window_ref",
+        "element_ref",
+        "state_id",
+        "observed_at",
+        "text",
+        "truncated"
+      ],
+      "additionalProperties": false
+    },
+    "WaitResult": {
+      "type": "object",
+      "properties": {
+        "condition": {
+          "enum": [
+            "window_appears",
+            "window_closed",
+            "element_exists",
+            "element_enabled",
+            "element_checked",
+            "fresh_observation"
+          ]
+        },
+        "satisfied": {
+          "type": "boolean"
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "reason": {
+          "enum": [
+            "satisfied",
+            "timeout",
+            "cancelled",
+            "unavailable"
+          ]
+        },
+        "final_state_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Opaque"
+            }
+          ]
+        }
+      },
+      "required": [
+        "condition",
+        "satisfied",
+        "elapsed_ms",
+        "reason",
+        "final_state_id"
+      ],
+      "additionalProperties": false
+    },
+    "ActionResult": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "execution": {
+          "enum": [
+            "not_applied",
+            "applied",
+            "partially_applied",
+            "unknown"
+          ]
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        },
+        "state_status": {
+          "enum": [
+            "available",
+            "unavailable"
+          ]
+        },
+        "cleanup": {
+          "enum": [
+            "complete",
+            "dirty",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "action_id",
+        "execution",
+        "verification",
+        "state_status",
+        "cleanup"
+      ],
+      "additionalProperties": false
+    },
+    "ModelUsage": {
+      "type": "object",
+      "properties": {
+        "actual": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "actual"
+                },
+                "source": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "model": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "input_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "output_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "image_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "cost_usd": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9]{1,12}(\\.[0-9]{1,8})?$"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "source",
+                "model",
+                "input_tokens",
+                "output_tokens",
+                "image_tokens",
+                "cost_usd"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "estimate": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "estimate"
+                },
+                "source": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "model": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "version": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "detail": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "method": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "input_tokens_est": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                "output_tokens_est": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                "image_tokens_est": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                "cost_usd_est": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9]{1,12}(\\.[0-9]{1,8})?$"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "source",
+                "model",
+                "version",
+                "detail",
+                "method",
+                "input_tokens_est",
+                "output_tokens_est",
+                "image_tokens_est",
+                "cost_usd_est"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "actual",
+        "estimate"
+      ],
+      "additionalProperties": false
+    },
+    "Ledger": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "actions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observations": {
+          "type": "object",
+          "properties": {
+            "screenshot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "a11y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "state": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "screenshot",
+            "a11y",
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        "semantic_results": {
+          "type": "object",
+          "properties": {
+            "snapshot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "delta": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "unchanged": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "snapshot",
+            "delta",
+            "unchanged"
+          ],
+          "additionalProperties": false
+        },
+        "baseline_resets": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "encoded_image_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "serialized_text_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "images": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retained_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "model_usage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ModelUsage"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "actions",
+        "observations",
+        "semantic_results",
+        "baseline_resets",
+        "encoded_image_bytes",
+        "serialized_text_bytes",
+        "images",
+        "retained_bytes",
+        "elapsed_ms",
+        "model_usage"
+      ],
+      "additionalProperties": false
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observations": {
+          "type": "object",
+          "properties": {
+            "screenshot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "a11y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "state": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "screenshot",
+            "a11y",
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        "semantic_results": {
+          "type": "object",
+          "properties": {
+            "snapshot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "delta": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "unchanged": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "snapshot",
+            "delta",
+            "unchanged"
+          ],
+          "additionalProperties": false
+        },
+        "baseline_resets": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "encoded_image_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "serialized_text_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "images": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retained_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "model_usage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ModelUsage"
+            }
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "actions",
+        "observations",
+        "semantic_results",
+        "baseline_resets",
+        "encoded_image_bytes",
+        "serialized_text_bytes",
+        "images",
+        "retained_bytes",
+        "elapsed_ms",
+        "model_usage",
+        "duration_ms"
+      ],
+      "additionalProperties": false
+    },
+    "LegacySnapshot": {
+      "type": "object",
+      "properties": {
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "$ref": "#/$defs/Opaque"
+              },
+              "parent_ref": {
+                "$ref": "#/$defs/Opaque"
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9999
+              },
+              "role": {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 0
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 0
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "press",
+                    "pick",
+                    "focus",
+                    "replace",
+                    "insert",
+                    "scroll",
+                    "click"
+                  ]
+                },
+                "maxItems": 16
+              },
+              "classification": {
+                "enum": [
+                  "normal",
+                  "secure",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "ref",
+              "order",
+              "role",
+              "classification"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10000
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 0
+            }
+          },
+          "required": [
+            "complete"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "window_ref",
+        "state_id",
+        "observed_at",
+        "elements",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "Envelope": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "error"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "action": {
+          "enum": [
+            "doctor",
+            "state",
+            "windows",
+            "a11y",
+            "read_element",
+            "wait",
+            "ledger",
+            "click_element",
+            "element_action",
+            "write_element",
+            "scroll_element",
+            "click",
+            "type_text",
+            "press_key",
+            "scroll",
+            "drag",
+            "focus_window"
+          ]
+        },
+        "execution": {
+          "enum": [
+            "not_applied",
+            "applied",
+            "partially_applied",
+            "unknown"
+          ]
+        },
+        "method": {
+          "enum": [
+            null,
+            "ax_press",
+            "ax_pick",
+            "ax_focus",
+            "ax_set_value",
+            "ax_scroll",
+            "ax_focus_window",
+            "cg_click",
+            "cg_unicode",
+            "cg_key",
+            "cg_scroll",
+            "cg_drag"
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "state_status": {
+          "enum": [
+            "available",
+            "partial",
+            "unavailable"
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/CompactState"
+            }
+          ]
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        },
+        "cleanup": {
+          "enum": [
+            "complete",
+            "dirty",
+            "unknown"
+          ]
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "observation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/Snapshot"
+                },
+                {
+                  "$ref": "#/$defs/Delta"
+                },
+                {
+                  "$ref": "#/$defs/Unchanged"
+                },
+                {
+                  "$ref": "#/$defs/ElementContent"
+                }
+              ]
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Doctor"
+                },
+                {
+                  "$ref": "#/$defs/ActionResult"
+                },
+                {
+                  "$ref": "#/$defs/ElementContent"
+                },
+                {
+                  "$ref": "#/$defs/WaitResult"
+                },
+                {
+                  "$ref": "#/$defs/Ledger"
+                },
+                {
+                  "$ref": "#/$defs/LegacySnapshot"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Window"
+                  },
+                  "maxItems": 10000
+                }
+              ]
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Error"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "status",
+        "ok",
+        "action",
+        "execution",
+        "method",
+        "duration_ms",
+        "state_status",
+        "state",
+        "verification",
+        "cleanup",
+        "usage",
+        "observation",
+        "result",
+        "error"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "error": {
+                "$ref": "#/$defs/Error"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state_status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state_status": {
+                "enum": [
+                  "available",
+                  "partial"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "$ref": "#/$defs/CompactState"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "click_element",
+                  "element_action",
+                  "write_element",
+                  "scroll_element",
+                  "click",
+                  "type_text",
+                  "press_key",
+                  "scroll",
+                  "drag",
+                  "focus_window"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "action_id"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "action_id"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "doctor",
+                  "state"
+                ]
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/Doctor"
+              },
+              "observation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "windows"
+                ]
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Window"
+                },
+                "maxItems": 10000
+              },
+              "observation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "ledger"
+                ]
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/Ledger"
+              },
+              "observation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "read_element"
+                ]
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/ElementContent"
+              },
+              "observation": {
+                "$ref": "#/$defs/ElementContent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "wait"
+                ]
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/WaitResult"
+              },
+              "observation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "click_element",
+                  "element_action",
+                  "write_element",
+                  "scroll_element",
+                  "click",
+                  "type_text",
+                  "press_key",
+                  "scroll",
+                  "drag",
+                  "focus_window"
+                ]
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/ActionResult"
+              },
+              "observation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "a11y"
+              },
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Snapshot"
+                  },
+                  {
+                    "$ref": "#/$defs/Delta"
+                  },
+                  {
+                    "$ref": "#/$defs/Unchanged"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "a11y"
+              },
+              "observation": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "snapshot"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "observation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/LegacySnapshot"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "a11y"
+              },
+              "observation": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "delta",
+                      "unchanged"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "observation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ClickElementRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "element_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "element_ref",
+        "state_id"
+      ],
+      "additionalProperties": false
+    },
+    "ElementActionRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "element_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "kind": {
+          "enum": [
+            "press",
+            "pick",
+            "focus"
+          ]
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "element_ref",
+        "state_id",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "WriteElementRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "element_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "mode": {
+          "enum": [
+            "replace",
+            "insert"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 8192,
+          "minLength": 0
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "element_ref",
+        "state_id",
+        "mode",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "ScrollElementRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "element_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "amount": {
+          "enum": [
+            "line",
+            "page"
+          ]
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "element_ref",
+        "state_id",
+        "direction",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "ReadElementRequest": {
+      "type": "object",
+      "properties": {
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "element_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        }
+      },
+      "required": [
+        "window_ref",
+        "element_ref",
+        "state_id"
+      ],
+      "additionalProperties": false
+    },
+    "ObserveRequest": {
+      "type": "object",
+      "properties": {
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "mode": {
+          "enum": [
+            "auto",
+            "full",
+            "stored"
+          ]
+        },
+        "since": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "state_id": {
+          "$ref": "#/$defs/Opaque"
+        }
+      },
+      "required": [
+        "window_ref"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "const": "stored"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "state_id"
+            ],
+            "not": {
+              "required": [
+                "since"
+              ]
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "state_id"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "const": "full"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "since"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "WaitRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 1000
+            },
+            "condition": {
+              "const": "window_appears"
+            },
+            "process_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "title": {
+              "type": "string",
+              "maxLength": 256,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "condition",
+            "timeout_ms",
+            "process_ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 1000
+            },
+            "condition": {
+              "const": "window_closed"
+            },
+            "window_ref": {
+              "$ref": "#/$defs/Opaque"
+            }
+          },
+          "required": [
+            "condition",
+            "timeout_ms",
+            "window_ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 1000
+            },
+            "condition": {
+              "const": "element_exists"
+            },
+            "window_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "element_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "state_id": {
+              "$ref": "#/$defs/Opaque"
+            }
+          },
+          "required": [
+            "condition",
+            "timeout_ms",
+            "window_ref",
+            "element_ref",
+            "state_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 1000
+            },
+            "condition": {
+              "const": "element_enabled"
+            },
+            "window_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "element_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "state_id": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "expected": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "condition",
+            "timeout_ms",
+            "window_ref",
+            "element_ref",
+            "state_id",
+            "expected"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 1000
+            },
+            "condition": {
+              "const": "element_checked"
+            },
+            "window_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "element_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "state_id": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "expected": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "condition",
+            "timeout_ms",
+            "window_ref",
+            "element_ref",
+            "state_id",
+            "expected"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "window_ref": {
+              "$ref": "#/$defs/Opaque"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          },
+          "required": [
+            "window_ref",
+            "timeout_ms"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ClickRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "point": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        "button": {
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "hold_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "point",
+        "button",
+        "count",
+        "hold_ms"
+      ],
+      "additionalProperties": false
+    },
+    "TypeTextRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 8192,
+          "minLength": 1
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "text",
+        "delay_ms"
+      ],
+      "additionalProperties": false
+    },
+    "PressKeyRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "ctrl",
+              "alt",
+              "shift",
+              "meta",
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f",
+              "g",
+              "h",
+              "i",
+              "j",
+              "k",
+              "l",
+              "m",
+              "n",
+              "o",
+              "p",
+              "q",
+              "r",
+              "s",
+              "t",
+              "u",
+              "v",
+              "w",
+              "x",
+              "y",
+              "z",
+              "0",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "enter",
+              "escape",
+              "tab",
+              "space",
+              "backspace",
+              "delete",
+              "up",
+              "down",
+              "left",
+              "right",
+              "home",
+              "end",
+              "page_up",
+              "page_down"
+            ]
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "hold_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "keys",
+        "hold_ms"
+      ],
+      "additionalProperties": false
+    },
+    "ScrollRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "dx": {
+          "type": "integer",
+          "minimum": -10,
+          "maximum": 10
+        },
+        "dy": {
+          "type": "integer",
+          "minimum": -10,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "dx",
+        "dy"
+      ],
+      "additionalProperties": false,
+      "not": {
+        "properties": {
+          "dx": {
+            "const": 0
+          },
+          "dy": {
+            "const": 0
+          }
+        }
+      }
+    },
+    "DragRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 64
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref",
+        "start",
+        "end",
+        "steps",
+        "duration_ms"
+      ],
+      "additionalProperties": false
+    },
+    "FocusWindowRequest": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/Opaque"
+        },
+        "window_ref": {
+          "$ref": "#/$defs/Opaque"
+        }
+      },
+      "required": [
+        "action_id",
+        "window_ref"
+      ],
+      "additionalProperties": false
+    },
+    "EmptyRequest": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+}
