@@ -97,3 +97,33 @@ func TestSemanticScrollFreshEligibilityAndCapability(t *testing.T) {
 		})
 	}
 }
+
+func TestDispatchMetadataPreservedOnDurableReplay(t *testing.T) {
+	s, b, o := scrollFixture(t)
+	b.executeHook = func() (ActionResult, error) {
+		return ActionResult{ActionID: "metadata-a", Execution: ExecutionApplied, Method: "ax_scroll", CompletedSteps: []string{"focus", "scroll", "cleanup"}, Verification: Verification{Status: VerificationVerified, Reason: "postcondition_met"}, StateStatus: StateAvailable, Cleanup: CleanupComplete}, nil
+	}
+	for i := 0; i < 2; i++ {
+		r, err := s.ScrollElement(context.Background(), "metadata-a", o.WindowRef, "scroll-1", o.StateID, "up", "line")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Method != "ax_scroll" || len(r.CompletedSteps) != 3 || r.CompletedSteps[1] != "scroll" || r.Verification.Reason != "postcondition_met" {
+			t.Fatalf("metadata dropped on call%d: %+v", i, r)
+		}
+		r.CompletedSteps[1] = "caller mutation"
+	}
+	if len(b.executed) != 1 {
+		t.Fatal("metadata replay dispatched again")
+	}
+}
+func TestDispatchMetadataClosedVocabulary(t *testing.T) {
+	for _, r := range []ActionResult{{Method: "secret backend detail"}, {Method: "ax_scroll", CompletedSteps: []string{"requested text"}}, {CompletedSteps: make([]string, 129)}} {
+		if safeDispatchMetadata(r) {
+			t.Fatal("unsafe metadata admitted")
+		}
+	}
+	if !safeDispatchMetadata(ActionResult{Method: "ax_press", CompletedSteps: []string{"focus", "press", "cleanup"}}) {
+		t.Fatal("safe metadata refused")
+	}
+}

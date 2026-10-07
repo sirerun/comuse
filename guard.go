@@ -198,17 +198,23 @@ func actionMetadata(action Action, result ActionResult, code string) writer.Safe
 		cleanup = "failed"
 	}
 	metadata := writer.SafeActionMetadata{
-		Action:       action.Kind,
-		Execution:    execution,
-		Verification: string(result.Verification.Status),
-		StateStatus:  string(result.StateStatus),
-		Cleanup:      cleanup,
-		ErrorCode:    code,
+		Action:             action.Kind,
+		Method:             result.Method,
+		CompletedSteps:     strings.Join(result.CompletedSteps, ","),
+		VerificationReason: safeVerificationReason(result.Verification.Reason),
+		Execution:          execution,
+		Verification:       string(result.Verification.Status),
+		StateStatus:        string(result.StateStatus),
+		Cleanup:            cleanup,
+		ErrorCode:          code,
 	}
 	return metadata
 }
 
 func validResult(actionID string, result ActionResult) bool {
+	if !safeDispatchMetadata(result) {
+		return false
+	}
 	if result.ActionID != actionID || result.ActionID == "" {
 		return false
 	}
@@ -242,4 +248,23 @@ func safeVerificationReason(reason string) string {
 	default:
 		return ""
 	}
+}
+
+func safeDispatchMetadata(r ActionResult) bool {
+	switch r.Method {
+	case "", "ax_press", "ax_pick", "ax_focus", "ax_set_value", "ax_scroll", "ax_focus_window", "cg_click", "cg_unicode", "cg_key", "cg_scroll", "cg_drag":
+	default:
+		return false
+	}
+	if len(r.CompletedSteps) > 128 {
+		return false
+	}
+	for _, p := range r.CompletedSteps {
+		switch p {
+		case "focus", "press", "pick", "set_value", "unicode", "key_down", "key_up", "mouse_down", "mouse_up", "mouse_move", "scroll", "cleanup":
+		default:
+			return false
+		}
+	}
+	return true
 }

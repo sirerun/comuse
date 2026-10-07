@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/sirerun/comuse/internal/writer"
 )
@@ -199,6 +200,7 @@ func (s *Session) Do(ctx context.Context, action Action) (ActionResult, error) {
 		unknown := unknownResult(action.ID)
 		return s.persistUnknownBeforeTerminal(lease, ticket, action, unknown, "native_outcome_unknown")
 	}
+	result.CompletedSteps = append([]string(nil), result.CompletedSteps...)
 	result.Verification.Reason = safeVerificationReason(result.Verification.Reason)
 	if result.Execution == ExecutionUnknown || result.Cleanup != CleanupComplete {
 		return s.persistUnknownBeforeTerminal(lease, ticket, action, result, "native_outcome_unknown")
@@ -352,6 +354,11 @@ func replayResult(actionID string, prior writer.PriorOutcome) ActionResult {
 	case "unknown":
 		result.Execution = ExecutionUnknown
 	}
+	result.Method = metadata.Method
+	if metadata.CompletedSteps != "" {
+		result.CompletedSteps = strings.Split(metadata.CompletedSteps, ",")
+	}
+	result.Verification.Reason = safeVerificationReason(metadata.VerificationReason)
 	if metadata.Verification != "" {
 		result.Verification.Status = VerificationStatus(metadata.Verification)
 	}
