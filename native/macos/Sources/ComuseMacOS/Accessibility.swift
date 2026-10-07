@@ -487,7 +487,7 @@ private func projectionDigest(windowRef: String, rows: [[String: Any]], complete
     return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
 }
 
-private func validOpaque(_ value: String) -> Bool {
+func validOpaque(_ value: String) -> Bool {
     guard !value.isEmpty, value.utf8.count <= 128 else { return false }
     return value.utf8.allSatisfy { byte in
         (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || byte == 45 || byte == 46 || byte == 95
