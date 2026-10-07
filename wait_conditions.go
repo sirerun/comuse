@@ -32,6 +32,7 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 	}
 
 	permissionEpoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 	var boundProcess *ProcessIdentity
 	var boundElement *Element
 	if params.Condition == "window_closed" || isElementWait(params.Condition) {
@@ -65,6 +66,9 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 	if s.currentPermissionEpoch() != permissionEpoch {
 		return result, coreError("permission_denied")
 	}
+	if s.contextEpochNow() != contextEpoch {
+		return result, coreError("state_expired")
+	}
 
 	pollInterval := time.Duration(params.PollIntervalMS) * time.Millisecond
 	if pollInterval == 0 {
@@ -97,6 +101,10 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 		if s.currentPermissionEpoch() != permissionEpoch {
 			result.ElapsedMS = elapsedMilliseconds(started)
 			return result, coreError("permission_denied")
+		}
+		if s.contextEpochNow() != contextEpoch {
+			result.ElapsedMS = elapsedMilliseconds(started)
+			return result, coreError("state_expired")
 		}
 		if pollErr != nil {
 			result.ElapsedMS = elapsedMilliseconds(started)

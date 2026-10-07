@@ -36,6 +36,7 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	s.actionMu.Lock()
 	defer s.actionMu.Unlock()
 	epoch := s.currentPermissionEpoch()
+	contextEpoch := s.contextEpochNow()
 
 	callCtx, cancel := context.WithTimeout(callCtx, min(s.budget.Timeout, 10*time.Second))
 	defer cancel()
@@ -178,12 +179,18 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 		if callErr != nil {
 			return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
 		}
+		if _, _, contextErr := s.reconcileDesktopContextAt(nativeSnapshot.DesktopContext, &contextEpoch); contextErr != nil {
+			return notApplied(action.ID), contextErr
+		}
+		if s.contextEpochNow() != contextEpoch {
+			return notApplied(action.ID), coreError("state_expired")
+		}
 		current, binding, normalizeErr := s.normalizeObservation(action.WindowRef, nativeSnapshot)
 		if normalizeErr != nil {
 			return notApplied(action.ID), normalizeErr
 		}
-		if !s.rememberSnapshotAtEpoch(binding, epoch) {
-			return notApplied(action.ID), coreError("permission_denied")
+		if !s.rememberSnapshotAtEpoch(binding, epoch, contextEpoch) {
+			return notApplied(action.ID), snapshotEpochError(s, epoch, contextEpoch)
 		}
 		if current.StateID != action.StateID {
 			return notApplied(action.ID), coreError("element_stale")
@@ -200,6 +207,12 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	doctor, callErr := s.backend.Doctor(callCtx)
 	if callErr != nil {
 		return notApplied(action.ID), s.stableBackendError(callCtx, callErr)
+	}
+	if _, _, contextErr := s.reconcileDesktopContextAt(doctor.DesktopContext, &contextEpoch); contextErr != nil {
+		return notApplied(action.ID), contextErr
+	}
+	if s.contextEpochNow() != contextEpoch {
+		return notApplied(action.ID), coreError("state_expired")
 	}
 	s.invalidateIfPermissionDenied(doctor)
 	if !doctor.Capabilities.Accessibility {
@@ -317,6 +330,9 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
+	if s.contextEpochNow() != contextEpoch {
+		return s.finishContextChangedAction(lease, ticket, action)
+	}
 	if err := callCtx.Err(); err != nil {
 		result := notApplied(action.ID)
 		callError := stableCallError(err)
@@ -338,10 +354,19 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	if s.currentPermissionEpoch() != epoch {
 		return s.finishPermissionDeniedAction(lease, ticket, action)
 	}
+	if s.contextEpochNow() != contextEpoch {
+		return s.finishContextChangedAction(lease, ticket, action)
+	}
 	s.mu.Lock()
 	s.actionSequence = saturatingAdd(s.actionSequence, 1)
 	s.mu.Unlock()
+	s.contextMu.Lock()
+	if s.contextEpochNow() != contextEpoch {
+		s.contextMu.Unlock()
+		return s.finishContextChangedAction(lease, ticket, action)
+	}
 	result, executeErr := s.backend.Execute(callCtx, nativeAction)
+	s.contextMu.Unlock()
 	if executeErr != nil {
 		s.invalidateOnBackendError(executeErr)
 		unknown := unknownResult(action.ID)
@@ -374,6 +399,17 @@ func (s *Session) finishPermissionDeniedAction(lease *writer.Lease, ticket *writ
 		return result, coreError("backend_unavailable")
 	}
 	return result, coreError("permission_denied")
+}
+
+func (s *Session) finishContextChangedAction(lease *writer.Lease, ticket *writer.Ticket, action Action) (ActionResult, error) {
+	result := notApplied(action.ID)
+	if err := finishLease(lease, ticket, action, result, "state_expired"); err != nil {
+		return s.quarantineLease(lease, action.ID, "journal_persistence_failed")
+	}
+	if err := s.closeActionLease(lease); err != nil {
+		return result, coreError("backend_unavailable")
+	}
+	return result, coreError("state_expired")
 }
 
 func (s *Session) closeActionLease(lease *writer.Lease) error {
