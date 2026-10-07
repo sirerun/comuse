@@ -14,6 +14,7 @@ import (
 	"github.com/sirerun/comuse"
 	"github.com/sirerun/comuse/internal/backend"
 	comusemcp "github.com/sirerun/comuse/mcp"
+	"path/filepath"
 )
 
 func TestMCPParityDefaultRoutesShareCoreEnvelopeAndUnsupportedActions(t *testing.T) {
@@ -37,7 +38,7 @@ func TestMCPParityDefaultRoutesShareCoreEnvelopeAndUnsupportedActions(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"computer_state", "computer_windows", "computer_a11y", "computer_read_element", "computer_wait"}
+	want := []string{"computer_a11y", "computer_read_element", "computer_state", "computer_wait", "computer_windows"}
 	if len(listed.Tools) != len(want) {
 		t.Fatalf("default tool count=%d want=%d", len(listed.Tools), len(want))
 	}
@@ -191,12 +192,13 @@ func TestMCPHostAdvertisesOnlyIndividuallyQualifiedSemanticOperations(t *testing
 
 func TestMCPQualifiedSemanticCallsUseExactArgumentsAndReplayCore(t *testing.T) {
 	backend := newParityMCPActionBackend()
+	root := filepath.Join(t.TempDir(), "journal")
 	session, err := comuse.NewSyntheticSessionForTest(comuse.Config{
 		Backend:          backend,
 		Scope:            comuse.Scope{Processes: []comuse.ProcessIdentity{backend.process}, ExpiresAt: time.Now().Add(time.Hour)},
 		Budget:           comuse.Budget{MaxDepth: 8, MaxNodes: 64, MaxBytes: 16384, Timeout: time.Second},
 		ApprovalProvider: parityMCPApproval{},
-		WriterDirectory:  t.TempDir(),
+		WriterDirectory:  root,
 		WriterKey:        bytes.Repeat([]byte{0x53}, 32),
 		MaxActions:       8,
 	})
@@ -235,7 +237,7 @@ func TestMCPQualifiedSemanticCallsUseExactArgumentsAndReplayCore(t *testing.T) {
 	}
 	click := callAction("computer_click_element", "mcp-click-1", nil)
 	if click.IsError {
-		t.Fatalf("click result: %#v", click.Content)
+		t.Fatalf("click result: %s", click.Content[0].(*sdk.TextContent).Text)
 	}
 	assertSameMCPEnvelope(t, click)
 	clickText := click.Content[0].(*sdk.TextContent).Text
