@@ -31,8 +31,8 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(object["status"] as? String, "error")
     }
 
-    func testPermissionLossPurgesReferencesAndSnapshots() async {
-        await MainActor.run {
+    func testPermissionLossPurgesReferencesAndSnapshots() async throws {
+        try await MainActor.run {
             let process = NativeProcess(pid: 1, bundleID: "example.app", launchID: "1.1")
             let runtime = NativeRuntime(
                 id: 77,
