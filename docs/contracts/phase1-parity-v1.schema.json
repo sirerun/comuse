@@ -626,8 +626,7 @@
             "window_closed",
             "element_exists",
             "element_enabled",
-            "element_checked",
-            "fresh_observation"
+            "element_checked"
           ]
         },
         "satisfied": {
@@ -636,17 +635,28 @@
         "elapsed_ms": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 9007199254740991
         },
         "reason": {
           "enum": [
             "satisfied",
             "timeout",
             "cancelled",
-            "unavailable"
+            "unavailable",
+            "ambiguous"
           ]
         },
         "final_state_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Opaque"
+            }
+          ]
+        },
+        "window_ref": {
           "anyOf": [
             {
               "type": "null"
@@ -662,9 +672,70 @@
         "satisfied",
         "elapsed_ms",
         "reason",
-        "final_state_id"
+        "final_state_id",
+        "window_ref"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "satisfied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "satisfied": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "satisfied": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "condition": {
+                "const": "window_appears"
+              },
+              "satisfied": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "window_ref": {
+                "$ref": "#/$defs/Opaque"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "ambiguous"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "window_ref": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "ActionResult": {
       "type": "object",
@@ -1390,6 +1461,36 @@
               "$ref": "#/$defs/Error"
             }
           ]
+        },
+        "observation_error": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Error"
+            }
+          ]
+        },
+        "completed_steps": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "focus",
+              "press",
+              "pick",
+              "set_value",
+              "unicode",
+              "key_down",
+              "key_up",
+              "mouse_down",
+              "mouse_up",
+              "mouse_move",
+              "scroll",
+              "cleanup"
+            ]
+          },
+          "maxItems": 128
         }
       },
       "required": [
@@ -1407,7 +1508,9 @@
         "usage",
         "observation",
         "result",
-        "error"
+        "error",
+        "observation_error",
+        "completed_steps"
       ],
       "additionalProperties": false,
       "allOf": [
@@ -1624,10 +1727,24 @@
           "then": {
             "properties": {
               "result": {
-                "$ref": "#/$defs/WaitResult"
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/WaitResult"
+                  },
+                  {
+                    "$ref": "#/$defs/LegacySnapshot"
+                  }
+                ]
               },
               "observation": {
-                "type": "null"
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/Snapshot"
+                  }
+                ]
               }
             }
           }
@@ -2337,7 +2454,19 @@
           },
           "maxItems": 8,
           "minItems": 1,
-          "uniqueItems": true
+          "uniqueItems": true,
+          "contains": {
+            "not": {
+              "enum": [
+                "ctrl",
+                "alt",
+                "shift",
+                "meta"
+              ]
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
         },
         "hold_ms": {
           "type": "integer",
@@ -2371,13 +2500,34 @@
           "type": "integer",
           "minimum": -10,
           "maximum": 10
+        },
+        "point": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "action_id",
         "window_ref",
         "dx",
-        "dy"
+        "dy",
+        "point"
       ],
       "additionalProperties": false,
       "not": {

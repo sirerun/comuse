@@ -49,7 +49,9 @@
           "accessibility": "denied"
         }
       },
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -92,7 +94,9 @@
       "error": {
         "code": "invalid_request",
         "message": "invalid_request"
-      }
+      },
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -181,7 +185,9 @@
           "complete": true
         }
       },
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -271,7 +277,9 @@
           "complete": true
         }
       },
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -360,7 +368,9 @@
           "complete": true
         }
       },
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -420,7 +430,9 @@
         "base_state_id": "state-1"
       },
       "result": null,
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -492,7 +504,9 @@
         "removed": []
       },
       "result": null,
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -548,7 +562,9 @@
         "text": "illustrative normal text",
         "truncated": false
       },
-      "error": null
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -598,7 +614,9 @@
         "cleanup": "complete"
       },
       "error": null,
-      "action_id": "example-action"
+      "action_id": "example-action",
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -651,7 +669,9 @@
         "code": "unknown_outcome",
         "message": "unknown_outcome"
       },
-      "action_id": "example-action"
+      "action_id": "example-action",
+      "observation_error": null,
+      "completed_steps": []
     },
     {
       "schema_version": 1,
@@ -704,7 +724,258 @@
         "code": "unknown_outcome",
         "message": "unknown_outcome"
       },
-      "action_id": "example-action"
+      "action_id": "example-action",
+      "observation_error": null,
+      "completed_steps": []
+    },
+    {
+      "schema_version": 1,
+      "status": "ok",
+      "ok": true,
+      "action": "wait",
+      "execution": "not_applied",
+      "method": null,
+      "duration_ms": 0,
+      "state_status": "unavailable",
+      "state": null,
+      "verification": {
+        "status": "unavailable",
+        "reason": "no_postcondition_requested"
+      },
+      "cleanup": "complete",
+      "usage": {
+        "actions": 0,
+        "observations": {
+          "screenshot": 0,
+          "a11y": 0,
+          "state": 0
+        },
+        "semantic_results": {
+          "snapshot": 0,
+          "delta": 0,
+          "unchanged": 0
+        },
+        "baseline_resets": 0,
+        "encoded_image_bytes": 0,
+        "serialized_text_bytes": 0,
+        "images": 0,
+        "retained_bytes": 0,
+        "elapsed_ms": 0,
+        "model_usage": null,
+        "duration_ms": 0
+      },
+      "observation": null,
+      "result": {
+        "condition": "window_appears",
+        "satisfied": true,
+        "elapsed_ms": 125,
+        "reason": "satisfied",
+        "final_state_id": null,
+        "window_ref": "matched-window"
+      },
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
+    },
+    {
+      "schema_version": 1,
+      "status": "ok",
+      "ok": true,
+      "action": "wait",
+      "execution": "not_applied",
+      "method": null,
+      "duration_ms": 30020,
+      "state_status": "unavailable",
+      "state": null,
+      "verification": {
+        "status": "unavailable",
+        "reason": "no_postcondition_requested"
+      },
+      "cleanup": "complete",
+      "usage": {
+        "actions": 0,
+        "observations": {
+          "screenshot": 0,
+          "a11y": 0,
+          "state": 0
+        },
+        "semantic_results": {
+          "snapshot": 0,
+          "delta": 0,
+          "unchanged": 0
+        },
+        "baseline_resets": 0,
+        "encoded_image_bytes": 0,
+        "serialized_text_bytes": 0,
+        "images": 0,
+        "retained_bytes": 0,
+        "elapsed_ms": 0,
+        "model_usage": null,
+        "duration_ms": 0
+      },
+      "observation": {
+        "schema_version": 1,
+        "state_id": "state-1",
+        "scope_id": "scope-1",
+        "window_ref": "window-1",
+        "observed_at": "2026-10-07T00:00:00Z",
+        "action_sequence": 0,
+        "coverage": {
+          "status": "complete",
+          "truncated": false,
+          "limitations": []
+        },
+        "context": {
+          "root_refs": [
+            "element-1"
+          ],
+          "focused_element_ref": null
+        },
+        "kind": "snapshot",
+        "nodes": {
+          "element-1": {
+            "role": "button",
+            "classification": "normal",
+            "parent_ref": null,
+            "child_refs": [],
+            "actions": [
+              "press"
+            ]
+          }
+        },
+        "historical": false
+      },
+      "result": {
+        "window_ref": "window-1",
+        "state_id": "state-1",
+        "observed_at": "2026-10-07T00:00:00Z",
+        "elements": [
+          {
+            "ref": "element-1",
+            "order": 0,
+            "role": "button",
+            "classification": "normal",
+            "actions": [
+              "press"
+            ]
+          }
+        ],
+        "coverage": {
+          "complete": true
+        }
+      },
+      "error": null,
+      "observation_error": null,
+      "completed_steps": []
+    },
+    {
+      "schema_version": 1,
+      "status": "error",
+      "ok": false,
+      "action": "wait",
+      "execution": "not_applied",
+      "method": null,
+      "duration_ms": 0,
+      "state_status": "unavailable",
+      "state": null,
+      "verification": {
+        "status": "unavailable",
+        "reason": "no_postcondition_requested"
+      },
+      "cleanup": "complete",
+      "usage": {
+        "actions": 0,
+        "observations": {
+          "screenshot": 0,
+          "a11y": 0,
+          "state": 0
+        },
+        "semantic_results": {
+          "snapshot": 0,
+          "delta": 0,
+          "unchanged": 0
+        },
+        "baseline_resets": 0,
+        "encoded_image_bytes": 0,
+        "serialized_text_bytes": 0,
+        "images": 0,
+        "retained_bytes": 0,
+        "elapsed_ms": 0,
+        "model_usage": null,
+        "duration_ms": 0
+      },
+      "observation": null,
+      "result": {
+        "condition": "window_closed",
+        "satisfied": false,
+        "elapsed_ms": 10125,
+        "reason": "timeout",
+        "final_state_id": null,
+        "window_ref": "example-window"
+      },
+      "error": {
+        "code": "budget_exceeded",
+        "message": "budget_exceeded"
+      },
+      "observation_error": null,
+      "completed_steps": []
+    },
+    {
+      "schema_version": 1,
+      "status": "ok",
+      "ok": true,
+      "action": "write_element",
+      "execution": "applied",
+      "method": "ax_set_value",
+      "duration_ms": 0,
+      "state_status": "unavailable",
+      "state": null,
+      "verification": {
+        "status": "unavailable",
+        "reason": "no_postcondition_requested"
+      },
+      "cleanup": "complete",
+      "usage": {
+        "actions": 0,
+        "observations": {
+          "screenshot": 0,
+          "a11y": 0,
+          "state": 0
+        },
+        "semantic_results": {
+          "snapshot": 0,
+          "delta": 0,
+          "unchanged": 0
+        },
+        "baseline_resets": 0,
+        "encoded_image_bytes": 0,
+        "serialized_text_bytes": 0,
+        "images": 0,
+        "retained_bytes": 0,
+        "elapsed_ms": 0,
+        "model_usage": null,
+        "duration_ms": 0
+      },
+      "observation": null,
+      "result": {
+        "action_id": "example-action",
+        "execution": "applied",
+        "verification": {
+          "status": "unavailable",
+          "reason": "no_postcondition_requested"
+        },
+        "state_status": "unavailable",
+        "cleanup": "complete"
+      },
+      "error": null,
+      "action_id": "example-action",
+      "observation_error": {
+        "code": "permission_denied",
+        "message": "permission_denied"
+      },
+      "completed_steps": [
+        "set_value"
+      ]
     }
   ]
 }
