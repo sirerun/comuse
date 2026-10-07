@@ -148,9 +148,9 @@ private func validateNativeActionObject(_ object: [String: Any]) throws {
     case "drag": fields = ["x", "y", "end_x", "end_y", "steps", "duration_ms"]
     default: throw ProbeFailure(code: "invalid_request")
     }
-    // Historical Go omitempty fields may be absent, but a supplied field must
-    // be non-null and belong to this action's closed field set.
-    guard strictObjectShape(object, required: common, optional: fields) else {
+    // The Darwin transport emits every required field, including zero values
+    // and empty replacement text; omission must not fabricate those facts.
+    guard strictObjectShape(object, required: common.union(fields)) else {
         throw ProbeFailure(code: "invalid_request")
     }
 }

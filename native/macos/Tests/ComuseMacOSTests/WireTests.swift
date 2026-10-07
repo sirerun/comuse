@@ -362,6 +362,12 @@ final class WireTests: XCTestCase {
         }
         action["element_ref"] = action["element_ref"] ?? ""
         action["state_id"] = action["state_id"] ?? ""
+        switch action["kind"] as? String {
+        case "click": action["hold_ms"] = action["hold_ms"] ?? 0
+        case "type_text": action["delay_ms"] = action["delay_ms"] ?? 0
+        case "press_key": action["hold_ms"] = action["hold_ms"] ?? 0
+        default: break
+        }
         let actionData = try JSONSerialization.data(withJSONObject: action, options: [.sortedKeys])
         let request = #"{"schema_version":1,"request_id":"r","operation":"execute","action":\#(String(decoding: actionData, as: UTF8.self))}"#
         return try XCTUnwrap(decodeNativeRequest(Data(request.utf8)).action)
@@ -376,14 +382,36 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(request.budget?.maxDepth, 8)
     }
 
-    func testDecodeGoPressAndReplaceWithOmittedText() throws {
+    func testDecodeGoPressAndReplaceWithExplicitEmptyText() throws {
         let press = #"{"schema_version":1,"request_id":"r2","operation":"execute","action":{"id":"a1","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"press"}}"#.data(using: .utf8)!
         let decodedPress = try decodeNativeRequest(press)
         XCTAssertEqual(decodedPress.action?.text, "")
 
-        let replace = #"{"schema_version":1,"request_id":"r3","operation":"execute","action":{"id":"a2","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"replace"}}"#.data(using: .utf8)!
+        let replace = #"{"schema_version":1,"request_id":"r3","operation":"execute","action":{"id":"a2","window_ref":"w1","element_ref":"e1","state_id":"s1","kind":"replace","text":""}}"#.data(using: .utf8)!
         let decodedReplace = try decodeNativeRequest(replace)
         XCTAssertEqual(decodedReplace.action?.text, "")
+    }
+
+    func testProductionDecoderRequiresAllActionFieldsIncludingZeroAndEmptyValues() throws {
+        let fields: [[String: Any]] = [
+            ["kind": "replace", "text": ""],
+            ["kind": "click", "x": 0, "y": 0, "button": "left", "count": 1, "hold_ms": 0],
+            ["kind": "type_text", "text": "x", "delay_ms": 0],
+            ["kind": "press_key", "keys": "a", "hold_ms": 0],
+            ["kind": "coordinate_scroll", "x": 0, "y": 0, "dx": 0, "dy": 1],
+            ["kind": "drag", "x": 0, "y": 0, "end_x": 1, "end_y": 1, "steps": 2, "duration_ms": 1]
+        ]
+        for specific in fields {
+            var action: [String: Any] = ["id": "a", "window_ref": "w", "element_ref": "", "state_id": ""]
+            action.merge(specific) { _, new in new }
+            let envelope: [String: Any] = ["schema_version": 1, "request_id": "r", "operation": "execute", "action": action]
+            _ = try decodeNativeRequest(JSONSerialization.data(withJSONObject: envelope))
+            for key in specific.keys where key != "kind" {
+                var missing = action; missing.removeValue(forKey: key)
+                var invalid = envelope; invalid["action"] = missing
+                XCTAssertThrowsError(try decodeNativeRequest(JSONSerialization.data(withJSONObject: invalid)), key)
+            }
+        }
     }
 
     func testProductionDecoderRejectsDuplicateUnknownNullAndExtraneousMembersRecursively() throws {
