@@ -2125,6 +2125,225 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/WaitResult"
+                  },
+                  {
+                    "properties": {
+                      "reason": {
+                        "const": "satisfied"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/WaitResult"
+                  },
+                  {
+                    "properties": {
+                      "reason": {
+                        "const": "timeout"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Error"
+                  },
+                  {
+                    "properties": {
+                      "code": {
+                        "const": "budget_exceeded"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/WaitResult"
+                  },
+                  {
+                    "properties": {
+                      "reason": {
+                        "const": "cancelled"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Error"
+                  },
+                  {
+                    "properties": {
+                      "code": {
+                        "const": "cancelled"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/WaitResult"
+                  },
+                  {
+                    "properties": {
+                      "reason": {
+                        "const": "ambiguous"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Error"
+                  },
+                  {
+                    "properties": {
+                      "code": {
+                        "const": "unsupported"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              },
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/WaitResult"
+                  },
+                  {
+                    "properties": {
+                      "reason": {
+                        "const": "unavailable"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Error"
+                  },
+                  {
+                    "properties": {
+                      "code": {
+                        "enum": [
+                          "invalid_request",
+                          "policy_refused",
+                          "element_stale",
+                          "state_expired",
+                          "permission_denied",
+                          "unsupported",
+                          "backend_unavailable",
+                          "session_closed",
+                          "internal_error"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
         }
       ]
     },
