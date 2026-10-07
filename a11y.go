@@ -186,6 +186,10 @@ func (s *Session) ReadElement(ctx context.Context, windowRef, elementRef, stateI
 		return ElementContent{}, coreError("backend_unavailable")
 	}
 	content.StateID = projection.StateID
+	content.ObservedAt = projection.ObservedAt
+	if len(content.Text) > 8192 {
+		return ElementContent{}, coreError("budget_exceeded")
+	}
 	if exceedsJSONBudget(content, s.budget.MaxBytes) {
 		return ElementContent{}, coreError("budget_exceeded")
 	}

@@ -67,6 +67,14 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 		id := s.sessionID
 		s.mu.Unlock()
 		result = s.ledger.Snapshot(id)
+	case OperationReadElement:
+		target := request.ReadElement
+		var content ElementContent
+		content, err = s.ReadElement(ctx, target.WindowRef, target.ElementRef, target.StateID)
+		if err == nil {
+			read := ReadResult{Kind: "element_content", WindowRef: content.WindowRef, ElementRef: content.ElementRef, StateID: content.StateID, ObservedAt: content.ObservedAt, Text: content.Text, Truncated: false}
+			result, observation = read, read
+		}
 	case OperationObserve:
 		if request.Observe.Mode != "" && request.Observe.Mode != "full" {
 			err = coreError("unsupported")
@@ -139,7 +147,7 @@ func (s *Session) ledgerCall() *CallSnapshot {
 
 func unsupportedOperation(operation Operation) bool {
 	switch operation {
-	case OperationReadElement, OperationClick, OperationTypeText, OperationPressKey, OperationScroll, OperationDrag, OperationFocusWindow:
+	case OperationClick, OperationTypeText, OperationPressKey, OperationScroll, OperationDrag, OperationFocusWindow:
 		return true
 	default:
 		return false
