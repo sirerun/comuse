@@ -86,7 +86,7 @@ func (h *History) Publish(snapshot Snapshot, now time.Time) (Snapshot, error) {
 // Lookup returns only an exact scoped historical state. Missing, foreign, and
 // expired states share one safe error and never disclose retained data.
 func (h *History) Lookup(scopeID, windowRef, stateID string, now time.Time) (Snapshot, error) {
-	if h == nil || !validOpaque(scopeID) || !validOpaque(windowRef) || !validStateID(stateID) {
+	if h == nil || !validOpaque(scopeID) || !validOpaque(windowRef) || !validHistoryStateID(stateID) {
 		return Snapshot{}, errHistoryExpired
 	}
 	h.mu.Lock()
@@ -177,7 +177,7 @@ func (h *History) evictFor(incoming uint64) {
 }
 
 func validateHistorySnapshot(s Snapshot) error {
-	if s.SchemaVersion != SchemaVersion || !validStateID(s.StateID) || !validOpaque(s.ScopeID) || !validOpaque(s.WindowRef) || s.Kind != "snapshot" || s.ActionSequence > MaxJSONInteger {
+	if s.SchemaVersion != SchemaVersion || !validHistoryStateID(s.StateID) || !validOpaque(s.ScopeID) || !validOpaque(s.WindowRef) || s.Kind != "snapshot" || s.ActionSequence > MaxJSONInteger {
 		return errHistoryInvalid
 	}
 	if s.Historical || s.ObservedAt.IsZero() || len(s.ObservedAt.Format(time.RFC3339Nano)) > 40 {
@@ -242,7 +242,7 @@ func validateHistorySnapshot(s Snapshot) error {
 			}
 		} else {
 			parent, ok := s.Nodes[*node.ParentRef]
-			if !ok || !contains(parent.ChildRefs, ref) {
+			if !ok || !historyContains(parent.ChildRefs, ref) {
 				return errHistoryInvalid
 			}
 		}
@@ -337,7 +337,7 @@ func validOpaque(value string) bool {
 	return true
 }
 
-func validStateID(value string) bool {
+func validHistoryStateID(value string) bool {
 	if len(value) != 64 || strings.ToLower(value) != value {
 		return false
 	}
@@ -358,7 +358,7 @@ func validCode(value string) bool {
 	return true
 }
 
-func contains(values []string, want string) bool {
+func historyContains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
 			return true
