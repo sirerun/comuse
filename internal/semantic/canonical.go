@@ -122,7 +122,7 @@ func validateSnapshot(s Snapshot) error {
 	if len(s.Nodes) > MaxNodes {
 		return ErrBudgetExceeded
 	}
-	if len(s.Nodes) == 0 || s.Nodes == nil {
+	if s.Nodes == nil {
 		return ErrInvalidRequest
 	}
 	for ref, n := range s.Nodes {

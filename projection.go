@@ -155,13 +155,19 @@ func projectFullObservation(session *Session, observation Observation) (semantic
 			break
 		}
 	}
-	metadata := projectionBinding{SessionID: session.sessionID, Scope: session.scope, Budget: session.budget,
-		AllowValues: session.allowValues, PolicyVersion: actionPolicyVersion, Epoch: session.permissionEpoch}
-	actionSequence := uint64(max(session.actionsUsed, 0))
 	session.mu.Unlock()
 	if !bound {
 		return semantic.Snapshot{}, coreError("state_expired")
 	}
+	return buildFullObservation(session, observation)
+}
+
+// buildFullObservation is used only after core redaction and topology policy.
+func buildFullObservation(session *Session, observation Observation) (semantic.Snapshot, error) {
+	session.mu.Lock()
+	metadata := projectionBinding{SessionID: session.sessionID, Scope: session.scope, Budget: session.budget, AllowValues: session.allowValues, PolicyVersion: actionPolicyVersion, Epoch: session.permissionEpoch}
+	actionSequence := session.actionSequence
+	session.mu.Unlock()
 	trusted, err := json.Marshal(metadata)
 	if err != nil {
 		return semantic.Snapshot{}, coreError("internal_error")

@@ -16,18 +16,28 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 		call = NewLedger().BeginCall()
 	}
 	if !knownOperation(request.Operation) {
-		return ResultEnvelope{}, coreError("invalid_request")
+		return finishCall(s, call, OperationDoctor, nil, nil, nil, coreError("invalid_request"))
 	}
 	if ctx == nil {
-		return finishCall(s, call, request.Operation, nil, nil, nil, coreError("invalid_request"))
+		return finishCall(s, call, OperationDoctor, nil, nil, nil, coreError("invalid_request"))
 	}
 	ctx = context.WithValue(ctx, accountingContextKey{}, call)
 	if s == nil {
-		return finishCall(s, call, request.Operation, nil, nil, nil, coreError("invalid_request"))
+		return finishCall(s, call, OperationDoctor, nil, nil, nil, coreError("invalid_request"))
 	}
 	if err := request.Validate(); err != nil {
-		return finishCall(s, call, request.Operation, nil, nil, nil, coreError("invalid_request"))
+		return finishCall(s, call, OperationDoctor, nil, nil, nil, coreError("invalid_request"))
 	}
+	callCtx, done, enterErr := s.enter(ctx)
+	if enterErr != nil {
+		if id := requestActionID(request); id != "" {
+			outcome := notApplied(id)
+			return finishCall(s, call, request.Operation, outcome, nil, &outcome, enterErr)
+		}
+		return finishCall(s, call, request.Operation, nil, nil, nil, enterErr)
+	}
+	defer done()
+	ctx = callCtx
 	if unsupportedOperation(request.Operation) {
 		if actionID := requestActionID(request); actionID != "" {
 			outcome := notApplied(actionID)
@@ -41,26 +51,18 @@ func (s *Session) Call(ctx context.Context, request Request) (ResultEnvelope, er
 	var actionResult *ActionResult
 	var err error
 	switch request.Operation {
-	case OperationDoctor, OperationState:
-		var report DoctorReport
-		report, err = s.Doctor(ctx)
-		result = report
+	case OperationDoctor:
+		result, err = s.Doctor(ctx)
+	case OperationState:
+		result, err = s.State(ctx)
 	case OperationWindows:
 		result, err = s.Windows(ctx)
 	case OperationLedger:
-		_, done, enterErr := s.enter(ctx)
-		if enterErr != nil {
-			err = enterErr
-			break
-		}
-		defer done()
 		s.mu.Lock()
-		s.ledger.SetRetainedBytes(uint64(max(s.snapshotBytes, 0)))
+		_ = s.ledger.SetRetainedBytes(uint64(max(s.snapshotBytes, 0)))
+		id := s.sessionID
 		s.mu.Unlock()
-		snapshot := s.ledger.Snapshot(s.sessionID)
-		if _, err = call.ChargeLedgerSnapshot(snapshot); err == nil {
-			result = snapshot
-		}
+		result = s.ledger.Snapshot(id)
 	case OperationObserve:
 		if request.Observe.Mode != "" && request.Observe.Mode != "full" {
 			err = coreError("unsupported")
@@ -153,6 +155,14 @@ func knownOperation(operation Operation) bool {
 
 func requestActionID(request Request) string {
 	switch request.Operation {
+	case OperationClickElement:
+		return request.ClickElement.ActionID
+	case OperationElementAction:
+		return request.ElementAction.ActionID
+	case OperationWriteElement:
+		return request.WriteElement.ActionID
+	case OperationScrollElement:
+		return request.ScrollElement.ActionID
 	case OperationClick:
 		return request.Click.ActionID
 	case OperationTypeText:
@@ -174,6 +184,10 @@ func finishCall(s *Session, call *CallSnapshot, operation Operation, result, obs
 	code := ""
 	if domainErr != nil {
 		code = ErrorCode(domainErr)
+	}
+	if domainErr != nil && actionResult == nil {
+		result = nil
+		observation = nil
 	}
 	resultPayload, payloadErr := projectResult(result)
 	if payloadErr != nil {

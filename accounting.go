@@ -3,6 +3,7 @@ package comuse
 import "context"
 
 type accountingContextKey struct{}
+type stateAccountingKey struct{}
 
 // account records actual attempts in the current call when one exists; direct
 // typed API calls still advance the owning session's cumulative ledger.
