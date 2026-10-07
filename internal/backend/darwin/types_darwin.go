@@ -100,10 +100,11 @@ type runtimeOwner struct {
 }
 
 type nativeBackend struct {
-	owner       *runtimeOwner
-	boundScope  backend.Scope
-	allowValues bool
-	closing     atomic.Bool
-	closed      atomic.Bool
-	inflight    atomic.Int32
+	owner          *runtimeOwner
+	boundScope     backend.Scope
+	allowValues    bool
+	qualifiedInput bool // private admission; zero-valued in every production constructor
+	closing        atomic.Bool
+	closed         atomic.Bool
+	inflight       atomic.Int32
 }

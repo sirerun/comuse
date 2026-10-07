@@ -3,6 +3,126 @@ import XCTest
 @testable import ComuseMacOS
 
 final class WireTests: XCTestCase {
+    func testNativeActionExecutorUsesOneQualifiedMethodPerKind() async throws {
+        try await MainActor.run {
+            let cases: [(String, String, String, String)] = [
+                ("press", "", "ax_press", "press"),
+                ("replace", "new value", "ax_set_value", "set_value"),
+                ("insert", "inserted", "cg_unicode", "unicode")
+            ]
+            for (kind, text, method, step) in cases {
+                let action = try Self.decodeAction(kind: kind, text: text)
+                let access = FakeNativeActionAccess()
+                let poster = FakeNativeUnicodePoster()
+                let result = try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)
+                XCTAssertEqual(access.dispatchCount, 1)
+                XCTAssertEqual(access.dispatchedMethod, method)
+                XCTAssertEqual(result["method"] as? String, method)
+                XCTAssertEqual(result["completed_steps"] as? [String], [step])
+                XCTAssertEqual(result["execution"] as? String, "applied")
+                XCTAssertEqual(poster.values, kind == "insert" ? [text] : [])
+            }
+        }
+    }
+
+    func testNativeActionExecutorFailsClosedOnUnqualifiedOrUncertainTarget() async throws {
+        try await MainActor.run {
+            let runtime = NativeRuntime(id: 78,
+                                        config: NativeConfig(schemaVersion: 1,
+                                                             scope: NativeScope(processes: [], expiresAtUnixMilli: 1),
+                                                             allowValues: false),
+                                        processes: [])
+            let action = try Self.decodeAction(kind: "press", text: "")
+            XCTAssertThrowsError(try runtime.executeScopedAction(
+                NativeRequest(schemaVersion: 1, requestID: "r", operation: "execute", windowRef: nil,
+                              elementRef: nil, stateID: nil, budget: nil, action: action), requestID: 0)) { error in
+                XCTAssertEqual((error as? ProbeFailure)?.code, "unsupported")
+            }
+
+            let access = FakeNativeActionAccess()
+            let poster = FakeNativeUnicodePoster()
+            access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                               process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                               role: "AXButton", classification: "unknown", enabled: true, focused: true, windowFocused: true)
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)) { error in
+                XCTAssertEqual((error as? ProbeFailure)?.code, "policy_refused")
+            }
+            XCTAssertEqual(access.dispatchCount, 0)
+        }
+    }
+
+    func testNativeActionExecutorDoesNotRetryAfterUncertainDispatch() async throws {
+        try await MainActor.run {
+            let access = FakeNativeActionAccess()
+            access.failure = ProbeFailure(code: "unknown_outcome")
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: FakeNativeUnicodePoster())
+                .execute(try Self.decodeAction(kind: "press", text: ""), requestID: 0)) { error in
+                XCTAssertEqual((error as? ProbeFailure)?.code, "unknown_outcome")
+            }
+            XCTAssertEqual(access.dispatchCount, 1)
+        }
+    }
+
+    func testNativeActionExecutorRejectsStaleIdentityFocusAndUnreliableSelectionBeforeDispatch() async throws {
+        try await MainActor.run {
+            let action = try Self.decodeAction(kind: "insert", text: "x")
+            let poster = FakeNativeUnicodePoster()
+            let access = FakeNativeActionAccess()
+
+            access.target = NativeActionTarget(actionID: "other", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                               process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                               role: "AXTextField", classification: "normal", enabled: true, focused: true, windowFocused: true)
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0))
+            XCTAssertEqual(access.dispatchCount, 0)
+
+            access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                               process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                               role: "AXTextField", classification: "normal", enabled: true, focused: true, windowFocused: false)
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)) { error in
+                XCTAssertEqual((error as? ProbeFailure)?.code, "state_expired")
+            }
+            XCTAssertEqual(access.dispatchCount, 0)
+
+            access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                               process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                               role: "AXTextField", classification: "normal", enabled: true, focused: false, windowFocused: true)
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0))
+            XCTAssertEqual(access.dispatchCount, 0)
+
+            access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                               process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                               role: "AXTextField", classification: "normal", enabled: true, focused: true, windowFocused: true)
+            access.textSelection = NativeTextSelection(text: "short", location: 5, length: 1)
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)) { error in
+                XCTAssertEqual((error as? ProbeFailure)?.code, "state_expired")
+            }
+            XCTAssertEqual(access.dispatchCount, 0)
+
+            access.textSelection = NativeTextSelection(text: "short", location: 5, length: 0)
+            access.supportsActions = false
+            XCTAssertThrowsError(try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)) { error in
+                XCTAssertEqual((error as? ProbeFailure)?.code, "unsupported")
+            }
+            XCTAssertEqual(access.dispatchCount, 0)
+            XCTAssertTrue(poster.values.isEmpty)
+        }
+    }
+
+    func testNativeActionTextBoundsAreUTF8Bytes() throws {
+        XCTAssertTrue(validNativeAction(try Self.decodeAction(kind: "replace", text: "")))
+        XCTAssertFalse(validNativeAction(try Self.decodeAction(kind: "insert", text: "")))
+        XCTAssertTrue(validNativeAction(try Self.decodeAction(kind: "insert", text: "🙂")))
+        XCTAssertFalse(validNativeAction(try Self.decodeAction(kind: "replace", text: String(repeating: "x", count: 8193))))
+        XCTAssertTrue(validNativeTextSelection(NativeTextSelection(text: "a🙂b", location: 1, length: 2)))
+        XCTAssertFalse(validNativeTextSelection(NativeTextSelection(text: "a🙂b", location: 4, length: 1)))
+    }
+
+    private static func decodeAction(kind: String, text: String) throws -> NativeAction {
+        let value: [String: Any] = ["id": "a1", "window_ref": "w1", "element_ref": "e1",
+                                    "state_id": "s1", "kind": kind, "text": text]
+        return try JSONDecoder().decode(NativeAction.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+
     func testDecodeGoObserveRequest() throws {
         let payload = #"{"schema_version":1,"request_id":"r1","operation":"observe","window_ref":"w1","budget":{"max_depth":8,"max_nodes":64,"max_bytes":8192,"timeout":1000000000}}"#.data(using: .utf8)!
         let request = try JSONDecoder().decode(NativeRequest.self, from: payload)
@@ -102,4 +222,34 @@ final class WireTests: XCTestCase {
         XCTAssertFalse(depthIsIncluded(leafAtFrontierDepth, maximum: maxDepth))
         XCTAssertTrue(depthIsIncluded(maxDepth - 1, maximum: maxDepth))
     }
+}
+
+@MainActor private final class FakeNativeActionAccess: NativeActionAccess {
+    var target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                    process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                    role: "AXButton", classification: "normal", enabled: true, focused: false, windowFocused: true)
+    var dispatchCount = 0
+    var dispatchedMethod: String?
+    var failure: Error?
+    var textSelection = NativeTextSelection(text: "hello", location: 1, length: 0)
+    var supportsActions = true
+
+    func check(requestID: UInt64, deadline: TimeInterval) throws {}
+    func revalidate(_ action: NativeAction) throws -> NativeActionTarget { target }
+    func supports(_ kind: String, target: NativeActionTarget) throws -> Bool { supportsActions }
+    func selection(target: NativeActionTarget) throws -> NativeTextSelection { textSelection }
+    func dispatch(_ action: NativeAction, target: NativeActionTarget, method: String,
+                  poster: NativeUnicodePoster) throws -> NativeActionDispatch {
+        dispatchCount += 1
+        dispatchedMethod = method
+        if let failure { throw failure }
+        if method == "cg_unicode" { try poster.post(action.text) }
+        let step = ["ax_press": "press", "ax_set_value": "set_value", "cg_unicode": "unicode"][method] ?? ""
+        return NativeActionDispatch(method: method, completedSteps: [step], execution: "applied")
+    }
+}
+
+@MainActor private final class FakeNativeUnicodePoster: NativeUnicodePoster {
+    var values: [String] = []
+    func post(_ text: String) throws { values.append(text) }
 }

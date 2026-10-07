@@ -1,7 +1,9 @@
 import AppKit
 import ApplicationServices
 import CoreFoundation
+import CoreGraphics
 import CryptoKit
+import Darwin
 import Foundation
 
 enum NativeReferenceKind: Equatable { case window, element }
@@ -285,7 +287,118 @@ extension NativeRuntime {
         case "insert" where !action.text.isEmpty: break
         default: throw ProbeFailure(code: "invalid_request")
         }
-        throw ProbeFailure(code: "unsupported")
+        // Production input remains closed until the independent live gate. The
+        // executor itself is exercised with a private fake access layer in tests.
+        guard nativeActionDispatchEnabled else { throw ProbeFailure(code: "unsupported") }
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        return try NativeActionExecutor(access: AXActionAccess(runtime: self, requestID: requestID, deadline: deadline),
+                                        poster: QuartzUnicodePoster())
+            .execute(action, requestID: requestID)
+    }
+}
+
+// This is deliberately a private source switch, not a public configuration or
+// environment override. It remains false in every shipping build.
+private let nativeActionDispatchEnabled = false
+
+@MainActor
+private struct AXActionAccess: NativeActionAccess {
+    let runtime: NativeRuntime
+    let requestID: UInt64
+    let deadline: TimeInterval
+
+    func check(requestID: UInt64, deadline: TimeInterval) throws {
+        try runtime.checkDeadline(requestID, deadline: deadline)
+    }
+
+    func revalidate(_ action: NativeAction) throws -> NativeActionTarget {
+        try check(requestID: requestID, deadline: deadline)
+        let prior = try runtime.validateSnapshot(action.stateID, windowRef: action.windowRef,
+                                                 requestID: requestID, budget: nil)
+        guard prior.complete, prior.process == (try runtime.resolve(action.windowRef, kind: .window).process),
+              prior.refs.contains(action.elementRef) else { throw ProbeFailure(code: "state_expired") }
+        let window = try runtime.resolve(action.windowRef, kind: .window)
+        let element = try runtime.resolve(action.elementRef, kind: .element, windowRef: action.windowRef)
+        let process = try runtime.matchingProcess(window.process)
+        guard process == element.process, process == prior.process else { throw ProbeFailure(code: "element_stale") }
+        let role = stringAttribute(element.element, kAXRoleAttribute) ?? ""
+        let subrole = stringAttribute(element.element, kAXSubroleAttribute)
+        let classification = classify(role: role, subrole: subrole)
+        guard classification == "normal", role == "AXButton" || role == "AXTextField" else {
+            throw ProbeFailure(code: classification == "secure" ? "policy_refused" : "unsupported")
+        }
+        let focusedWindow = copyAttribute(AXUIElementCreateApplication(process.pid), kAXFocusedWindowAttribute as String)
+        guard let focusedWindow, CFEqual(focusedWindow, window.element) else { throw ProbeFailure(code: "state_expired") }
+        return NativeActionTarget(actionID: action.id, windowRef: action.windowRef,
+                                  elementRef: action.elementRef, stateID: action.stateID,
+                                  process: process, role: role, classification: classification,
+                                  enabled: boolAttribute(element.element, kAXEnabledAttribute),
+                                  focused: boolAttribute(element.element, kAXFocusedAttribute) == true,
+                                  windowFocused: true)
+    }
+
+    func supports(_ kind: String, target: NativeActionTarget) throws -> Bool {
+        guard target.classification == "normal" else { return false }
+        let ref = target.elementRef
+        let entry = try runtime.resolve(ref, kind: .element, windowRef: target.windowRef)
+        switch kind {
+        case "press":
+            var names: CFArray?
+            return target.role == "AXButton" && AXUIElementCopyActionNames(entry.element, &names) == .success &&
+                (names as? [String])?.contains(kAXPressAction as String) == true
+        case "replace":
+            var settable = DarwinBoolean(false)
+            return target.role == "AXTextField" &&
+                AXUIElementIsAttributeSettable(entry.element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+        case "insert":
+            guard target.role == "AXTextField" else { return false }
+            guard CGPreflightPostEventAccess() else { throw ProbeFailure(code: "permission_denied") }
+            return CGEventSource(stateID: .hidSystemState) != nil
+        default: return false
+        }
+    }
+
+    func selection(target: NativeActionTarget) throws -> NativeTextSelection {
+        let entry = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
+        guard let current = allowedValue(entry.element, classification: target.classification, role: target.role),
+              !current.truncated,
+              let rawRange = copyAttribute(entry.element, kAXSelectedTextRangeAttribute as String) else {
+            throw ProbeFailure(code: "unsupported")
+        }
+        var range = CFRange(location: 0, length: 0)
+        let value = unsafeBitCast(rawRange, to: AXValue.self)
+        guard AXValueGetType(value) == .cfRange, AXValueGetValue(value, .cfRange, &range) else {
+            throw ProbeFailure(code: "state_expired")
+        }
+        let selection = NativeTextSelection(text: current.text, location: range.location, length: range.length)
+        guard validNativeTextSelection(selection) else { throw ProbeFailure(code: "state_expired") }
+        return selection
+    }
+
+    func dispatch(_ action: NativeAction, target: NativeActionTarget, method: String,
+                  poster: NativeUnicodePoster) throws -> NativeActionDispatch {
+        try check(requestID: requestID, deadline: deadline)
+        guard try revalidate(action) == target else { throw ProbeFailure(code: "state_expired") }
+        try check(requestID: requestID, deadline: deadline)
+        let entry = try runtime.resolve(target.elementRef, kind: .element, windowRef: target.windowRef)
+        guard try runtime.matchingProcess(target.process) == target.process,
+              target.classification == "normal" else { throw ProbeFailure(code: "element_stale") }
+        let error: AXError
+        switch method {
+        case "ax_press": error = AXUIElementPerformAction(entry.element, kAXPressAction as CFString)
+        case "ax_set_value": error = AXUIElementSetAttributeValue(entry.element, kAXValueAttribute as CFString, action.text as CFString)
+        case "cg_unicode":
+            _ = try selection(target: target) // Recheck immediately before the only event dispatch.
+            try poster.post(action.text)
+            return NativeActionDispatch(method: method, completedSteps: ["unicode"], execution: "applied")
+        default: throw ProbeFailure(code: "unsupported")
+        }
+        guard error == .success else {
+            // AX errors can be ambiguous after the request crossed the process
+            // boundary. Never try another method or report a clean failure.
+            throw ProbeFailure(code: "unknown_outcome")
+        }
+        return NativeActionDispatch(method: method, completedSteps: [action.kind == "press" ? "press" : "set_value"], execution: "applied")
     }
 }
 
@@ -355,11 +468,7 @@ private func children(of element: AXUIElement, limit: Int) -> (values: [AXUIElem
 }
 
 private func advertisedActions(_ element: AXUIElement, role: String) -> [String] {
-    var names: CFArray?
-    guard AXUIElementCopyActionNames(element, &names) == .success,
-          let actions = names as? [String] else { return [] }
-    if role == "AXButton", actions.contains(kAXPressAction as String) { return ["press"] }
-    if role == "AXTextField" { return ["replace", "insert"] }
+    // Input is not a qualified runtime capability in any shipped branch.
     return []
 }
 
