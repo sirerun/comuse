@@ -825,7 +825,7 @@ func validSafeActionMetadata(value SafeActionMetadata) bool {
 		return true
 	}
 	switch value.Action {
-	case "", "read_value", "replace", "insert", "press":
+	case "", "read_value", "replace", "insert", "press", "pick", "focus", "scroll":
 	default:
 		return false
 	}
