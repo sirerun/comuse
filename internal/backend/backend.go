@@ -77,6 +77,8 @@ type Element struct {
 	Label          string   `json:"label,omitempty"`
 	Value          *string  `json:"value,omitempty"`
 	Enabled        *bool    `json:"enabled,omitempty"`
+	Checked        *bool    `json:"checked,omitempty"`
+	Selected       *bool    `json:"selected,omitempty"`
 	Actions        []string `json:"actions,omitempty"`
 	Classification string   `json:"classification"`
 }
@@ -101,14 +103,27 @@ type ElementContent struct {
 	Text       string    `json:"text"`
 }
 type Action struct {
-	ID         string `json:"id"`
-	WindowRef  string `json:"window_ref"`
-	ElementRef string `json:"element_ref"`
-	StateID    string `json:"state_id"`
-	Kind       string `json:"kind"`
-	Text       string `json:"text,omitempty"`
-	Direction  string `json:"direction,omitempty"`
-	Amount     string `json:"amount,omitempty"`
+	ID         string  `json:"id"`
+	WindowRef  string  `json:"window_ref"`
+	ElementRef string  `json:"element_ref"`
+	StateID    string  `json:"state_id"`
+	Kind       string  `json:"kind"`
+	Text       string  `json:"text,omitempty"`
+	Direction  string  `json:"direction,omitempty"`
+	Amount     string  `json:"amount,omitempty"`
+	X          float64 `json:"x,omitempty"`
+	Y          float64 `json:"y,omitempty"`
+	EndX       float64 `json:"end_x,omitempty"`
+	EndY       float64 `json:"end_y,omitempty"`
+	Button     string  `json:"button,omitempty"`
+	Count      int     `json:"count,omitempty"`
+	HoldMS     int     `json:"hold_ms,omitempty"`
+	DelayMS    int     `json:"delay_ms,omitempty"`
+	Keys       string  `json:"keys,omitempty"`
+	DX         int     `json:"dx,omitempty"`
+	DY         int     `json:"dy,omitempty"`
+	Steps      int     `json:"steps,omitempty"`
+	DurationMS int     `json:"duration_ms,omitempty"`
 }
 
 // Closed result vocabulary follows RFC 0001 section 5.3.
@@ -136,6 +151,12 @@ const (
 	ActionScroll                                 = "scroll"
 	ActionPick                                   = "pick"
 	ActionFocus                                  = "focus"
+	ActionClick                                  = "click"
+	ActionTypeText                               = "type_text"
+	ActionPressKey                               = "press_key"
+	ActionCoordinateScroll                       = "coordinate_scroll"
+	ActionDrag                                   = "drag"
+	ActionFocusWindow                            = "focus_window"
 )
 
 type Verification struct {
