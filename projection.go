@@ -81,7 +81,7 @@ func projectLegacyObservation(value Observation) MetadataLegacySnapshot {
 	for _, element := range value.Elements {
 		elements = append(elements, MetadataLegacyElement{
 			Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order, Role: element.Role,
-			Label: element.Label, Value: cloneString(element.Value), Enabled: cloneBool(element.Enabled),
+			Label: element.Label, Value: cloneString(element.Value), Enabled: cloneBool(element.Enabled), Checked: cloneBool(element.Checked), Selected: cloneBool(element.Selected),
 			Actions: append([]string{}, element.Actions...), Classification: element.Classification,
 		})
 	}
@@ -193,7 +193,7 @@ func buildFullObservation(session *Session, observation Observation) (semantic.S
 			roots = append(roots, orderedRef{element.Ref, element.Order})
 		}
 		nodes[element.Ref] = semantic.Node{Role: element.Role, Classification: element.Classification, Label: nonemptyString(element.Label),
-			Value: cloneString(element.Value), ParentRef: parent, ChildRefs: []string{}, Enabled: cloneBool(element.Enabled),
+			Value: cloneString(element.Value), ParentRef: parent, ChildRefs: []string{}, Enabled: cloneBool(element.Enabled), Checked: cloneBool(element.Checked), Selected: cloneBool(element.Selected),
 			Actions: append([]string{}, element.Actions...)}
 	}
 	byOrder := func(refs []orderedRef) {
