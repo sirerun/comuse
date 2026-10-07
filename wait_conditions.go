@@ -25,7 +25,9 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 		return result, coreError("budget_exceeded")
 	}
 
+	permissionEpoch := s.currentPermissionEpoch()
 	var boundProcess *ProcessIdentity
+	var boundElement *Element
 	if params.Condition == "window_closed" || isElementWait(params.Condition) {
 		window, ok := s.window(params.WindowRef)
 		if !ok {
@@ -39,9 +41,11 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 		if !ok {
 			return result, coreError("state_expired")
 		}
-		if !normalTarget(prior.public, params.ElementRef) {
+		target := findNormalElement(prior.public, params.ElementRef)
+		if target == nil {
 			return result, coreError("element_stale")
 		}
+		boundElement = &Element{Ref: target.Ref, Role: target.Role, Classification: target.Classification}
 	}
 	if params.WindowRef != "" {
 		ref := params.WindowRef
@@ -52,6 +56,9 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 			return result, err
 		}
 	}
+	if s.currentPermissionEpoch() != permissionEpoch {
+		return result, coreError("permission_denied")
+	}
 
 	pollInterval := time.Duration(params.PollIntervalMS) * time.Millisecond
 	if pollInterval == 0 {
@@ -61,23 +68,12 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutMS)*time.Millisecond)
 	defer cancel()
 	for {
-		matched, stateID, windowRef, pollErr := s.pollWaitCondition(waitCtx, params, boundProcess)
+		matched, stateID, windowRef, pollErr := s.pollWaitCondition(waitCtx, params, boundProcess, boundElement)
 		if stateID != nil {
 			result.FinalStateID = stateID
 		}
 		if windowRef != nil {
 			result.WindowRef = windowRef
-		}
-		if pollErr != nil {
-			result.ElapsedMS = elapsedMilliseconds(started)
-			if params.Condition == "window_appears" && pollErr == errAmbiguousWaitWindow {
-				result.Reason = "ambiguous"
-			} else if ctx.Err() != nil || ErrorCode(pollErr) == "cancelled" {
-				result.Reason = "cancelled"
-			} else if waitCtx.Err() != nil {
-				result.Reason = "timeout"
-			}
-			return result, pollErr
 		}
 		if waitCtx.Err() != nil {
 			result.ElapsedMS = elapsedMilliseconds(started)
@@ -87,6 +83,23 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 			}
 			result.Reason = "timeout"
 			return result, coreError("budget_exceeded")
+		}
+		if err := s.revalidateWaitIdentity(params, boundProcess); err != nil {
+			result.ElapsedMS = elapsedMilliseconds(started)
+			return result, err
+		}
+		if s.currentPermissionEpoch() != permissionEpoch {
+			result.ElapsedMS = elapsedMilliseconds(started)
+			return result, coreError("permission_denied")
+		}
+		if pollErr != nil {
+			result.ElapsedMS = elapsedMilliseconds(started)
+			if params.Condition == "window_appears" && pollErr == errAmbiguousWaitWindow {
+				result.Reason = "ambiguous"
+			} else if ErrorCode(pollErr) == "cancelled" {
+				result.Reason = "cancelled"
+			}
+			return result, pollErr
 		}
 		if matched {
 			result.Satisfied = true
@@ -123,7 +136,7 @@ func (s *Session) WaitCondition(ctx context.Context, params WaitParams) (WaitRes
 	}
 }
 
-func (s *Session) pollWaitCondition(ctx context.Context, params WaitParams, boundProcess *ProcessIdentity) (bool, *string, *string, error) {
+func (s *Session) pollWaitCondition(ctx context.Context, params WaitParams, boundProcess *ProcessIdentity, boundElement *Element) (bool, *string, *string, error) {
 	switch params.Condition {
 	case "window_appears":
 		windows, err := s.Windows(ctx)
@@ -191,16 +204,13 @@ func (s *Session) pollWaitCondition(ctx context.Context, params WaitParams, boun
 			return false, nil, nil, err
 		}
 		stateID := observation.StateID
-		if stateID != params.StateID {
-			return false, &stateID, nil, coreError("element_stale")
-		}
 		state := &stateID
 		if !observation.Coverage.Complete {
 			return false, state, nil, coreError("backend_unavailable")
 		}
 		element := findNormalElement(observation, params.ElementRef)
-		if element == nil {
-			return false, state, nil, nil
+		if element == nil || boundElement == nil || element.Ref != boundElement.Ref || element.Role != boundElement.Role || element.Classification != boundElement.Classification {
+			return false, state, nil, coreError("element_stale")
 		}
 		if params.Condition == "element_exists" {
 			windowRef := params.WindowRef
@@ -220,6 +230,17 @@ func (s *Session) pollWaitCondition(ctx context.Context, params WaitParams, boun
 	default:
 		return false, nil, nil, coreError("invalid_request")
 	}
+}
+
+func (s *Session) revalidateWaitIdentity(params WaitParams, boundProcess *ProcessIdentity) error {
+	if params.Condition == "window_appears" {
+		return s.validateWaitProcessRef(params.ProcessRef)
+	}
+	if boundProcess != nil {
+		_, err := s.ProcessRef(*boundProcess)
+		return err
+	}
+	return nil
 }
 
 func (s *Session) validateWaitProcessRef(processRef string) error {

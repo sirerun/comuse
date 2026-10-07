@@ -112,6 +112,117 @@ func TestWaitConditionUsesFreshStateAndReturnsCanonicalMetadata(t *testing.T) {
 	}
 }
 
+type changingBooleanWaitBackend struct {
+	*fakeBackend
+	mu2            sync.Mutex
+	pollObserves   int
+	firstPollReady chan struct{}
+}
+
+func (b *changingBooleanWaitBackend) Observe(ctx context.Context, windowRef string, budget Budget) (Observation, error) {
+	observation, err := (&semanticBooleanWaitBackend{fakeBackend: b.fakeBackend}).Observe(ctx, windowRef, budget)
+	if err != nil {
+		return observation, err
+	}
+	b.mu2.Lock()
+	b.pollObserves++
+	if b.pollObserves == 2 {
+		close(b.firstPollReady)
+	}
+	b.mu2.Unlock()
+	return observation, nil
+}
+
+func TestWaitConditionObservesCheckedTransitionAcrossFreshStateIDs(t *testing.T) {
+	checked := false
+	base := &fakeBackend{process: testProcess(), nativeState: "wait-state", elements: []Element{{Ref: "normal-1", Role: "AXCheckBox", Classification: "normal", Checked: &checked}}}
+	backend := &changingBooleanWaitBackend{fakeBackend: base, firstPollReady: make(chan struct{})}
+	session := newWaitTestSession(t, backend, testProcess())
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		result WaitResult
+		err    error
+	}, 1)
+	go func() {
+		result, waitErr := session.WaitCondition(context.Background(), WaitParams{
+			Condition: "element_checked", WindowRef: "window-1", ElementRef: "normal-1", StateID: initial.StateID,
+			Expected: boolPointer(true), TimeoutMS: 900,
+		})
+		done <- struct {
+			result WaitResult
+			err    error
+		}{result: result, err: waitErr}
+	}()
+	select {
+	case <-backend.firstPollReady:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not perform its first fresh element read")
+	}
+	base.mu.Lock()
+	base.elements[0].Checked = boolPointer(true)
+	base.mu.Unlock()
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || !outcome.result.Satisfied || outcome.result.Reason != "satisfied" || outcome.result.FinalStateID == nil || *outcome.result.FinalStateID == initial.StateID {
+			t.Fatalf("transition wait = (%+v, %v), initial state %s", outcome.result, outcome.err, initial.StateID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe checked transition")
+	}
+}
+
+func TestWaitConditionObservesEnabledTransitionAcrossFreshStateIDs(t *testing.T) {
+	enabled := false
+	base := &fakeBackend{process: testProcess(), nativeState: "wait-state", elements: []Element{{Ref: "normal-1", Role: "AXTextField", Classification: "normal", Enabled: &enabled}}}
+	backend := &changingBooleanWaitBackend{fakeBackend: base, firstPollReady: make(chan struct{})}
+	session := newWaitTestSession(t, backend, testProcess())
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		result WaitResult
+		err    error
+	}, 1)
+	go func() {
+		result, waitErr := session.WaitCondition(context.Background(), WaitParams{
+			Condition: "element_enabled", WindowRef: "window-1", ElementRef: "normal-1", StateID: initial.StateID,
+			Expected: boolPointer(true), TimeoutMS: 900,
+		})
+		done <- struct {
+			result WaitResult
+			err    error
+		}{result: result, err: waitErr}
+	}()
+	select {
+	case <-backend.firstPollReady:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not perform its first fresh element read")
+	}
+	base.mu.Lock()
+	base.elements[0].Enabled = boolPointer(true)
+	base.mu.Unlock()
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || !outcome.result.Satisfied || outcome.result.Reason != "satisfied" || outcome.result.FinalStateID == nil || *outcome.result.FinalStateID == initial.StateID {
+			t.Fatalf("transition wait = (%+v, %v), initial state %s", outcome.result, outcome.err, initial.StateID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe enabled transition")
+	}
+}
+
 func TestWaitConditionDoesNotInventMissingBooleanAndPreservesSelected(t *testing.T) {
 	checked, selected := false, true
 	session := &Session{budget: testBudget(), sessionID: "wait-projection", now: time.Now}
@@ -182,6 +293,90 @@ func TestWaitConditionRejectsExpiredElementIdentityBeforeFreshRead(t *testing.T)
 	if after.Observations.State != before.Observations.State || after.Observations.A11y != before.Observations.A11y {
 		t.Fatalf("expired identity caused fresh reads: before=%+v after=%+v", before.Observations, after.Observations)
 	}
+}
+
+func TestWaitConditionRejectsReusedRoleAndPermissionEpochChange(t *testing.T) {
+	checked := false
+	base := &fakeBackend{process: testProcess(), nativeState: "wait-state", elements: []Element{{Ref: "normal-1", Role: "AXCheckBox", Classification: "normal", Checked: &checked}}}
+	backend := &semanticBooleanWaitBackend{fakeBackend: base}
+	session := newWaitTestSession(t, backend, testProcess())
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prior, err := session.Observe(context.Background(), "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.mu.Lock()
+	base.elements[0].Role = "AXTextField"
+	base.mu.Unlock()
+	_, err = session.WaitCondition(context.Background(), WaitParams{
+		Condition: "element_checked", WindowRef: "window-1", ElementRef: "normal-1", StateID: prior.StateID,
+		Expected: boolPointer(true), TimeoutMS: 100,
+	})
+	if ErrorCode(err) != "element_stale" {
+		t.Fatalf("reused element role error = %v, want element_stale", err)
+	}
+
+	epochBackend := &permissionEpochWaitBackend{fakeBackend: &fakeBackend{process: testProcess(), nativeState: "wait-state"}}
+	epochSession := newWaitTestSession(t, epochBackend, testProcess())
+	t.Cleanup(func() { _ = epochSession.Close(context.Background()) })
+	if _, err := epochSession.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	epochBackend.onNextWindows = epochSession.invalidateSemanticState
+	result, err := epochSession.WaitCondition(context.Background(), WaitParams{Condition: "window_closed", WindowRef: "window-1", TimeoutMS: 100})
+	if ErrorCode(err) != "permission_denied" || result.Satisfied {
+		t.Fatalf("permission epoch change = (%+v, %v), want permission_denied", result, err)
+	}
+}
+
+type permissionEpochWaitBackend struct {
+	*fakeBackend
+	onNextWindows func()
+}
+
+func (b *permissionEpochWaitBackend) Windows(ctx context.Context, budget Budget) ([]Window, error) {
+	if b.onNextWindows != nil {
+		change := b.onNextWindows
+		b.onNextWindows = nil
+		change()
+	}
+	return b.fakeBackend.Windows(ctx, budget)
+}
+
+func TestWindowClosedRejectsScopeExpiryDuringEnumeration(t *testing.T) {
+	backend := &expireScopeWaitBackend{fakeBackend: &fakeBackend{process: testProcess(), nativeState: "wait-state"}}
+	session := newWaitTestSession(t, backend, testProcess())
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if _, err := session.Windows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	backend.expire = func() {
+		session.mu.Lock()
+		session.scope.ExpiresAt = time.Now().Add(-time.Second)
+		session.mu.Unlock()
+	}
+	result, err := session.WaitCondition(context.Background(), WaitParams{Condition: "window_closed", WindowRef: "window-1", TimeoutMS: 100})
+	if ErrorCode(err) != "state_expired" || result.Satisfied {
+		t.Fatalf("scope expiry during enumeration = (%+v, %v), want state_expired", result, err)
+	}
+}
+
+type expireScopeWaitBackend struct {
+	*fakeBackend
+	expire func()
+}
+
+func (b *expireScopeWaitBackend) Windows(ctx context.Context, budget Budget) ([]Window, error) {
+	if b.expire != nil {
+		change := b.expire
+		b.expire = nil
+		change()
+		return []Window{}, nil
+	}
+	return b.fakeBackend.Windows(ctx, budget)
 }
 
 func TestWindowClosedRequiresSuccessfulFreshEnumeration(t *testing.T) {
