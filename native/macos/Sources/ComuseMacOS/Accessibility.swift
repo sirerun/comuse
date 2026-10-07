@@ -14,6 +14,24 @@ func nativeAXValue(_ raw: CFTypeRef) -> AXValue? {
     return unsafeBitCast(raw, to: AXValue.self)
 }
 
+func nativeAXMessagingTimeout(remaining: TimeInterval) -> Float? {
+    guard remaining.isFinite, remaining > 0 else { return nil }
+    var timeout = Float(remaining)
+    guard timeout.isFinite, timeout > 0 else { return nil }
+    if Double(timeout) > remaining { timeout = timeout.nextDown }
+    return timeout.isFinite && timeout > 0 && Double(timeout) <= remaining ? timeout : nil
+}
+
+func configureNativeAXMessagingTimeout(_ element: AXUIElement, deadline: TimeInterval) throws {
+    let remaining = deadline - ProcessInfo.processInfo.systemUptime
+    guard let timeout = nativeAXMessagingTimeout(remaining: remaining) else {
+        throw ProbeFailure(code: "budget_exceeded")
+    }
+    guard AXUIElementSetMessagingTimeout(element, timeout) == .success else {
+        throw ProbeFailure(code: "backend_unavailable")
+    }
+}
+
 
 func nativeElementIdentityIsCurrent(actualPID: Int32, expected: NativeProcess, current: NativeProcess) -> Bool {
     actualPID > 0 && actualPID == expected.pid && current == expected
@@ -115,9 +133,11 @@ extension NativeRuntime {
         set { SnapshotStore.shared.set(runtimeID: id, value: newValue) }
     }
 
-    func retain(_ element: AXUIElement, process: NativeProcess, windowRef: String?, kind: NativeReferenceKind) throws -> String {
+    func retain(_ element: AXUIElement, process: NativeProcess, windowRef: String?, kind: NativeReferenceKind,
+                deadline: TimeInterval? = nil) throws -> String {
         let currentProcess = try matchingProcess(process)
         var actualPID: pid_t = 0
+        if let deadline { try configureNativeAXMessagingTimeout(element, deadline: deadline) }
         guard currentProcess == process,
               AXUIElementGetPid(element, &actualPID) == .success,
               actualPID == process.pid,
@@ -141,7 +161,8 @@ extension NativeRuntime {
         return ref
     }
 
-    func resolve(_ ref: String, kind: NativeReferenceKind, windowRef: String? = nil) throws -> NativeReference {
+    func resolve(_ ref: String, kind: NativeReferenceKind, windowRef: String? = nil,
+                 deadline: TimeInterval? = nil) throws -> NativeReference {
         let desktopGeneration = try refreshDesktopGeneration()
         guard validOpaque(ref), let entry = references[ref], entry.kind == kind,
               desktopReferenceIsCurrent(issued: entry.desktopGeneration, current: desktopGeneration),
@@ -150,6 +171,7 @@ extension NativeRuntime {
         let current = try matchingProcess(entry.process)
         guard current == entry.process else { throw ProbeFailure(code: "element_stale") }
         var pid: pid_t = 0
+        if let deadline { try configureNativeAXMessagingTimeout(entry.element, deadline: deadline) }
         guard AXUIElementGetPid(entry.element, &pid) == .success, pid == entry.process.pid else { throw ProbeFailure(code: "element_stale") }
         var refreshed = entry; refreshed.lastSeen = ProcessInfo.processInfo.systemUptime
         var all = references; all[ref] = refreshed; references = all
@@ -160,16 +182,10 @@ extension NativeRuntime {
         try checkPermission()
         let desktopGeneration = try refreshDesktopGeneration()
         guard let windowRef = request.windowRef else { throw ProbeFailure(code: "invalid_request") }
-        let root = try resolve(windowRef, kind: .window)
-        let freshProcess = try matchingProcess(root.process)
-        let budget = boundedBudget(request.budget)
+        let budget = try boundedBudget(request.budget)
         let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
-        if let app = NSRunningApplication(processIdentifier: freshProcess.pid) {
-            guard AXUIElementSetMessagingTimeout(AXUIElementCreateApplication(freshProcess.pid), Float(max(0.05, min(budget.timeout, 1.0)))) == .success else {
-                throw ProbeFailure(code: "backend_unavailable")
-            }
-            _ = app
-        }
+        let root = try resolve(windowRef, kind: .window, deadline: deadline)
+        let freshProcess = try matchingProcess(root.process)
         var output: [TraversalNode] = []
         var refs = Set<String>()
         var stack: [(AXUIElement, String?, Int, Int)] = [(root.element, nil, 0, 0)]
@@ -188,6 +204,7 @@ extension NativeRuntime {
             if visitedCount >= budget.maxNodes { complete = false; reason = "node_limit"; break }
             visitedCount += 1
             var pid: pid_t = 0
+            try configureNativeAXMessagingTimeout(element, deadline: deadline)
             guard AXUIElementGetPid(element, &pid) == .success, pid == freshProcess.pid else {
                 complete = false; reason = "scope_changed"; break
             }
@@ -198,15 +215,17 @@ extension NativeRuntime {
                 if reason.isEmpty { reason = "depth_limit" }
                 continue
             }
-            let role = stringAttribute(element, kAXRoleAttribute) ?? ""
-            let subrole = stringAttribute(element, kAXSubroleAttribute)
+            let role = stringAttribute(element, kAXRoleAttribute, deadline: deadline) ?? ""
+            let subrole = stringAttribute(element, kAXSubroleAttribute, deadline: deadline)
             let classification = classify(role: role, subrole: subrole)
             if classification == "normal" {
                 do {
-                    let ref = try retain(element, process: freshProcess, windowRef: windowRef, kind: .element)
+                    let ref = try retain(element, process: freshProcess, windowRef: windowRef, kind: .element,
+                                         deadline: deadline)
                     refs.insert(ref)
                     var label: String?
-                    if let rawLabel = stringAttribute(element, kAXTitleAttribute) ?? stringAttribute(element, kAXDescriptionAttribute) {
+                    if let rawLabel = stringAttribute(element, kAXTitleAttribute, deadline: deadline) ??
+                        stringAttribute(element, kAXDescriptionAttribute, deadline: deadline) {
                         let bounded = boundedUTF8Prefix(rawLabel, byteLimit: 4096)
                         label = bounded.text
                         if bounded.truncated {
@@ -215,18 +234,19 @@ extension NativeRuntime {
                         }
                     }
                     var value: String?
-                    if config.allowValues, let bounded = allowedValue(element, classification: classification, role: role) {
+                    if config.allowValues, let bounded = allowedValue(element, classification: classification,
+                                                                      role: role, deadline: deadline) {
                         value = bounded.text
                         if bounded.truncated {
                             complete = false
                             if reason.isEmpty { reason = "text_limit" }
                         }
                     }
-                    let enabled = boolAttribute(element, kAXEnabledAttribute)
+                    let enabled = boolAttribute(element, kAXEnabledAttribute, deadline: deadline)
                     let checked = role == "AXCheckBox" || role == "AXRadioButton"
-                        ? boolAttribute(element, kAXValueAttribute) : nil
-                    let selected = boolAttribute(element, "AXSelected")
-                    let focused = boolAttribute(element, kAXFocusedAttribute)
+                        ? boolAttribute(element, kAXValueAttribute, deadline: deadline) : nil
+                    let selected = boolAttribute(element, "AXSelected", deadline: deadline)
+                    let focused = boolAttribute(element, kAXFocusedAttribute, deadline: deadline)
                     let actions = advertisedActions(element, role: role)
                     let node = TraversalNode(ref: ref, parentRef: parentRef, order: order, role: role,
                                              label: label, value: value, enabled: enabled,
@@ -241,7 +261,7 @@ extension NativeRuntime {
                     totalOutputBytes += nodeBytes
                     if depth < budget.maxDepth {
                         let remaining = max(0, budget.maxNodes - visitedCount - stack.count)
-                        let childResult = children(of: element, limit: remaining)
+                        let childResult = children(of: element, limit: remaining, deadline: deadline)
                         if childResult.failed {
                             complete = false
                             if reason.isEmpty { reason = "child_read_unavailable" }
@@ -662,28 +682,30 @@ private func classify(role: String, subrole: String?) -> String {
     return expected[role]?.contains(subrole) == true ? "normal" : "unknown"
 }
 
-func copyAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+func copyAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> CFTypeRef? {
+    if let deadline, (try? configureNativeAXMessagingTimeout(element, deadline: deadline)) == nil { return nil }
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
     return value
 }
 
-func stringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
-    guard let value = copyAttribute(element, attribute) else { return nil }
+func stringAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> String? {
+    guard let value = copyAttribute(element, attribute, deadline: deadline) else { return nil }
     if let string = value as? String { return string }
     if let string = value as? NSAttributedString { return string.string }
     return nil
 }
 
-private func boolAttribute(_ element: AXUIElement, _ attribute: String) -> Bool? {
-    guard let value = copyAttribute(element, attribute), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+private func boolAttribute(_ element: AXUIElement, _ attribute: String, deadline: TimeInterval? = nil) -> Bool? {
+    guard let value = copyAttribute(element, attribute, deadline: deadline), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
     return (value as! NSNumber).boolValue
 }
 
-private func allowedValue(_ element: AXUIElement, classification: String, role: String) -> BoundedText? {
+private func allowedValue(_ element: AXUIElement, classification: String, role: String,
+                          deadline: TimeInterval? = nil) -> BoundedText? {
     guard classification == "normal",
           ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField"].contains(role),
-          let value = copyAttribute(element, kAXValueAttribute as String) else { return nil }
+          let value = copyAttribute(element, kAXValueAttribute as String, deadline: deadline) else { return nil }
     if let text = value as? String { return boundedUTF8Prefix(text, byteLimit: 8192) }
     if let text = value as? NSAttributedString { return boundedUTF8Prefix(text.string, byteLimit: 8192) }
     return nil
@@ -698,7 +720,8 @@ func depthIsIncluded(_ depth: Int, maximum: Int) -> Bool {
     depth < maximum
 }
 
-private func children(of element: AXUIElement, limit: Int) -> (values: [AXUIElement], failed: Bool, truncated: Bool) {
+private func children(of element: AXUIElement, limit: Int, deadline: TimeInterval) -> (values: [AXUIElement], failed: Bool, truncated: Bool) {
+    guard (try? configureNativeAXMessagingTimeout(element, deadline: deadline)) != nil else { return ([], true, false) }
     var total: CFIndex = 0
     let attribute = kAXChildrenAttribute as CFString
     let countStatus = AXUIElementGetAttributeValueCount(element, attribute, &total)
@@ -706,6 +729,7 @@ private func children(of element: AXUIElement, limit: Int) -> (values: [AXUIElem
     guard countStatus == .success, total >= 0 else { return ([], true, false) }
     let bounds = boundedChildCount(Int(total), limit: limit)
     guard bounds.count > 0 else { return ([], false, bounds.truncated) }
+    guard (try? configureNativeAXMessagingTimeout(element, deadline: deadline)) != nil else { return ([], true, bounds.truncated) }
     var raw: CFArray?
     let status = AXUIElementCopyAttributeValues(element, attribute, 0, CFIndex(bounds.count), &raw)
     guard status == .success, let values = raw as? [AXUIElement] else { return ([], true, bounds.truncated) }
@@ -717,12 +741,15 @@ private func advertisedActions(_ element: AXUIElement, role: String) -> [String]
     return []
 }
 
-func boundedBudget(_ input: NativeBudget?) -> (maxDepth: Int, maxNodes: Int, maxBytes: Int, timeout: TimeInterval) {
-    let depth = min(max(input?.maxDepth ?? 16, 1), 64)
-    let nodes = min(max(input?.maxNodes ?? 256, 1), 4096)
-    let bytes = min(max(input?.maxBytes ?? 32768, 1024), 65536)
-    let timeout = min(max(Double(input?.timeoutNanoseconds ?? 250_000_000) / 1_000_000_000, 0.01), 3.0)
-    return (depth, nodes, bytes, timeout)
+func boundedBudget(_ input: NativeBudget?) throws -> (maxDepth: Int, maxNodes: Int, maxBytes: Int, timeout: TimeInterval) {
+    guard let input else { return (16, 256, 32_768, 0.25) }
+    guard (1...128).contains(input.maxDepth), (1...10_000).contains(input.maxNodes),
+          (1...(4 * 1024 * 1024)).contains(input.maxBytes),
+          (1...30_000_000_000).contains(input.timeoutNanoseconds) else {
+        throw ProbeFailure(code: "invalid_request")
+    }
+    return (min(input.maxDepth, 64), min(input.maxNodes, 4096), min(input.maxBytes, 65_536),
+            min(Double(input.timeoutNanoseconds) / 1_000_000_000, 3.0))
 }
 
 private func projectionDigest(windowRef: String, rows: [[String: Any]], complete: Bool, reason: String) throws -> String {

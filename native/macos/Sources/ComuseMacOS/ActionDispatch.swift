@@ -178,9 +178,13 @@ struct NativeInputEvent {
         var failureOccurred = false
         var failureCode: String?
         var eventAttempted = false
+        var physicalLayoutCheck: (() -> Bool)?
         func add(_ step: String) { if !completed.contains(step) { completed.append(step) } }
         func deliver(_ event: NativeInputEvent, point: CGPoint?, step: String, down: Bool = false) throws {
             try checkpoint(point)
+            if let physicalLayoutCheck, !physicalLayoutCheck() {
+                throw ProbeFailure(code: event.kind == .keyUp ? "state_expired" : "unsupported")
+            }
             if down { held.append(releaseEvent(for: event, at: point ?? .zero)) }
             eventAttempted = true
             try sink.post(event, deadline: deadline)
@@ -216,6 +220,9 @@ struct NativeInputEvent {
                 let initialLayout = keyboardLayout()
                 guard nativeKeyboardLayoutQualified(initial: initialLayout, current: initialLayout) else {
                     throw ProbeFailure(code: "unsupported")
+                }
+                physicalLayoutCheck = {
+                    nativeKeyboardLayoutQualified(initial: initialLayout, current: keyboardLayout())
                 }
                 try postKeyChord(action.keys, holdMS: action.holdMS, deadline: deadline, deliver: deliver, clock: clock,
                                 initialLayout: initialLayout, currentLayout: keyboardLayout)

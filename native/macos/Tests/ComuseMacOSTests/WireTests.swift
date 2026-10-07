@@ -396,6 +396,11 @@ final class WireTests: XCTestCase {
                                            "timeout": 1].merging([field: value]) { _, replacement in replacement }
             let data = try Self.observeRequest(budget: budget)
             XCTAssertThrowsError(try decodeNativeRequest(data), "\(field)=\(value)")
+            let consumed = NativeBudget(maxDepth: Int(budget["max_depth"]!),
+                                        maxNodes: Int(budget["max_nodes"]!),
+                                        maxBytes: Int(budget["max_bytes"]!),
+                                        timeoutNanoseconds: budget["timeout"]!)
+            XCTAssertThrowsError(try boundedBudget(consumed), "consumption \(field)=\(value)")
         }
     }
 
@@ -417,28 +422,70 @@ final class WireTests: XCTestCase {
         XCTAssertLessThanOrEqual(defaults.timeout, 3)
     }
 
+    func testProductionDecoderAcceptsHostBudgetsAboveNativeCapsAndOnlyReducesThem() throws {
+        let request = try decodeNativeRequest(Self.observeRequest(
+            budget: ["max_depth": 128, "max_nodes": 10_000, "max_bytes": 4 * 1024 * 1024,
+                     "timeout": 30_000_000_000]))
+        let effective = try boundedBudget(request.budget)
+        XCTAssertEqual(effective.maxDepth, 64)
+        XCTAssertEqual(effective.maxNodes, 4096)
+        XCTAssertEqual(effective.maxBytes, 65_536)
+        XCTAssertEqual(effective.timeout, 3)
+        XCTAssertLessThanOrEqual(effective.maxDepth, request.budget!.maxDepth)
+        XCTAssertLessThanOrEqual(effective.maxNodes, request.budget!.maxNodes)
+        XCTAssertLessThanOrEqual(effective.maxBytes, request.budget!.maxBytes)
+        XCTAssertLessThanOrEqual(effective.timeout, Double(request.budget!.timeoutNanoseconds) / 1_000_000_000)
+    }
+
+    func testNativeAXTimeoutConversionStaysPositiveAndNeverRoundsAboveRemainingTime() {
+        for remaining in [0.000_000_001, 0.000_001, 0.05, 1.0, 3.0] {
+            let timeout = nativeAXMessagingTimeout(remaining: remaining)
+            XCTAssertNotNil(timeout)
+            XCTAssertGreaterThan(timeout ?? 0, 0)
+            XCTAssertLessThanOrEqual(Double(timeout ?? .infinity), remaining)
+        }
+        XCTAssertNil(nativeAXMessagingTimeout(remaining: 0))
+        XCTAssertNil(nativeAXMessagingTimeout(remaining: -1))
+        XCTAssertNil(nativeAXMessagingTimeout(remaining: .infinity))
+    }
+
     func testMalformedJSONAlwaysClassifiesAsInvalidRequestAndEnvelopeCodeIsSafe() throws {
         let malformed = [
             #"{"schema_version":1,"request_id":"r","operation":doctor}"#,
             #"{"schema_version":1,"request_id":"r","operation":true}"#,
+            #"{"schema_version":1,"request_id":"r","operation":tru}"#,
+            #"{"schema_version":1,"request_id":"r","operation":nul}"#,
             #"{"schema_version":1,"request_id":"r","operation":01}"#,
+            #"{"schema_version":1,"request_id":"r","operation":1.}"#,
             #"{"schema_version":1,"request_id":"r","operation":"doctor","x":[[[[["#,
             #"{"schema_version":1,"request_id":"r","operation":"doctor"} trailing"#
         ]
         for sample in malformed {
             XCTAssertThrowsError(try decodeNativeRequest(Data(sample.utf8))) { error in
                 XCTAssertEqual(nativeErrorCode(for: error), "invalid_request", sample)
+                let response = nativeErrorEnvelope(requestID: "r", error: error)
+                let responseObject = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any]
+                XCTAssertEqual(responseObject?["error"] as? String, "invalid_request", sample)
             }
             XCTAssertThrowsError(try decodeNativeConfig(Data(sample.utf8))) { error in
                 XCTAssertEqual(nativeErrorCode(for: error), "invalid_request", sample)
+                let response = nativeErrorEnvelope(requestID: "r", error: error)
+                let responseObject = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any]
+                XCTAssertEqual(responseObject?["error"] as? String, "invalid_request", sample)
             }
         }
         let invalidUTF8 = Data([0x7b, 0x22, 0x78, 0x22, 0x3a, 0xff, 0x7d])
         XCTAssertThrowsError(try decodeNativeRequest(invalidUTF8)) { error in
             XCTAssertEqual(nativeErrorCode(for: error), "invalid_request")
+            let response = nativeErrorEnvelope(requestID: "r", error: error)
+            let responseObject = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any]
+            XCTAssertEqual(responseObject?["error"] as? String, "invalid_request")
         }
         XCTAssertThrowsError(try decodeNativeConfig(invalidUTF8)) { error in
             XCTAssertEqual(nativeErrorCode(for: error), "invalid_request")
+            let response = nativeErrorEnvelope(requestID: "r", error: error)
+            let responseObject = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any]
+            XCTAssertEqual(responseObject?["error"] as? String, "invalid_request")
         }
     }
 

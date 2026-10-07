@@ -288,7 +288,7 @@ final class NativeRuntime {
             guard response.count <= comuseMaximumResponseBytes else { throw ProbeFailure(code: "budget_exceeded") }
             return response
         } catch {
-            return envelope(requestID: extractRequestID(from: data), error: nativeErrorCode(for: error))
+            return nativeErrorEnvelope(requestID: extractRequestID(from: data), error: error)
         }
     }
 
@@ -318,17 +318,15 @@ final class NativeRuntime {
         try checkPermission()
         let desktopGeneration = try refreshDesktopGeneration()
         var result: [[String: Any]] = []
-        let budget = boundedBudget(request.budget)
+        let budget = try boundedBudget(request.budget)
         let deadline = ProcessInfo.processInfo.systemUptime + budget.timeout
         var totalBytes = 0
         for process in processes {
             try checkDeadline(requestID, deadline: deadline)
             let app = try application(process)
             let applicationElement = AXUIElementCreateApplication(process.pid)
-            guard AXUIElementSetMessagingTimeout(applicationElement, Float(max(0.05, min(budget.timeout, 1.0)))) == .success else {
-                throw ProbeFailure(code: "backend_unavailable")
-            }
             var windowCount: CFIndex = 0
+            try configureNativeAXMessagingTimeout(applicationElement, deadline: deadline)
             guard AXUIElementGetAttributeValueCount(applicationElement, kAXWindowsAttribute as CFString, &windowCount) == .success,
                   windowCount >= 0 else { throw ProbeFailure(code: "backend_unavailable") }
             let remaining = min(budget.maxNodes - result.count, 128 - result.count)
@@ -338,6 +336,7 @@ final class NativeRuntime {
             guard !bounds.truncated else { throw ProbeFailure(code: "budget_exceeded") }
             var rawWindows: CFArray?
             if bounds.count > 0 {
+                try configureNativeAXMessagingTimeout(applicationElement, deadline: deadline)
                 guard AXUIElementCopyAttributeValues(applicationElement, kAXWindowsAttribute as CFString, 0, CFIndex(bounds.count), &rawWindows) == .success else {
                     throw ProbeFailure(code: "backend_unavailable")
                 }
@@ -353,8 +352,9 @@ final class NativeRuntime {
             for window in values {
                 try checkDeadline(requestID, deadline: deadline)
                 guard result.count < min(budget.maxNodes, 128) else { throw ProbeFailure(code: "budget_exceeded") }
-                let ref = try retain(window, process: app.identity, windowRef: nil, kind: .window)
-                guard let inspectedTitle = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String)) else {
+                let ref = try retain(window, process: app.identity, windowRef: nil, kind: .window, deadline: deadline)
+                guard let inspectedTitle = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String,
+                                                                                    deadline: deadline)) else {
                     invalidateAccessibilityState()
                     throw ProbeFailure(code: "backend_unavailable")
                 }
@@ -471,6 +471,10 @@ func nativeErrorCode(for error: Error) -> String {
     }
     if error is DecodingError { return "invalid_request" }
     return "internal_error"
+}
+
+func nativeErrorEnvelope(requestID: String, error: Error) -> Data {
+    envelope(requestID: requestID, error: nativeErrorCode(for: error))
 }
 
 private func envelope(requestID: String, result: Data? = nil, error: String? = nil) -> Data {

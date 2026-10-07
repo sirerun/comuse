@@ -83,7 +83,13 @@ private struct JSONStructureScanner {
 private func strictJSONObject(_ data: Data) throws -> [String: Any] {
     var scanner = JSONStructureScanner(bytes: Array(data))
     try scanner.scan()
-    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    let decoded: Any
+    do {
+        decoded = try JSONSerialization.jsonObject(with: data)
+    } catch {
+        throw ProbeFailure(code: "invalid_request")
+    }
+    guard let object = decoded as? [String: Any] else {
         throw ProbeFailure(code: "invalid_request")
     }
     return object
@@ -128,7 +134,14 @@ func decodeNativeRequest(_ data: Data) throws -> NativeRequest {
         guard let values = action as? [String: Any] else { throw ProbeFailure(code: "invalid_request") }
         try validateNativeActionObject(values)
     }
-    return try JSONDecoder().decode(NativeRequest.self, from: data)
+    let request: NativeRequest
+    do {
+        request = try JSONDecoder().decode(NativeRequest.self, from: data)
+    } catch {
+        throw ProbeFailure(code: "invalid_request")
+    }
+    if let budget = request.budget { try validateNativeBudget(budget) }
+    return request
 }
 
 private func validateNativeActionObject(_ object: [String: Any]) throws {
@@ -165,5 +178,17 @@ func decodeNativeConfig(_ data: Data) throws -> NativeConfig {
           processes.allSatisfy({ strictObjectShape($0, required: ["pid", "bundle_id", "launch_id"]) }) else {
         throw ProbeFailure(code: "invalid_request")
     }
-    return try JSONDecoder().decode(NativeConfig.self, from: data)
+    do {
+        return try JSONDecoder().decode(NativeConfig.self, from: data)
+    } catch {
+        throw ProbeFailure(code: "invalid_request")
+    }
+}
+
+private func validateNativeBudget(_ budget: NativeBudget) throws {
+    guard (1...128).contains(budget.maxDepth), (1...10_000).contains(budget.maxNodes),
+          (1...(4 * 1024 * 1024)).contains(budget.maxBytes),
+          (1...30_000_000_000).contains(budget.timeoutNanoseconds) else {
+        throw ProbeFailure(code: "invalid_request")
+    }
 }
