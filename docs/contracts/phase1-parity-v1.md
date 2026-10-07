@@ -1,6 +1,6 @@
 # Phase 1 parity v1 — candidate contract
 
-Status: REVIEW CANDIDATE, not frozen and not implementation authority. Task T2.17; source basis1830cf54a88f9842a3bac505979db70aeccc53e6 and RFC0001v0.5. Preserves existing plan IDs. Coordinator reconciled a Luna proposal; independent review must check every limit, enum, authority decision and RFC gap before this becomes the frozen leaf contract.
+Status: REVIEW CANDIDATE until independent review and verified contract landing T2.54; thereafter frozen phase1-parity-v1 source authority only. Task T2.17; source basis1830cf54a88f9842a3bac505979db70aeccc53e6 and RFC0001v0.5. Preserves existing plan IDs. Coordinator reconciled a Luna proposal; independent review must check every limit, enum, authority decision and RFC gap before this becomes the frozen leaf contract.
 
 ## Contract decision
 
@@ -100,11 +100,11 @@ Preserve the existing safe typed error codes where applicable: `invalid_request`
 
 ## Source ownership and sequence
 
-Existing task IDs are immutable. T2.17 owns this freeze and coordinator shared DTO/API seams. T2.18/T2.19 metadata/accounting implementation/verification own cost.go, obs.go, and dedicated ledger tests after coordinator interface patches. T2.20/T2.21 own target-bound semantic scroll and tests in action.go/desktop.go/guard.go; these must be serialized with T2.30/T2.31 core-writer integration if touching the same files. T2.22/T2.23 own cmd/comuse and mcp action routes/protocol tests, consuming shared types. T2.24/T2.25 own native/macos and internal/backend/darwin disabled native action source/tests. T2.30/T2.31 own internal/writer canonical lock/quota storage and new trusted desktop identity modules; coordinator integrates core admission hooks to avoid collision. New capability DTOs/backend interfaces are coordinator-owned before leaves start. Nonauthor reviewer covers final source, separate from implementation tests.
+Existing task IDs are immutable. T2.17 owns preparing this freeze (completed by T2.54 receipt) and coordinator shared DTO/API seams. T2.18/T2.19 metadata/accounting implementation/verification own cost.go, obs.go, and dedicated ledger tests after coordinator interface patches. T2.20/T2.21 own target-bound semantic scroll and tests in action.go/desktop.go/guard.go; these must be serialized with T2.30/T2.31 core-writer integration if touching the same files. T2.22/T2.23 own cmd/comuse and mcp action routes/protocol tests, consuming shared types. T2.24/T2.25 own native/macos and internal/backend/darwin disabled native action source/tests. T2.30/T2.31 own internal/writer canonical lock/quota storage and new trusted desktop identity modules; coordinator integrates core admission hooks to avoid collision. New capability DTOs/backend interfaces are coordinator-owned before leaves start. Nonauthor reviewer covers final source, separate from implementation tests.
 
 T2.26 integrates only after verified foundation T2.15 and leaf verification; T2.27 independent review, T2.28 guarded rebase merge, T2.29 landed verification. T2.32-42 foundation remediation IDs and historical receipts are preserved. Default input remains disabled through all source stages; T2.16 runtime gate is separate.
 
-Remaining wait-condition/developer-action/read-policy/ledger-resource source paths require explicit implementation/verify rows added under the existing T2.17 freeze before dispatch; they cannot be claimed complete through only the semantic-scroll task. E3 snapshot/delta/history migration has its own planning trigger and delivery gates after T2.15.
+Remaining wait-condition/developer-action/read-policy/ledger-resource source paths are explicitly decomposed as T2.43-50; they cannot be claimed complete through only the semantic-scroll task. Source leaves depend on verified contract landing T2.54. E3 snapshot/delta/history migration has its own planning trigger and delivery gates after T2.15.
 
 ## RFC traceability and source gap
 
