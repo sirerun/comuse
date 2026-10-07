@@ -13,6 +13,9 @@ final class WireTests: XCTestCase {
             for (kind, text, method, step) in cases {
                 let action = try Self.decodeAction(kind: kind, text: text)
                 let access = FakeNativeActionAccess()
+                access.target = NativeActionTarget(actionID: "a1", windowRef: "w1", elementRef: "e1", stateID: "s1",
+                                                   process: NativeProcess(pid: 1, bundleID: "test", launchID: "launch"),
+                                                   role: "AXButton", classification: "normal", enabled: true, focused: true, windowFocused: true)
                 let poster = FakeNativeUnicodePoster()
                 let result = try NativeActionExecutor(access: access, poster: poster).execute(action, requestID: 0)
                 XCTAssertEqual(access.dispatchCount, 1)
