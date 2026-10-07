@@ -500,7 +500,7 @@ final class WireTests: XCTestCase {
                 downCheckpoints += 1
                 if downCheckpoints == 2 { beforeDown.layoutIdentifier = "com.apple.keylayout.French" }
             }
-            XCTAssertEqual(refused.method, "cg_press_key")
+            XCTAssertEqual(refused.method, "cg_key")
             XCTAssertEqual(refused.execution, "not_applied")
             XCTAssertEqual(refused.completedSteps, [])
             XCTAssertEqual(refused.cleanup, "complete")
@@ -512,7 +512,7 @@ final class WireTests: XCTestCase {
                 upCheckpoints += 1
                 if upCheckpoints == 3 { beforeUp.layoutIdentifier = "com.apple.keylayout.French" }
             }
-            XCTAssertEqual(partial.method, "cg_press_key")
+            XCTAssertEqual(partial.method, "cg_key")
             XCTAssertEqual(partial.execution, "partially_applied")
             XCTAssertEqual(partial.completedSteps, ["key_down", "cleanup"])
             XCTAssertEqual(partial.cleanup, "complete")
