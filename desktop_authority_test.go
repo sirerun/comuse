@@ -95,7 +95,7 @@ func TestCanonicalCleanupFailureRetainsLockUntilBackendDrain(t *testing.T) {
 	guard := &recordedDesktopAuthority{events: &events, completeErr: errors.New("private persistence failure")}
 	session.acquireDesktop = func(context.Context) (desktopAuthority, error) { return guard, nil }
 	result, err := session.Do(context.Background(), Action{ID: "complete-failed", WindowRef: "window-1", ElementRef: "normal-1", StateID: observed.StateID, Kind: ActionPress})
-	if result.Execution != ExecutionApplied || result.Cleanup != CleanupUnknown || err == nil || ErrorCode(err) != "unknown_outcome" {
+	if result.Execution != ExecutionApplied || result.Cleanup != CleanupComplete || err == nil || ErrorCode(err) != "backend_unavailable" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if slices.Contains(events, "close") {

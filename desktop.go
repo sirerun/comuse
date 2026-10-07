@@ -105,8 +105,9 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 		if intentStarted {
 			if result.Execution != ExecutionUnknown && result.Cleanup == CleanupComplete && !s.journalQuarantined(lease) {
 				if err := desktop.Complete(); err != nil {
-					result.Cleanup = CleanupUnknown
-					returnedErr = coreError("unknown_outcome")
+					// Native outcome is already durably recorded. Canonical-state
+					// persistence failure is operational; it cannot rewrite native cleanup.
+					returnedErr = coreError("backend_unavailable")
 					s.mu.Lock()
 					s.quarantinedDesktops = append(s.quarantinedDesktops, desktop)
 					s.mu.Unlock()
