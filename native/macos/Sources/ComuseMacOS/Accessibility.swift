@@ -351,7 +351,13 @@ private struct AXActionAccess: NativeActionAccess {
         if action.kind != "focus_window" {
             guard let focusedWindow, CFEqual(focusedWindow, window.element) else { throw ProbeFailure(code: "state_expired") }
         }
-        let focusedElement = copyAttribute(application, kAXFocusedUIElementAttribute as String) as? AXUIElement
+        let focusedValue = copyAttribute(application, kAXFocusedUIElementAttribute as String)
+        let focusedElement: AXUIElement?
+        if let focusedValue, CFGetTypeID(focusedValue) == AXUIElementGetTypeID() {
+            focusedElement = unsafeBitCast(focusedValue, to: AXUIElement.self)
+        } else {
+            focusedElement = nil
+        }
         var focusedRole: String?
         var focusedClassification: String?
         if let focusedElement {
