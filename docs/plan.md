@@ -1,9 +1,9 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** Bounded feasibility source landed through PR #7 with exact reviewed tree and local checks. PR #8 makes E2 production source preparation executable. Three Luna lanes implement core safety, native backend and MCP; coordinator implements shared contracts and CLI. Shared load currently holds heavy checks; native/runtime acceptance remains open.
+**Status:** Bounded feasibility source landed through PR #7 with exact reviewed tree and local checks. PR #8 makes E2 production source preparation executable. Production foundation source and remediation are implemented; portable local checks and native source builds/tests have passed. Final Darwin lint correction, exact-head independent review, PR #9 merge and landed verification remain pending. Portable execution moved to isolated DGX worktrees; native/runtime acceptance remains open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
-**Updated:** 2026-10-06 UTC.
+**Updated:** 2026-10-07 UTC.
 **Change summary:** New split plan and use-case catalog; executable feasibility horizon, ten worker lanes, coordinator-owned seams, and gated later Phase 1/Phase 2/qualification outlines.
 
 ## 1. Context
