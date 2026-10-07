@@ -77,6 +77,7 @@ type Element struct {
 	Label          string   `json:"label,omitempty"`
 	Value          *string  `json:"value,omitempty"`
 	Enabled        *bool    `json:"enabled,omitempty"`
+	Focused        *bool    `json:"focused,omitempty"`
 	Checked        *bool    `json:"checked,omitempty"`
 	Selected       *bool    `json:"selected,omitempty"`
 	Actions        []string `json:"actions,omitempty"`

@@ -671,7 +671,7 @@ type ResultEnvelope struct {
 	Status           string               `json:"status"`
 	OK               bool                 `json:"ok"`
 	Action           string               `json:"action"`
-	ActionID         *string              `json:"action_id"`
+	ActionID         *string              `json:"action_id,omitempty"`
 	Execution        string               `json:"execution"`
 	Method           *string              `json:"method"`
 	DurationMS       uint64               `json:"duration_ms"`
@@ -832,6 +832,10 @@ func (e ResultEnvelope) Validate() error {
 		if e.ActionID == nil {
 			return ErrInvalidMetadata
 		}
+	default:
+		if e.ActionID != nil {
+			return ErrInvalidMetadata
+		}
 	}
 	if e.Result.encoded == nil {
 		return ErrInvalidPayload
@@ -979,7 +983,7 @@ func (e ResultEnvelope) MarshalJSON() ([]byte, error) {
 		Status           string               `json:"status"`
 		OK               bool                 `json:"ok"`
 		Action           string               `json:"action"`
-		ActionID         *string              `json:"action_id"`
+		ActionID         *string              `json:"action_id,omitempty"`
 		Execution        string               `json:"execution"`
 		Method           *string              `json:"method"`
 		DurationMS       uint64               `json:"duration_ms"`

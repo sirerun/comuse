@@ -228,7 +228,7 @@ func (s *Session) normalizeObservation(windowRef string, native Observation) (Ob
 			return Observation{}, snapshotBinding{}, coreError("backend_unavailable")
 		}
 		seen[element.Ref] = struct{}{}
-		copyElement := Element{Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order, Role: element.Role, Label: element.Label, Enabled: cloneBool(element.Enabled), Checked: cloneBool(element.Checked), Selected: cloneBool(element.Selected), Classification: "normal"}
+		copyElement := Element{Ref: element.Ref, ParentRef: element.ParentRef, Order: element.Order, Role: element.Role, Label: element.Label, Enabled: cloneBool(element.Enabled), Focused: cloneBool(element.Focused), Checked: cloneBool(element.Checked), Selected: cloneBool(element.Selected), Classification: "normal"}
 		if s.allowValues && element.Value != nil {
 			if !validText(*element.Value, s.budget.MaxBytes) {
 				return Observation{}, snapshotBinding{}, coreError("backend_unavailable")
@@ -495,6 +495,7 @@ func cloneObservation(value Observation) Observation {
 		clone.Elements[i] = element
 		clone.Elements[i].Value = cloneString(element.Value)
 		clone.Elements[i].Enabled = cloneBool(element.Enabled)
+		clone.Elements[i].Focused = cloneBool(element.Focused)
 		clone.Elements[i].Checked = cloneBool(element.Checked)
 		clone.Elements[i].Selected = cloneBool(element.Selected)
 		clone.Elements[i].Actions = append([]string(nil), element.Actions...)
