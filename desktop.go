@@ -37,7 +37,7 @@ func (s *Session) Do(ctx context.Context, action Action) (result ActionResult, r
 	defer s.actionMu.Unlock()
 	epoch := s.currentPermissionEpoch()
 
-	callCtx, cancel := context.WithTimeout(callCtx, s.budget.Timeout)
+	callCtx, cancel := context.WithTimeout(callCtx, min(s.budget.Timeout, 10*time.Second))
 	defer cancel()
 	lease, acquireErr := writer.Acquire(callCtx, s.writerDirectory)
 	if acquireErr != nil {
