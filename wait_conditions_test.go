@@ -247,8 +247,9 @@ func TestWaitConditionDoesNotInventMissingBooleanAndPreservesSelected(t *testing
 	}
 	copy := cloneObservation(observation)
 	*copy.Elements[0].Checked = true
-	if *observation.Elements[0].Checked {
-		t.Fatal("clone shares the checked pointer with retained observation")
+	*copy.Elements[0].Selected = false
+	if *observation.Elements[0].Checked || !*observation.Elements[0].Selected {
+		t.Fatal("clone shares a checked/selected pointer with retained observation")
 	}
 }
 
