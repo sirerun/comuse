@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import AppKit
+import Carbon
 
 struct NativeActionTarget: Equatable {
     let actionID: String
@@ -15,6 +16,7 @@ struct NativeActionTarget: Equatable {
     let windowFocused: Bool
     let focusedRole: String?
     let focusedClassification: String?
+    let focusedIdentity: String?
     let windowBounds: CGRect?
     let elementBounds: CGRect?
     let displayBounds: CGRect?
@@ -23,7 +25,7 @@ struct NativeActionTarget: Equatable {
     init(actionID: String, windowRef: String, elementRef: String, stateID: String,
          process: NativeProcess, role: String, classification: String, enabled: Bool?,
          focused: Bool, windowFocused: Bool, focusedRole: String? = nil,
-         focusedClassification: String? = nil, windowBounds: CGRect? = nil,
+         focusedClassification: String? = nil, focusedIdentity: String? = nil, windowBounds: CGRect? = nil,
          elementBounds: CGRect? = nil, displayBounds: CGRect? = nil,
          displayID: CGDirectDisplayID? = nil) {
         self.actionID = actionID; self.windowRef = windowRef; self.elementRef = elementRef
@@ -31,6 +33,7 @@ struct NativeActionTarget: Equatable {
         self.classification = classification; self.enabled = enabled
         self.focused = focused; self.windowFocused = windowFocused
         self.focusedRole = focusedRole; self.focusedClassification = focusedClassification
+        self.focusedIdentity = focusedIdentity
         self.windowBounds = windowBounds; self.elementBounds = elementBounds
         self.displayBounds = displayBounds; self.displayID = displayID
     }
@@ -153,10 +156,13 @@ struct NativeInputEvent {
 @MainActor struct QuartzInputPoster: NativeInputPoster {
     let sink: NativeEventSink
     let clock: NativeActionClock
+    let keyboardLayout: () -> String?
 
-    init(sink: NativeEventSink = QuartzEventSink(), clock: NativeActionClock = SystemNativeActionClock()) {
+    init(sink: NativeEventSink = QuartzEventSink(), clock: NativeActionClock = SystemNativeActionClock(),
+         keyboardLayout: @escaping () -> String? = activeKeyboardLayoutIdentifier) {
         self.sink = sink
         self.clock = clock
+        self.keyboardLayout = keyboardLayout
     }
 
     func post(_ action: NativeAction, target: NativeActionTarget,
@@ -207,7 +213,12 @@ struct NativeInputEvent {
                     try deliver(up, point: point, step: "mouse_up")
                 }
             case "press_key":
-                try postKeyChord(action.keys, holdMS: action.holdMS, deadline: deadline, deliver: deliver, clock: clock)
+                let initialLayout = keyboardLayout()
+                guard nativeKeyboardLayoutQualified(initial: initialLayout, current: initialLayout) else {
+                    throw ProbeFailure(code: "unsupported")
+                }
+                try postKeyChord(action.keys, holdMS: action.holdMS, deadline: deadline, deliver: deliver, clock: clock,
+                                initialLayout: initialLayout, currentLayout: keyboardLayout)
             case "coordinate_scroll", "scroll":
                 let point: CGPoint
                 let dx: Int
@@ -291,6 +302,27 @@ func checkedPoint(_ x: Double, _ y: Double, target: NativeActionTarget) -> CGPoi
     return window.contains(point) && display.contains(point) ? point : nil
 }
 
+struct NativeCoordinateHitFacts {
+    let point: CGPoint
+    let expectedPID: Int32
+    let actualPID: Int32
+    let targetBounds: CGRect?
+    let hitBounds: CGRect?
+    let exactWindow: Bool
+    let targetRelated: Bool
+    let exactTarget: Bool
+    let requiresExactTarget: Bool
+}
+
+func validNativeCoordinateHit(_ facts: NativeCoordinateHitFacts) -> Bool {
+    guard facts.expectedPID > 0, facts.actualPID == facts.expectedPID,
+          facts.exactWindow, facts.targetRelated,
+          facts.point.x.isFinite, facts.point.y.isFinite,
+          let target = facts.targetBounds, target.isFinitePositive, target.contains(facts.point),
+          let hit = facts.hitBounds, hit.isFinitePositive, hit.contains(facts.point) else { return false }
+    return !facts.requiresExactTarget || facts.exactTarget
+}
+
 extension CGRect {
     var isFinitePositive: Bool {
         origin.x.isFinite && origin.y.isFinite && width.isFinite && height.isFinite && width > 0 && height > 0
@@ -299,7 +331,8 @@ extension CGRect {
 
 @MainActor private func postKeyChord(_ keys: String, holdMS: Int, deadline: TimeInterval,
                           deliver: (NativeInputEvent, CGPoint?, String, Bool) throws -> Void,
-                          clock: NativeActionClock) throws {
+                          clock: NativeActionClock, initialLayout: String?,
+                          currentLayout: () -> String?) throws {
     let codes: [String: CGKeyCode] = ["a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3,
         "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45,
         "o": 31, "p": 35, "q": 12, "r": 15, "s": 1, "t": 17, "u": 32, "v": 9,
@@ -310,14 +343,30 @@ extension CGRect {
         "page_up": 116, "page_down": 121]
     let modifiers: [String: CGEventFlags] = ["ctrl": .maskControl, "alt": .maskAlternate, "shift": .maskShift, "meta": .maskCommand]
     let tokens = keys.split(separator: " ").map(String.init)
-    guard let key = tokens.last, let code = codes[key] else { throw ProbeFailure(code: "unsupported") }
+    let ordinaryTokens = tokens.filter { modifiers[$0] == nil }
+    guard nativeKeyboardLayoutQualified(initial: initialLayout, current: currentLayout()),
+          ordinaryTokens.count == 1, let code = codes[ordinaryTokens[0]] else { throw ProbeFailure(code: "unsupported") }
     var flags: CGEventFlags = []
-    for modifier in tokens.dropLast() { guard let value = modifiers[modifier] else { throw ProbeFailure(code: "unsupported") }; flags.insert(value) }
+    for token in tokens where modifiers[token] != nil { flags.insert(modifiers[token]!) }
     let down = NativeInputEvent(kind: .keyDown, keyCode: code, keyFlags: flags)
     let up = NativeInputEvent(kind: .keyUp, keyCode: code, keyFlags: flags)
+    guard nativeKeyboardLayoutQualified(initial: initialLayout, current: currentLayout()) else { throw ProbeFailure(code: "unsupported") }
     try deliver(down, nil, "key_down", true)
     try clock.sleep(Double(holdMS) / 1000, deadline: deadline)
+    guard nativeKeyboardLayoutQualified(initial: initialLayout, current: currentLayout()) else { throw ProbeFailure(code: "state_expired") }
     try deliver(up, nil, "key_up", false)
+}
+
+func nativeKeyboardLayoutQualified(initial: String?, current: String?) -> Bool {
+    initial == "com.apple.keylayout.US" && current == initial
+}
+
+func activeKeyboardLayoutIdentifier() -> String? {
+    guard let sourceRef = TISCopyCurrentKeyboardInputSource() else { return nil }
+    let source = sourceRef.takeRetainedValue()
+    guard let property = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
+    let identifier = Unmanaged<AnyObject>.fromOpaque(property).takeUnretainedValue()
+    return identifier as? String
 }
 
 @MainActor struct NativeActionExecutor {

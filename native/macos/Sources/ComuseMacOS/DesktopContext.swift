@@ -168,7 +168,7 @@ extension NativeRuntime {
         guard CFGetTypeID(raw) == AXUIElementGetTypeID() else { return .unknown }
         let window = unsafeBitCast(raw, to: AXUIElement.self)
         guard let ref = try? retain(window, process: identity, windowRef: nil, kind: .window),
-              let title = stringAttribute(window, kAXTitleAttribute) else { return .unknown }
+              let title = nativeWindowTitleEvidence(copyAttribute(window, kAXTitleAttribute as String)) else { return .unknown }
         let bounded = boundedUTF8Prefix(title, byteLimit: 4096)
         guard !bounded.truncated else { return .unknown }
         let process: [String: Any] = ["pid": identity.pid, "bundle_id": identity.bundleID, "launch_id": identity.launchID]
