@@ -118,3 +118,21 @@ func TestReviewedFocusedTitleExactBoundRemainsUsable(t *testing.T) {
 		t.Fatalf("exact title bound rejected: %+v %v", envelope, err)
 	}
 }
+
+type reviewedSnapshotOnlyContextBackend struct{ *desktopContextBackend }
+
+func (b *reviewedSnapshotOnlyContextBackend) Doctor(ctx context.Context) (DoctorReport, error) {
+	return b.fakeBackend.Doctor(ctx)
+}
+func TestReviewedFirstSnapshotCanEstablishPreviouslyUnavailableContext(t *testing.T) {
+	s, b := newReviewedContextSession(t)
+	s.backend = &reviewedSnapshotOnlyContextBackend{desktopContextBackend: b}
+	windows, err := s.Windows(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := s.Observe(context.Background(), windows[0].Ref)
+	if err != nil || observed.DesktopContext == nil {
+		t.Fatalf("first fresh snapshot context was discarded: %+v %v", observed, err)
+	}
+}
