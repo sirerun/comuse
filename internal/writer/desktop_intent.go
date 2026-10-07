@@ -269,6 +269,14 @@ func verifyCanonicalJournalRoot(root string, uid uint32) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return errors.New("desktop journal root must contain real directories")
 		}
+		rootOwned := verifyUIDOwner(info, 0) == nil
+		if !rootOwned && verifyUIDOwner(info, uid) != nil {
+			return errors.New("desktop journal ancestor owner is untrusted")
+		}
+		if info.Mode().Perm()&022 != 0 && !(rootOwned && info.Mode()&os.ModeSticky != 0) {
+			return errors.New("desktop journal ancestor is replaceable")
+		}
+
 	}
 	if err := verifyPrivateStateRoot(root, uid); err != nil {
 		return fmt.Errorf("validate existing writer root: %w", err)

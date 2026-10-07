@@ -1,6 +1,7 @@
 package writer
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -256,4 +257,18 @@ func bytesOf(value byte, count int) []byte {
 		data[i] = value
 	}
 	return data
+}
+
+func TestDesktopJournalBindingRejectsReplaceableAncestor(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "replaceable")
+	root := filepath.Join(parent, "journal")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DesktopJournalBinding(root, bytes.Repeat([]byte{7}, 32)); err == nil {
+		t.Fatal("accepted replaceable ancestor")
+	}
 }
