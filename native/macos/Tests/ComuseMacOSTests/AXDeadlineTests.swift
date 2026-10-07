@@ -65,4 +65,37 @@ final class AXDeadlineTests: XCTestCase {
         }
         XCTAssertEqual(ipcCalls, 0)
     }
+    func testDistinctEqualAXObjectsAreConfiguredSeparately() throws {
+        let first = AXUIElementCreateApplication(getpid())
+        let second = AXUIElementCreateApplication(getpid())
+        XCTAssertTrue(CFEqual(first, second))
+        let firstPointer = Unmanaged.passUnretained(first).toOpaque()
+        let secondPointer = Unmanaged.passUnretained(second).toOpaque()
+        XCTAssertNotEqual(firstPointer, secondPointer)
+        var configured: [UnsafeMutableRawPointer] = []
+        for element in [first, second] {
+            _ = try nativeAXDeadlineIPC(element, deadline: 11, now: { 10 }, configure: { actual, _ in
+                configured.append(Unmanaged.passUnretained(actual).toOpaque())
+                return .success
+            }) { true }
+        }
+        XCTAssertEqual(configured, [firstPointer, secondPointer])
+    }
+
+    func testConfigurationConsumingDeadlineRefusesBeforeIPC() {
+        let element = AXUIElementCreateApplication(getpid())
+        var clock = 10.0
+        var ipcCalls = 0
+        XCTAssertThrowsError(try nativeAXDeadlineIPC(element, deadline: 11, now: { clock }, configure: { _, _ in
+            clock = 12
+            return .success
+        }) {
+            ipcCalls += 1
+            return true
+        }) { error in
+            XCTAssertEqual((error as? ProbeFailure)?.code, "budget_exceeded")
+        }
+        XCTAssertEqual(ipcCalls, 0)
+    }
+
 }
