@@ -11,6 +11,15 @@ func qualifiedActionKind(capabilities Capabilities, kind string) bool {
 	return false
 }
 
+func qualifiedDeveloperActionKind(capabilities Capabilities, kind string) bool {
+	switch kind {
+	case developerActionClick, developerActionTypeText, developerActionPressKey, developerActionCoordinateScroll, developerActionDrag, developerActionFocusWindow:
+		return qualifiedActionKind(capabilities, kind)
+	default:
+		return false
+	}
+}
+
 // SemanticOperations reports only per-operation qualified backend capability
 // combined with the trusted host's mutation composition. JSON cannot set it.
 // Read-only default hosts perform no capability probe here.
