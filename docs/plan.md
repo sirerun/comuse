@@ -1,6 +1,6 @@
 # Comuse implementation plan — parallel GPT-6-Luna delivery
 
-**Status:** Bounded feasibility source landed through PR #7 with exact reviewed tree and local checks. PR #8 makes E2 production source preparation executable. Production foundation source and remediation are implemented; portable local checks and native source builds/tests have passed. Final Darwin lint correction, exact-head independent review, PR #9 merge and landed verification remain pending. Portable execution moved to isolated DGX worktrees; native/runtime acceptance remains open.
+**Status:** Bounded feasibility source landed through PR #7 with exact reviewed tree and local checks. PR #8 makes E2 production source preparation executable. Production foundation source and remediation are implemented; portable local checks and native source builds/tests have passed. PR #9 independently reviewed and merged; exact-tree landing and landed Go/race checks passed. Remaining Phase1 parity and E3 source are next. Portable execution moved to isolated DGX worktrees; native/runtime acceptance remains open.
 **Planning contract:** Ordinary, unenrolled repository Git delivery.
 **Design baseline:** RFC 0001 v0.5 and vision at `871f3416abf052a73fdaa928ec23e194cd9e634a`.
 **Updated:** 2026-10-07 UTC.
@@ -56,8 +56,8 @@ Workers own named distinct files/directories and never modify common seam files 
 ## 5. Checkable Work Breakdown
 
 ### E1 -- Native feasibility and ten-lane spike -> docs/plans/E1-native-feasibility.md (13/57)
-### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md (2/17)
-### E3 -- Phase 1 semantic diffs and recovery -> docs/plans/E3-phase1-diffs-recovery.md (0/1)
+### E2 -- Phase 1 production semantic runtime -> docs/plans/E2-phase1-semantic-runtime.md
+### E3 -- Phase 1 semantic diffs and recovery -> docs/plans/E3-phase1-diffs-recovery.md
 ### E4 -- Phase 2 authorized application opening -> docs/plans/E4-phase2-app-opening.md (0/1)
 ### E5 -- Phase 2 explicit image fallback -> docs/plans/E5-phase2-image-fallback.md (0/1)
 ### E6 -- macOS distribution and measured qualification -> docs/plans/E6-macos-qualification.md (0/1)
